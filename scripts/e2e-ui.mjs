@@ -213,6 +213,40 @@ try {
   await win.waitForTimeout(300);
   check('SRT import adds 15 clips on a new track', (await textCount()) === beforeImport + 15, `${beforeImport} -> ${await textCount()}`);
 
+  // Conti rule checks (CONTI_RULES.md section numbers).
+  const issuesNow = () =>
+    win.evaluate(() => [...document.querySelectorAll('[data-rule]')].map((b) => `${b.dataset.rule}@${b.dataset.issueClip}`));
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.locator('[data-tab="check"]').click();
+  const clean = await issuesNow();
+  check('fixture only breaks the 15-35s length rule', clean.join() === '2-7-1@', clean.join());
+  await win.evaluate((p) => {
+    const sub = { font: 'black', size: 68, color: '#FFFFFF', strokeColor: '#13293D', strokeWidth: 5, background: null,
+      align: 'center', highlight: '', highlightColor: '#FFD166', highlightDigits: false };
+    const t = (id, start, out, text, y, preset) => ({ id, start, in: 0, out, text, preset, style: sub, x: 0.5, y, anim: 'none' });
+    const tracks = p.tracks.map((tr) => {
+      if (tr.id === 'v-main') {
+        return { ...tr, muted: true, clips: tr.clips.map((c) => (c.id === 'c2' ? { ...c, out: 1.5 } : c.id === 'c3' ? { ...c, transform: { scale: 0.5, x: 0, y: 0 } } : c)) };
+      }
+      return { ...tr, muted: true };
+    });
+    tracks.unshift({ id: 't-rules', kind: 'text', muted: false, hidden: false, clips: [
+      t('r-long', 0, 2, '하나 둘 셋 넷 다섯 여섯 일곱 여덟 아홉 열 열하나 열둘 열셋 열넷 열다섯', 0.5, 'sub'),
+      t('r-top', 2, 1, '위험', 0.05, 'sub'),
+      t('r-aside', 3, 4, '(딴지는 길어져서 여러 줄로 넘어가도 줄 수 검사에서는 빠져요)', 0.5, 'aside'),
+    ] });
+    window.__cutdesk.load({ ...p, tracks });
+  }, project);
+  const broken = new Set(await issuesNow());
+  for (const want of ['2-7-1@', '2-2-1@c2', '2-4-3@', '2-5-1@c3', '2-4-1@r-long', '2-4-2@r-long', '2-4-4@r-top', '2-4-2@r-aside', '2-7-2@']) {
+    check(`rule ${want} reported`, broken.has(want), [...broken].join(' '));
+  }
+  check('aside is exempt from the two-line rule', !broken.has('2-4-1@r-aside'));
+  await win.locator('[data-rule="2-2-1"]').click();
+  const jumped = await win.evaluate(() => ({ t: window.__cutdesk.state().playhead, sel: window.__cutdesk.state().selectedClipId }));
+  check('clicking an issue jumps to the clip', jumped.sel === 'c2' && Math.abs(jumped.t - 3) < 1e-6, JSON.stringify(jumped));
+  check('safe-zone guide shown', await win.locator('[data-testid="safe-zone"]').isVisible());
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

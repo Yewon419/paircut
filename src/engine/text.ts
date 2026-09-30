@@ -94,6 +94,16 @@ function roundRect(ctx: CanvasRenderingContext2D, w: number, h: number, r: numbe
   ctx.closePath();
 }
 
+let measureCtx: CanvasRenderingContext2D | null = null;
+
+/** Lines exactly as rasterizeText breaks them, for rule checks. */
+export function wrappedLines(clip: TextClip, vars: ProjectVars, frameW: number): string[] {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  if (!measureCtx) throw new Error('2d context unavailable');
+  measureCtx.font = fontOf(clip, frameW / DESIGN_WIDTH);
+  return wrapLines(measureCtx, resolveTokens(clip.text, vars), MAX_WIDTH_FRAC * frameW);
+}
+
 /** Renders a text clip at its settled (post-animation) state for a frame of the given size. */
 export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
   const k = frameW / DESIGN_WIDTH;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Board } from '../conti';
 import { draftFromRows, parseBoard } from '../conti';
 import { makeTextClip, PRESETS, presetById } from '../presets';
@@ -6,13 +6,18 @@ import { parseSrt, toSrt } from '../srt';
 import { textClips } from '../../shared/project';
 import { addTextClip, addTextTracks, frameSnap, uid, useEditor } from '../store';
 import { MediaBin } from './MediaBin';
+import { pause, seek } from '../engine/player';
+import { formatTime } from '../format';
+import type { RuleIssue } from '../rules';
+import { checkRules } from '../rules';
 
-type Tab = 'media' | 'text' | 'conti';
+type Tab = 'media' | 'text' | 'conti' | 'check';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'media', label: '미디어' },
   { id: 'text', label: '텍스트' },
   { id: 'conti', label: '콘티' },
+  { id: 'check', label: '점검' },
 ];
 
 export const DEFAULT_BOARD_PATH = 'C:\\Users\\windg\\Desktop\\PROJECT\\윈드가든인스타\\board\\board.json';
@@ -20,18 +25,22 @@ const BOARD_KEY = 'cutdesk.boardPath';
 
 export function SidePanel() {
   const [tab, setTab] = useState<Tab>('media');
+  const project = useEditor((s) => s.project);
+  const issues = useMemo(() => checkRules(project), [project]);
   return (
     <div className="side">
       <div className="tabs">
         {TABS.map((t) => (
           <button key={t.id} className={tab === t.id ? 'tab on' : 'tab'} onClick={() => setTab(t.id)} data-tab={t.id}>
             {t.label}
+            {t.id === 'check' && <span className={issues.length > 0 ? 'count bad' : 'count'}>{issues.length}</span>}
           </button>
         ))}
       </div>
       {tab === 'media' && <MediaBin />}
       {tab === 'text' && <TextTab />}
       {tab === 'conti' && <ContiTab />}
+      {tab === 'check' && <CheckTab issues={issues} />}
     </div>
   );
 }
@@ -169,6 +178,39 @@ function ContiTab() {
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+function CheckTab({ issues }: { issues: RuleIssue[] }) {
+  const fps = useEditor((s) => s.project.fps);
+  const go = (issue: RuleIssue) => {
+    pause();
+    seek(issue.t);
+    useEditor.setState({ selectedClipId: issue.clipId });
+  };
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <span>콘티 규칙</span>
+        <span className="dim">{issues.length === 0 ? '통과' : `${issues.length}건`}</span>
+      </div>
+      {issues.length === 0 ? (
+        <div className="empty">걸리는 규칙이 없어요.</div>
+      ) : (
+        <ul className="issue-list">
+          {issues.map((i) => (
+            <li key={i.key}>
+              <button className="issue" onClick={() => go(i)} data-rule={i.rule} data-issue-clip={i.clipId ?? ''}>
+                <span className="issue-time">{formatTime(i.t, fps).replace(/\.\d+$/, '')}</span>
+                <span className="issue-msg">{i.message}</span>
+                <span className="issue-rule">{i.rule}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="hint">번호는 CONTI_RULES.md 절 번호예요. 누르면 그 위치로 가요.</p>
     </section>
   );
 }

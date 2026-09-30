@@ -1,8 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Project } from '../../shared/project';
 import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
 import { compositor, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
+import { RULES } from '../rules';
 import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor } from '../store';
 
 const PREVIEW_SCALE = 0.5;
@@ -12,6 +13,7 @@ export function Preview() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const wheelTimer = useRef<number | null>(null);
+  const [guides, setGuides] = useState(true);
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
   const playing = useEditor((s) => s.playing);
@@ -106,6 +108,20 @@ export function Preview() {
       <div className="stage-wrap">
         <div className="stage" ref={stageRef} style={{ aspectRatio: `${project.width} / ${project.height}` }} onWheel={onWheel}>
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
+          {guides && (
+            <div className="safe-zone" data-testid="safe-zone">
+              <div className="band" style={{ left: 0, right: 0, top: 0, height: `${RULES.safeTop * 100}%` }} />
+              <div className="band" style={{ left: 0, right: 0, bottom: 0, height: `${RULES.safeBottom * 100}%` }} />
+              <div
+                className="band"
+                style={{ left: 0, top: `${RULES.safeTop * 100}%`, bottom: `${RULES.safeBottom * 100}%`, width: `${RULES.safeSide * 100}%` }}
+              />
+              <div
+                className="band"
+                style={{ right: 0, top: `${RULES.safeTop * 100}%`, bottom: `${RULES.safeBottom * 100}%`, width: `${RULES.safeSide * 100}%` }}
+              />
+            </div>
+          )}
           {rect && (
             <div
               className={text ? 'transform-box text' : 'transform-box'}
@@ -123,6 +139,9 @@ export function Preview() {
       <div className="transport">
         <button className="play" onClick={togglePlay} title="재생/정지 (Space)">
           {playing ? '❚❚' : '▶'}
+        </button>
+        <button className={guides ? 'toggle on' : 'toggle'} onClick={() => setGuides(!guides)} title="위 14%, 아래 35%, 좌우 6%">
+          안전 영역
         </button>
         <span className="timecode">
           {formatTime(playhead, project.fps)} <span className="dim">/ {formatTime(projectDuration(project), project.fps)}</span>
