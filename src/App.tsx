@@ -3,7 +3,8 @@ import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
 import { ExportDialog } from './components/ExportDialog';
 import { Inspector } from './components/Inspector';
-import { MediaBin } from './components/MediaBin';
+import { SidePanel } from './components/SidePanel';
+import { textImagesFor } from './exportTexts';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { pause, seek, startPausedSync, togglePlay } from './engine/player';
@@ -37,6 +38,7 @@ export function App() {
           seek(t);
         },
         state: () => useEditor.getState(),
+        texts: (height: number) => textImagesFor(useEditor.getState().project, height),
       };
     });
   }, []);
@@ -126,7 +128,7 @@ export function App() {
         </div>
       )}
       <main className="workspace">
-        <MediaBin />
+        <SidePanel />
         <Preview />
         <Inspector />
       </main>

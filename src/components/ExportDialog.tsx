@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { projectDuration } from '../../shared/project';
 import { pause } from '../engine/player';
+import { textImagesFor } from '../exportTexts';
 import { formatSeconds } from '../format';
 import { useEditor } from '../store';
 
@@ -34,7 +35,8 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     if (!outPath) return;
     setPhase({ kind: 'running', ratio: 0 });
     try {
-      await window.api.startExport(useEditor.getState().project, { outPath, height });
+      const project = useEditor.getState().project;
+      await window.api.startExport(project, { outPath, height }, textImagesFor(project, height));
     } catch (err) {
       setPhase({ kind: 'error', message: (err as Error).message });
     }

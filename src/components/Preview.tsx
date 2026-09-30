@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { assetById, clipEnd, placeVisual, projectDuration } from '../../shared/project';
+import type { Project } from '../../shared/project';
+import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
 import { compositor, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
-import { beginGesture, endGesture, findClip, updateClip, updateGesture, useEditor } from '../store';
+import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor } from '../store';
 
 const PREVIEW_SCALE = 0.5;
 const CENTER_SNAP = 0.012;
@@ -24,34 +25,27 @@ export function Preview() {
   }, [cw, ch]);
 
   const found = selectedClipId ? findClip(project, selectedClipId) : null;
-  const selected =
-    found &&
-    found.track.kind === 'video' &&
-    playhead >= found.clip.start &&
-    playhead < clipEnd(found.clip)
-      ? found.clip
+  const live = found && playhead >= found.clip.start && playhead < clipEnd(found.clip) ? found.clip : null;
+  const media = live && isMediaClip(live) && found?.track.kind === 'video' ? live : null;
+  const text = live && isTextClip(live) ? live : null;
+  const asset = media ? assetById(project, media.assetId) : null;
+  const rect = media && asset
+    ? placeVisual(asset.width, asset.height, cw, ch, media.transform)
+    : text
+      ? compositor.textRect(project, text)
       : null;
-  const asset = selected ? assetById(project, selected.assetId) : null;
-  const rect = selected && asset ? placeVisual(asset.width, asset.height, cw, ch, selected.transform) : null;
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (!selected || !stageRef.current) return;
+  const dragWith = (e: React.PointerEvent, apply: (dx: number, dy: number, snap: boolean) => (base: Project) => Project | null) => {
+    if (!stageRef.current) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     const box = stageRef.current.getBoundingClientRect();
     const x0 = e.clientX;
     const y0 = e.clientY;
-    const origin = selected.transform;
-    const id = selected.id;
     beginGesture();
     const move = (ev: PointerEvent) => {
-      const snap = useEditor.getState().snap;
-      let x = origin.x + (ev.clientX - x0) / box.width;
-      let y = origin.y + (ev.clientY - y0) / box.height;
-      if (snap && Math.abs(x) < CENTER_SNAP) x = 0;
-      if (snap && Math.abs(y) < CENTER_SNAP) y = 0;
-      updateGesture((base) => updateClip(base, id, (c) => ({ ...c, transform: { ...c.transform, x, y } })));
+      updateGesture(apply((ev.clientX - x0) / box.width, (ev.clientY - y0) / box.height, useEditor.getState().snap));
     };
     const up = () => {
       el.removeEventListener('pointermove', move);
@@ -62,15 +56,45 @@ export function Preview() {
     el.addEventListener('pointerup', up);
   };
 
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (media) {
+      const origin = media.transform;
+      const id = media.id;
+      dragWith(e, (dx, dy, snap) => {
+        let x = origin.x + dx;
+        let y = origin.y + dy;
+        if (snap && Math.abs(x) < CENTER_SNAP) x = 0;
+        if (snap && Math.abs(y) < CENTER_SNAP) y = 0;
+        return (base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, x, y } }));
+      });
+    } else if (text) {
+      const ox = text.x;
+      const oy = text.y;
+      const id = text.id;
+      const centered = text.style.align === 'center';
+      dragWith(e, (dx, dy, snap) => {
+        let x = ox + dx;
+        const y = oy + dy;
+        if (snap && centered && Math.abs(x - 0.5) < CENTER_SNAP) x = 0.5;
+        return (base) => updateTextClip(base, id, (c) => ({ ...c, x, y }));
+      });
+    }
+  };
+
   const onWheel = (e: React.WheelEvent) => {
-    if (!selected) return;
-    const id = selected.id;
+    if (!media && !text) return;
+    const id = (media ?? text)?.id ?? '';
     if (wheelTimer.current === null) beginGesture();
     else window.clearTimeout(wheelTimer.current);
     const factor = Math.pow(1.0015, -e.deltaY);
-    const current = findClip(useEditor.getState().project, id)?.clip.transform.scale ?? 1;
-    const scale = Math.max(0.1, Math.min(8, current * factor));
-    updateGesture((base) => updateClip(base, id, (c) => ({ ...c, transform: { ...c.transform, scale } })));
+    const current = findClip(useEditor.getState().project, id)?.clip;
+    if (current && isMediaClip(current)) {
+      const scale = Math.max(0.1, Math.min(8, current.transform.scale * factor));
+      updateGesture((base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, scale } })));
+    } else if (current && isTextClip(current)) {
+      const size = Math.max(12, Math.min(300, Math.round(current.style.size * factor)));
+      updateGesture((base) => updateTextClip(base, id, (c) => ({ ...c, style: { ...c.style, size } })));
+    }
     wheelTimer.current = window.setTimeout(() => {
       wheelTimer.current = null;
       endGesture();
@@ -84,7 +108,7 @@ export function Preview() {
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
           {rect && (
             <div
-              className="transform-box"
+              className={text ? 'transform-box text' : 'transform-box'}
               style={{
                 left: `${(rect.x / cw) * 100}%`,
                 top: `${(rect.y / ch) * 100}%`,

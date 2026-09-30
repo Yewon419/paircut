@@ -28,14 +28,59 @@ export interface Clip {
   transform: ClipTransform;
 }
 
-export type TrackKind = 'video' | 'audio';
+export type FontId = 'black' | 'bold' | 'medium';
+export type TextAlign = 'center' | 'left';
+export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
+
+export interface TextStyle {
+  font: FontId;
+  size: number;
+  color: string;
+  strokeColor: string;
+  strokeWidth: number;
+  background: string | null;
+  align: TextAlign;
+  highlight: string;
+  highlightColor: string;
+  highlightDigits: boolean;
+}
+
+/** On-screen text. `in` is always 0 so the generic timeline math (clipEnd, trim) applies unchanged. */
+export interface TextClip {
+  id: string;
+  start: number;
+  in: number;
+  out: number;
+  text: string;
+  preset: string;
+  style: TextStyle;
+  x: number;
+  y: number;
+  anim: TextAnim;
+}
+
+export type AnyClip = Clip | TextClip;
+
+export type TrackKind = 'video' | 'audio' | 'text';
 
 export interface Track {
   id: string;
   kind: TrackKind;
   muted: boolean;
   hidden: boolean;
-  clips: Clip[];
+  clips: AnyClip[];
+}
+
+export interface ProjectVars {
+  uploadDate: string;
+  ddayTarget: string;
+  salary: number;
+  goal: number;
+}
+
+export interface Marker {
+  t: number;
+  label: string;
 }
 
 export interface Project {
@@ -45,6 +90,67 @@ export interface Project {
   fps: number;
   assets: MediaAsset[];
   tracks: Track[];
+  vars: ProjectVars;
+  markers: Marker[];
+}
+
+export function isTextClip(clip: AnyClip): clip is TextClip {
+  return 'text' in clip;
+}
+
+export function isMediaClip(clip: AnyClip): clip is Clip {
+  return 'assetId' in clip;
+}
+
+export function mediaClips(track: Track): Clip[] {
+  return track.clips.filter(isMediaClip);
+}
+
+export function textClips(track: Track): TextClip[] {
+  return track.clips.filter(isTextClip);
+}
+
+/** Text animation timing, shared by the preview rasterizer and the ffmpeg graph. */
+export const ANIM_IN = 0.25;
+export const ANIM_OUT = 0.15;
+export const POP_FROM = 0.85;
+export const RISE_PX = 40;
+
+export const DEFAULT_VARS: ProjectVars = {
+  uploadDate: '',
+  ddayTarget: '2027-09-01',
+  salary: 0,
+  goal: 2236300,
+};
+
+export function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Days from the upload date to the target date (2026-10-03 -> 2027-09-01 is 333). */
+export function ddayOf(vars: ProjectVars): number {
+  const from = Date.parse(`${vars.uploadDate || todayIso()}T00:00:00Z`);
+  const to = Date.parse(`${vars.ddayTarget}T00:00:00Z`);
+  if (Number.isNaN(from) || Number.isNaN(to)) return 0;
+  return Math.round((to - from) / 86400000);
+}
+
+export function formatWon(n: number): string {
+  return Math.round(n).toLocaleString('en-US');
+}
+
+/** Replaces {D}, {월급}, {목표} tokens so hook, voice line and badge always show the same numbers. */
+export function resolveTokens(text: string, vars: ProjectVars): string {
+  return text
+    .replaceAll('{D}', String(ddayOf(vars)))
+    .replaceAll('{월급}', formatWon(vars.salary))
+    .replaceAll('{목표}', formatWon(vars.goal));
+}
+
+/** Fills fields added after the first project format so older files still open. */
+export function normalizeProject(p: Project): Project {
+  return { ...p, vars: { ...DEFAULT_VARS, ...(p.vars ?? {}) }, markers: p.markers ?? [] };
 }
 
 export const IMAGE_DEFAULT_DURATION = 3;
@@ -59,17 +165,20 @@ export function emptyProject(): Project {
     fps: 30,
     assets: [],
     tracks: [
+      { id: 't-1', kind: 'text', muted: false, hidden: false, clips: [] },
       { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [] },
       { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] },
     ],
+    vars: { ...DEFAULT_VARS, uploadDate: todayIso() },
+    markers: [],
   };
 }
 
-export function clipDuration(clip: Clip): number {
+export function clipDuration(clip: AnyClip): number {
   return clip.out - clip.in;
 }
 
-export function clipEnd(clip: Clip): number {
+export function clipEnd(clip: AnyClip): number {
   return clip.start + clipDuration(clip);
 }
 

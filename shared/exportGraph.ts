@@ -1,5 +1,27 @@
-import { assetById, clipDuration, clipEnd, placeVisual, projectDuration } from './project';
-import type { Project } from './project';
+import {
+  ANIM_IN,
+  ANIM_OUT,
+  assetById,
+  clipDuration,
+  clipEnd,
+  isMediaClip,
+  isTextClip,
+  placeVisual,
+  POP_FROM,
+  projectDuration,
+  RISE_PX,
+} from './project';
+import type { Clip, Project, TextClip, Track } from './project';
+
+/** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
+export interface TextLayer {
+  clipId: string;
+  path: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export interface ExportPlan {
   inputArgs: string[];
@@ -23,7 +45,7 @@ export function outputSize(project: Project, height: number): { width: number; h
  * Builds ffmpeg inputs and a filter graph that mirror the preview compositor:
  * video tracks are stacked with tracks[0] on top, clips are cover-fitted via placeVisual.
  */
-export function buildExportPlan(project: Project, height: number): ExportPlan {
+export function buildExportPlan(project: Project, height: number, textLayers: TextLayer[]): ExportPlan {
   const duration = projectDuration(project);
   if (duration <= 0) throw new Error('timeline is empty');
   const { width: W, height: H } = outputSize(project, height);
@@ -38,10 +60,54 @@ export function buildExportPlan(project: Project, height: number): ExportPlan {
   let base = 'bg0';
   let overlayCount = 0;
 
-  const videoTracks = project.tracks.filter((t) => t.kind === 'video');
-  for (let ti = videoTracks.length - 1; ti >= 0; ti--) {
-    const track = videoTracks[ti];
+  const layers = new Map(textLayers.map((l) => [l.clipId, l]));
+  const overlay = (label: string, x: string, y: string, clip: Clip | TextClip) => {
+    const out = `o${overlayCount++}`;
+    filters.push(
+      `[${base}][${label}]overlay=x='${x}':y='${y}':eof_action=pass:` +
+        `enable='between(t,${num(clip.start)},${num(clipEnd(clip) - 0.0001)})'[${out}]`,
+    );
+    base = out;
+  };
+
+  const visualTracks = project.tracks.filter((t: Track) => t.kind !== 'audio');
+  for (let ti = visualTracks.length - 1; ti >= 0; ti--) {
+    const track = visualTracks[ti];
     for (const clip of track.clips) {
+      if (isTextClip(clip)) {
+        if (track.hidden) continue;
+        const layer = layers.get(clip.id);
+        if (!layer) throw new Error(`missing rasterized text for clip ${clip.id}`);
+        const idx = inputIndex++;
+        const dur = clipDuration(clip);
+        inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(dur), '-i', layer.path);
+        const chain = [`fps=${fps}`, 'format=rgba'];
+        if (clip.anim === 'pop') {
+          const f = `(${POP_FROM}+${num(1 - POP_FROM)}*min(1,t/${ANIM_IN}))`;
+          chain.push(
+            `scale=w='max(2,trunc(iw*${f}))':h='max(2,trunc(ih*${f}))':eval=frame`,
+            // Pinned so pad stays in rgba; if negotiated to yuva420p it rounds odd sizes down and fails.
+            'format=rgba',
+            `pad=${layer.w}:${layer.h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame`,
+          );
+        }
+        if (clip.anim !== 'none') {
+          chain.push(
+            `fade=t=in:st=0:d=${ANIM_IN}:alpha=1`,
+            `fade=t=out:st=${num(Math.max(0, dur - ANIM_OUT))}:d=${ANIM_OUT}:alpha=1`,
+          );
+        }
+        chain.push(`setpts=PTS-STARTPTS+${num(clip.start)}/TB`);
+        const label = `t${idx}`;
+        filters.push(`[${idx}:v]${chain.join(',')}[${label}]`);
+        const rise =
+          clip.anim === 'rise'
+            ? `+${num((RISE_PX * W) / project.width)}*(1-min(1,(t-${num(clip.start)})/${ANIM_IN}))`
+            : '';
+        overlay(label, String(layer.x), `${layer.y}${rise}`, clip);
+        continue;
+      }
+      if (!isMediaClip(clip)) continue;
       const asset = assetById(project, clip.assetId);
       const dur = clipDuration(clip);
       const idx = inputIndex++;
@@ -57,12 +123,7 @@ export function buildExportPlan(project: Project, height: number): ExportPlan {
           `[${idx}:v]fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,format=yuva420p,` +
             `setpts=PTS-STARTPTS+${num(clip.start)}/TB[${label}]`,
         );
-        const out = `o${overlayCount++}`;
-        filters.push(
-          `[${base}][${label}]overlay=x=${r.x}:y=${r.y}:eof_action=pass:` +
-            `enable='between(t,${num(clip.start)},${num(clipEnd(clip) - 0.0001)})'[${out}]`,
-        );
-        base = out;
+        overlay(label, String(r.x), String(r.y), clip);
       }
       if (asset.kind === 'video' && asset.hasAudio && !track.muted) {
         audioLabels.push(pushAudio(filters, idx, clip.start));
@@ -72,6 +133,7 @@ export function buildExportPlan(project: Project, height: number): ExportPlan {
 
   for (const track of project.tracks.filter((t) => t.kind === 'audio')) {
     for (const clip of track.clips) {
+      if (!isMediaClip(clip)) continue;
       const asset = assetById(project, clip.assetId);
       const idx = inputIndex++;
       inputArgs.push('-ss', num(clip.in), '-t', num(clipDuration(clip)), '-i', asset.path);

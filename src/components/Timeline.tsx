@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Clip, Project, Track } from '../../shared/project';
-import { assetById, clipDuration, clipEnd, projectDuration } from '../../shared/project';
+import type { AnyClip, Project, Track } from '../../shared/project';
+import { assetById, clipDuration, clipEnd, isTextClip, projectDuration, resolveTokens } from '../../shared/project';
 import { seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
@@ -84,6 +84,7 @@ function trackLabel(project: Project, track: Track): string {
   const same = project.tracks.filter((t) => t.kind === track.kind);
   const idx = same.indexOf(track);
   if (track.kind === 'video') return idx === same.length - 1 ? '메인' : `영상 ${same.length - 1 - idx}`;
+  if (track.kind === 'text') return `텍스트 ${same.length - idx}`;
   return `오디오 ${idx + 1}`;
 }
 
@@ -141,7 +142,7 @@ export function Timeline() {
     el.addEventListener('pointerup', up);
   };
 
-  const startClipDrag = (e: React.PointerEvent, clip: Clip, mode: 'move' | 'trim-start' | 'trim-end') => {
+  const startClipDrag = (e: React.PointerEvent, clip: AnyClip, mode: 'move' | 'trim-start' | 'trim-end') => {
     e.stopPropagation();
     e.preventDefault();
     useEditor.setState({ selectedClipId: clip.id });
@@ -151,7 +152,8 @@ export function Timeline() {
     const base = useEditor.getState().project;
     const found = findClip(base, clip.id);
     if (!found) return;
-    const asset = assetById(base, clip.assetId);
+    const asset = isTextClip(clip) ? null : assetById(base, clip.assetId);
+    const stretchy = !asset || asset.kind === 'image';
     const candidates = snapCandidates(base, clip.id);
     const fps = base.fps;
     const minLen = 1 / fps;
@@ -168,7 +170,7 @@ export function Timeline() {
         const start = Math.max(0, frameSnap(clip.start + dt, fps));
         const row = rowAt(ev.clientX, ev.clientY);
         updateGesture((b) => {
-          if (row === 'new-video' && found.track.kind === 'video') return moveClipToNewTrack(b, clip.id, start, 0);
+          if (row === 'new-video' && found.track.kind !== 'audio') return moveClipToNewTrack(b, clip.id, start, 0);
           if (row === 'new-audio' && found.track.kind === 'audio')
             return moveClipToNewTrack(b, clip.id, start, b.tracks.length);
           const target = row && b.tracks.some((t) => t.id === row) ? row : found.track.id;
@@ -180,12 +182,11 @@ export function Timeline() {
         if (snapOn) dt += snapDelta([clip.start + dt], candidates, z);
         dt = frameSnap(dt, fps);
         dt = Math.max(dt, -clip.start);
-        if (asset.kind !== 'image') dt = Math.max(dt, -clip.in);
+        if (!stretchy) dt = Math.max(dt, -clip.in);
         dt = Math.min(dt, clipDuration(clip) - minLen);
-        const next: Clip =
-          asset.kind === 'image'
-            ? { ...clip, start: clip.start + dt, out: clip.out - dt }
-            : { ...clip, start: clip.start + dt, in: clip.in + dt };
+        const next: AnyClip = stretchy
+          ? { ...clip, start: clip.start + dt, out: clip.out - dt }
+          : { ...clip, start: clip.start + dt, in: clip.in + dt };
         if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
         updateGesture((b) => updateClip(b, clip.id, () => next));
         return;
@@ -193,8 +194,8 @@ export function Timeline() {
       if (snapOn) dt += snapDelta([clipEnd(clip) + dt], candidates, z);
       dt = frameSnap(dt, fps);
       let out = Math.max(clip.in + minLen, clip.out + dt);
-      if (asset.kind !== 'image') out = Math.min(out, asset.duration);
-      const next: Clip = { ...clip, out };
+      if (asset && asset.kind !== 'image') out = Math.min(out, asset.duration);
+      const next: AnyClip = { ...clip, out };
       if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
       updateGesture((b) => updateClip(b, clip.id, () => next));
     };
@@ -270,7 +271,7 @@ export function Timeline() {
               <div key={rowKey(row)} className="tl-head" style={{ height: TRACK_H }}>
                 <span className="tl-head-name">{trackLabel(project, row.track)}</span>
                 <div className="tl-head-btns">
-                  {row.track.kind === 'video' && (
+                  {row.track.kind !== 'audio' && (
                     <button
                       className={row.track.hidden ? 'toggle' : 'toggle on'}
                       onClick={() => toggleTrack(row.track.id, 'hidden')}
@@ -279,13 +280,15 @@ export function Timeline() {
                       {row.track.hidden ? '숨김' : '보임'}
                     </button>
                   )}
-                  <button
-                    className={row.track.muted ? 'toggle' : 'toggle on'}
-                    onClick={() => toggleTrack(row.track.id, 'muted')}
-                    title="소리"
-                  >
-                    {row.track.muted ? '음소거' : '소리'}
-                  </button>
+                  {row.track.kind !== 'text' && (
+                    <button
+                      className={row.track.muted ? 'toggle' : 'toggle on'}
+                      onClick={() => toggleTrack(row.track.id, 'muted')}
+                      title="소리"
+                    >
+                      {row.track.muted ? '음소거' : '소리'}
+                    </button>
+                  )}
                 </div>
               </div>
             ) : (
@@ -318,6 +321,11 @@ export function Timeline() {
                   </div>
                 );
               })}
+              {project.markers.map((m) => (
+                <div key={`${m.t}-${m.label}`} className="tl-marker" style={{ left: m.t * zoom }} title={m.label}>
+                  <span>{m.label}</span>
+                </div>
+              ))}
             </div>
             {rows.map((row) => {
               const key = rowKey(row);
@@ -370,39 +378,48 @@ export function Timeline() {
 
 interface ClipViewProps {
   project: Project;
-  clip: Clip;
+  clip: AnyClip;
   zoom: number;
   selected: boolean;
   dim: boolean;
-  onDown: (e: React.PointerEvent, clip: Clip, mode: 'move' | 'trim-start' | 'trim-end') => void;
+  onDown: (e: React.PointerEvent, clip: AnyClip, mode: 'move' | 'trim-start' | 'trim-end') => void;
 }
 
 function ClipView({ project, clip, zoom, selected, dim, onDown }: ClipViewProps) {
-  const asset = assetById(project, clip.assetId);
   const width = clipDuration(clip) * zoom;
-  const strip = asset.thumbPath ?? asset.wavePath;
   const style: React.CSSProperties = { left: clip.start * zoom, width };
-  if (strip) {
-    style.backgroundImage = `url("${window.api.mediaUrl(strip)}")`;
-    if (asset.kind === 'image') {
-      style.backgroundSize = 'auto 100%';
-      style.backgroundRepeat = 'repeat-x';
-    } else {
-      style.backgroundSize = `${asset.duration * zoom}px 100%`;
-      style.backgroundPosition = `${-clip.in * zoom}px 0`;
-      style.backgroundRepeat = 'no-repeat';
+  let kind: string;
+  let label: string;
+  if (isTextClip(clip)) {
+    kind = 'text';
+    label = resolveTokens(clip.text, project.vars).replaceAll('\n', ' ');
+  } else {
+    const asset = assetById(project, clip.assetId);
+    kind = asset.kind;
+    label = asset.name;
+    const strip = asset.thumbPath ?? asset.wavePath;
+    if (strip) {
+      style.backgroundImage = `url("${window.api.mediaUrl(strip)}")`;
+      if (asset.kind === 'image') {
+        style.backgroundSize = 'auto 100%';
+        style.backgroundRepeat = 'repeat-x';
+      } else {
+        style.backgroundSize = `${asset.duration * zoom}px 100%`;
+        style.backgroundPosition = `${-clip.in * zoom}px 0`;
+        style.backgroundRepeat = 'no-repeat';
+      }
     }
   }
   return (
     <div
-      className={`tl-clip kind-${asset.kind}${selected ? ' selected' : ''}${dim ? ' dim' : ''}`}
+      className={`tl-clip kind-${kind}${selected ? ' selected' : ''}${dim ? ' dim' : ''}`}
       style={style}
       data-clip={clip.id}
       onPointerDown={(e) => onDown(e, clip, 'move')}
-      title={asset.name}
+      title={label}
     >
       <div className="tl-clip-label">
-        {asset.name} · {clipDuration(clip).toFixed(1)}초
+        {label} · {clipDuration(clip).toFixed(1)}초
       </div>
       <div className="handle left" onPointerDown={(e) => onDown(e, clip, 'trim-start')} />
       <div className="handle right" onPointerDown={(e) => onDown(e, clip, 'trim-end')} />

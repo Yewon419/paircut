@@ -1,6 +1,7 @@
-import type { Clip, MediaAsset, Project, Rect, Track } from '../../shared/project';
-import { assetById, clipEnd, placeVisual, projectDuration } from '../../shared/project';
+import type { Clip, MediaAsset, Project, Rect, TextClip, Track } from '../../shared/project';
+import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
 import { setPlayhead, useEditor } from '../store';
+import { animState, cachedRaster, DESIGN_WIDTH, drawText } from './text';
 
 type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
 
@@ -64,6 +65,7 @@ class Compositor {
     const live = new Set<string>();
     for (const track of project.tracks) {
       for (const clip of track.clips) {
+        if (!isMediaClip(clip)) continue;
         live.add(clip.id);
         const asset = assetById(project, clip.assetId);
         const entry = this.entryFor(clip, asset);
@@ -111,6 +113,12 @@ class Compositor {
     return placeVisual(asset.width, asset.height, this.canvas.width, this.canvas.height, clip.transform);
   }
 
+  textRect(project: Project, clip: TextClip): Rect | null {
+    if (!this.canvas) return null;
+    const r = cachedRaster(clip, project.vars, this.canvas.width, this.canvas.height);
+    return { x: r.x, y: r.y, w: r.w, h: r.h };
+  }
+
   draw(project: Project, t: number): void {
     const canvas = this.canvas;
     if (!canvas) return;
@@ -118,12 +126,17 @@ class Compositor {
     if (!ctx) return;
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const videoTracks = project.tracks.filter((tr) => tr.kind === 'video');
-    for (let i = videoTracks.length - 1; i >= 0; i--) {
-      const track = videoTracks[i];
+    const visual = project.tracks.filter((tr) => tr.kind !== 'audio');
+    const k = canvas.width / DESIGN_WIDTH;
+    for (let i = visual.length - 1; i >= 0; i--) {
+      const track = visual[i];
       if (track.hidden) continue;
       const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
       if (!clip) continue;
+      if (isTextClip(clip)) {
+        drawText(ctx, cachedRaster(clip, project.vars, canvas.width, canvas.height), animState(clip, t), k);
+        continue;
+      }
       const entry = this.entries.get(clip.id);
       if (!entry) continue;
       const el = entry.el;

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { Clip, MediaAsset, Project, Track, TrackKind } from '../shared/project';
-import { clipEnd, emptyProject, IDENTITY_TRANSFORM, projectDuration } from '../shared/project';
+import type { AnyClip, Clip, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
+import { clipEnd, emptyProject, IDENTITY_TRANSFORM, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
 
 const HISTORY_LIMIT = 200;
 
@@ -90,7 +90,7 @@ function pruneSelection(): void {
 
 export function loadProject(project: Project, filePath: string | null): void {
   set({
-    project,
+    project: normalizeProject(project),
     past: [],
     future: [],
     gestureBase: null,
@@ -111,7 +111,7 @@ export function frameSnap(t: number, fps: number): number {
   return Math.round(t * fps) / fps;
 }
 
-export function findClip(project: Project, clipId: string): { track: Track; clip: Clip } | null {
+export function findClip(project: Project, clipId: string): { track: Track; clip: AnyClip } | null {
   for (const track of project.tracks) {
     const clip = track.clips.find((c) => c.id === clipId);
     if (clip) return { track, clip };
@@ -124,7 +124,7 @@ export function overlaps(track: Track, start: number, end: number, ignoreId: str
   return track.clips.some((c) => c.id !== ignoreId && start < clipEnd(c) - eps && end > c.start + eps);
 }
 
-function sortClips(clips: Clip[]): Clip[] {
+function sortClips(clips: AnyClip[]): AnyClip[] {
   return [...clips].sort((a, b) => a.start - b.start);
 }
 
@@ -132,12 +132,11 @@ export function withTrack(project: Project, trackId: string, update: (t: Track) 
   return { ...project, tracks: project.tracks.map((t) => (t.id === trackId ? update(t) : t)) };
 }
 
-/** Removes empty tracks, but always keeps one video and one audio track. */
+/** Removes empty tracks, but always keeps one text, one video and one audio track. */
 export function tidyTracks(project: Project): Project {
   const keep = (kind: TrackKind): Track | undefined => project.tracks.filter((t) => t.kind === kind).at(-1);
-  const lastVideo = keep('video');
-  const lastAudio = keep('audio');
-  const tracks = project.tracks.filter((t) => t.clips.length > 0 || t === lastVideo || t === lastAudio);
+  const kept = new Set([keep('text'), keep('video'), keep('audio')]);
+  const tracks = project.tracks.filter((t) => t.clips.length > 0 || kept.has(t));
   return tracks.length === project.tracks.length ? project : { ...project, tracks };
 }
 
@@ -189,11 +188,16 @@ export function placeAsset(asset: MediaAsset, trackId: string | null, start: num
   });
 }
 
+const KIND_ORDER: Record<TrackKind, number> = { text: 0, video: 1, audio: 2 };
+
+/** Tracks stay grouped top to bottom as text, video, audio; clamps an insert index into its group. */
 function clampTrackInsert(p: Project, kind: TrackKind, index: number): number {
-  const firstAudio = p.tracks.findIndex((t) => t.kind === 'audio');
-  const videoEnd = firstAudio === -1 ? p.tracks.length : firstAudio;
-  if (kind === 'video') return Math.max(0, Math.min(videoEnd, index));
-  return Math.max(videoEnd, Math.min(p.tracks.length, index));
+  const order = KIND_ORDER[kind];
+  const first = p.tracks.findIndex((t) => KIND_ORDER[t.kind] >= order);
+  const groupStart = first === -1 ? p.tracks.length : first;
+  const after = p.tracks.findIndex((t) => KIND_ORDER[t.kind] > order);
+  const groupEnd = after === -1 ? p.tracks.length : after;
+  return Math.max(groupStart, Math.min(groupEnd, index));
 }
 
 export function moveClip(base: Project, clipId: string, toTrackId: string, start: number): Project | null {
@@ -221,7 +225,7 @@ export function moveClipToNewTrack(base: Project, clipId: string, start: number,
   return moveClip({ ...base, tracks }, clipId, track.id, start);
 }
 
-export function updateClip(base: Project, clipId: string, update: (c: Clip) => Clip): Project {
+export function updateClip(base: Project, clipId: string, update: (c: AnyClip) => AnyClip): Project {
   return {
     ...base,
     tracks: base.tracks.map((t) =>
@@ -232,11 +236,19 @@ export function updateClip(base: Project, clipId: string, update: (c: Clip) => C
   };
 }
 
+export function updateMediaClip(base: Project, clipId: string, update: (c: Clip) => Clip): Project {
+  return updateClip(base, clipId, (c) => (isMediaClip(c) ? update(c) : c));
+}
+
+export function updateTextClip(base: Project, clipId: string, update: (c: TextClip) => TextClip): Project {
+  return updateClip(base, clipId, (c) => (isTextClip(c) ? update(c) : c));
+}
+
 export function splitAtPlayhead(): void {
   const { project, playhead, selectedClipId } = get();
   const t = frameSnap(playhead, project.fps);
   const minLen = 1 / project.fps;
-  const inside = (c: Clip) => t > c.start + minLen / 2 && t < clipEnd(c) - minLen / 2;
+  const inside = (c: AnyClip) => t > c.start + minLen / 2 && t < clipEnd(c) - minLen / 2;
   const selected = selectedClipId ? findClip(project, selectedClipId) : null;
   const targets = new Set<string>();
   if (selected && inside(selected.clip)) targets.add(selected.clip.id);
@@ -248,6 +260,12 @@ export function splitAtPlayhead(): void {
       ...track,
       clips: track.clips.flatMap((c) => {
         if (!targets.has(c.id)) return [c];
+        if (isTextClip(c)) {
+          return [
+            { ...c, out: t - c.start },
+            { ...c, id: uid('c'), start: t, in: 0, out: clipEnd(c) - t },
+          ];
+        }
         const cut = c.in + (t - c.start);
         return [
           { ...c, out: cut },
@@ -267,4 +285,30 @@ export function deleteSelected(): void {
 
 export function toggleTrack(trackId: string, key: 'muted' | 'hidden'): void {
   commit((p) => withTrack(p, trackId, (t) => ({ ...t, [key]: !t[key] })));
+}
+
+function newTextTrack(clips: AnyClip[]): Track {
+  return { id: uid('t'), kind: 'text', muted: false, hidden: false, clips };
+}
+
+/** Adds a text clip at the playhead on the first text track with room, else on a new top text track. */
+export function addTextClip(clip: TextClip): void {
+  commit((p) => {
+    const room = p.tracks.find((t) => t.kind === 'text' && !overlaps(t, clip.start, clipEnd(clip), null));
+    if (room) return withTrack(p, room.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+    return { ...p, tracks: [newTextTrack([clip]), ...p.tracks] };
+  });
+  set({ selectedClipId: clip.id });
+}
+
+/** Puts each group of text clips on its own new text track, above existing tracks. */
+export function addTextTracks(groups: TextClip[][], update: (p: Project) => Project = (p) => p): void {
+  commit((p) => {
+    const fresh = groups.filter((g) => g.length > 0).map((g) => newTextTrack(sortClips(g)));
+    return tidyTracks(update({ ...p, tracks: [...fresh, ...p.tracks] }));
+  });
+}
+
+export function setVars(patch: Partial<Project['vars']>): void {
+  commit((p) => ({ ...p, vars: { ...p.vars, ...patch } }));
 }

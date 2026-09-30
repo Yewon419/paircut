@@ -13,7 +13,7 @@ const api: CutdeskApi = {
   saveProject: (project, path) => ipcRenderer.invoke('project:save', project, path),
   openProject: () => ipcRenderer.invoke('project:open'),
   pickExportPath: () => ipcRenderer.invoke('export:pickPath'),
-  startExport: (project, options) => ipcRenderer.invoke('export:start', project, options),
+  startExport: (project, options, texts) => ipcRenderer.invoke('export:start', project, options, texts),
   cancelExport: () => ipcRenderer.invoke('export:cancel'),
   onExportEvent: (listener) => {
     const handler = (_e: IpcRendererEvent, event: ExportEvent) => listener(event);
@@ -21,6 +21,9 @@ const api: CutdeskApi = {
     return () => ipcRenderer.removeListener('export:event', handler);
   },
   showInFolder: (path) => ipcRenderer.invoke('shell:showItem', path),
+  readTextFile: (path) => ipcRenderer.invoke('file:readText', path),
+  openTextFile: (extensions, defaultPath) => ipcRenderer.invoke('file:openText', extensions, defaultPath),
+  saveTextFile: (content, defaultName, extensions) => ipcRenderer.invoke('file:saveText', content, defaultName, extensions),
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -1,6 +1,6 @@
 // End-to-end export check: real ffmpeg, generated fixtures, pixel and audio assertions on the output.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 
@@ -29,12 +29,13 @@ export function makeFixtures(target) {
   ff(['-display_rotation:v:0', '90', '-i', f('flat.mp4'), '-c', 'copy', f('rot.mp4')]);
   ff(['-f', 'lavfi', '-i', 'color=c=red:s=800x800', '-frames:v', '1', f('pic.png')]);
   ff(['-f', 'lavfi', '-i', 'sine=f=880:d=3', '-c:a', 'aac', f('tone.m4a')]);
+  ff(['-f', 'lavfi', '-i', 'color=c=0xFF00FF:s=401x121', '-frames:v', '1', f('txt.png')]);
   return f;
 }
 
-export function samplePixel(file, t, x, y) {
+export function samplePixel(file, t, x, y, size = 8) {
   const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
-    '-vf', `crop=8:8:${x}:${y},scale=1:1`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
+    '-vf', `crop=${size}:${size}:${x}:${y},scale=1:1:flags=area`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
   return [buf[0], buf[1], buf[2]];
 }
 
@@ -44,6 +45,47 @@ function volumeOf(file, from, to) {
   const m = /max_volume: (-?[\d.]+|-inf) dB/.exec(res.stderr);
   if (!m) throw new Error(`no max_volume in: ${res.stderr}`);
   return m[1] === '-inf' ? -Infinity : Number(m[1]);
+}
+
+const STYLE = { font: 'black', size: 68, color: '#FFFFFF', strokeColor: '#13293D', strokeWidth: 5, background: null,
+  align: 'center', highlight: '', highlightColor: '#FFD166', highlightDigits: false };
+
+function textClip(id, start, anim) {
+  return { id, start, in: 0, out: 1.5, text: id, preset: 'sub', style: STYLE, x: 0.5, y: 0.5, anim };
+}
+
+/** The ffmpeg side of text: pop (scale + pad per frame), fade (alpha), rise (overlay y), hidden tracks. */
+async function checkTextLayers(f, base, dir) {
+  const png = readFileSync(f('txt.png')).toString('base64');
+  const layer = (clipId, y) => ({ clipId, pngBase64: png, x: 340, y, w: 401, h: 121 });
+  const project = {
+    ...base,
+    tracks: [
+      { id: 't-hidden', kind: 'text', muted: false, hidden: true, clips: [{ ...textClip('th', 0, 'none'), out: 7 }] },
+      { id: 't-1', kind: 'text', muted: false, hidden: false, clips: [
+        textClip('tp', 0.5, 'pop'), textClip('tf', 2.5, 'fade'), textClip('tr', 4.5, 'rise'),
+      ] },
+      ...base.tracks,
+    ],
+  };
+  const out = join(dir, 'text.mp4');
+  const result = await runExport(project, 1920, out, [layer('tp', 300), layer('tf', 700), layer('tr', 1100)], () => {}).done;
+  check('text export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  const magenta = (p) => p[0] > 200 && p[1] < 70 && p[2] > 200;
+  const probe = (name, t, x, y, want) => {
+    const p = samplePixel(out, t, x, y);
+    check(name, magenta(p) === want, p.join(','));
+  };
+  probe('pop: center visible while settling', 0.72, 536, 356, true);
+  probe('pop: corner empty while scaled down', 0.54, 342, 302, false);
+  probe('pop: corner filled once settled', 1.5, 342, 302, true);
+  probe('pop: gone after clip end', 2.2, 536, 356, false);
+  probe('fade: faint at start', 2.54, 536, 756, false);
+  probe('fade: opaque mid clip', 3.3, 536, 756, true);
+  probe('rise: top edge empty while below target', 4.54, 536, 1102, false);
+  probe('rise: top edge filled once settled', 5.5, 536, 1102, true);
+  probe('hidden text track not rendered', 1.0, 536, 1000, false);
 }
 
 let failures = 0;
@@ -63,6 +105,8 @@ export async function buildFixtureProject(f, cacheDir) {
     project: {
       version: 1, width: 1080, height: 1920, fps: 30,
       assets: [land, rot, pic, tone],
+      vars: { uploadDate: '2026-10-03', ddayTarget: '2027-09-01', salary: 0, goal: 2236300 },
+      markers: [],
       tracks: [
         { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [
           { id: 'c-top', assetId: pic.id, start: 1, in: 0, out: 1, transform: { scale: 0.3, x: 0, y: 0 } },
@@ -90,7 +134,7 @@ async function main() {
   check('waveform created', Boolean(assets.tone.wavePath));
 
   const out = join(dir, 'out.mp4');
-  const job = runExport(project, 1920, out, () => {});
+  const job = runExport(project, 1920, out, [], () => {});
   const result = await job.done;
   check('export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
   if (result.type !== 'done') process.exit(1);
@@ -115,6 +159,8 @@ async function main() {
   check('clip audio present 0-1s', volumeOf(out, 0.2, 0.8) > -30, `${volumeOf(out, 0.2, 0.8)} dB`);
   check('audio track present 3.5-4.5s', volumeOf(out, 3.6, 4.4) > -30, `${volumeOf(out, 3.6, 4.4)} dB`);
   check('silent after 5.2s', volumeOf(out, 5.3, 6.8) < -60, `${volumeOf(out, 5.3, 6.8)} dB`);
+
+  await checkTextLayers(f, project, dir);
 
   if (failures > 0) {
     console.error(`${failures} check(s) failed`);

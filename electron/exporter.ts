@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ExportEvent } from '../shared/api';
+import type { ExportEvent, TextImage } from '../shared/api';
 import { buildExportPlan, ffmpegArgs } from '../shared/exportGraph';
 import type { Project } from '../shared/project';
 import { FFMPEG } from './media';
@@ -16,10 +16,22 @@ export function runExport(
   project: Project,
   height: number,
   outPath: string,
+  texts: TextImage[],
   onProgress: (ratio: number) => void,
 ): RunningExport {
-  const plan = buildExportPlan(project, height);
   const workDir = mkdtempSync(join(tmpdir(), 'cutdesk-'));
+  const layers = texts.map((t, i) => {
+    const path = join(workDir, `text${i}.png`);
+    writeFileSync(path, Buffer.from(t.pngBase64, 'base64'));
+    return { clipId: t.clipId, path, x: t.x, y: t.y, w: t.w, h: t.h };
+  });
+  let plan;
+  try {
+    plan = buildExportPlan(project, height, layers);
+  } catch (err) {
+    rmSync(workDir, { recursive: true, force: true });
+    throw err;
+  }
   const scriptPath = join(workDir, 'graph.txt');
   writeFileSync(scriptPath, plan.filterGraph, 'utf8');
   const args = ffmpegArgs(plan, scriptPath, outPath);

@@ -2,9 +2,10 @@ import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { Readable } from 'node:stream';
-import type { ExportEvent, ExportOptions, OpenedProject } from '../shared/api';
+import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
+import { normalizeProject } from '../shared/project';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
 import { importMedia } from './media';
@@ -146,7 +147,7 @@ function registerIpc(): void {
     });
     if (res.canceled || res.filePaths.length === 0) return null;
     const path = res.filePaths[0];
-    const project = JSON.parse(readFileSync(path, 'utf8')) as Project;
+    const project = normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project);
     if (project.version !== 1) throw new Error(`unsupported project version: ${String(project.version)}`);
     const missing = project.assets.filter((a) => !existsSync(a.path)).map((a) => a.path);
     return { path, project, missing };
@@ -161,9 +162,9 @@ function registerIpc(): void {
     return res.canceled || !res.filePath ? null : res.filePath;
   });
 
-  ipcMain.handle('export:start', (_e, project: Project, options: ExportOptions) => {
+  ipcMain.handle('export:start', (_e, project: Project, options: ExportOptions, texts: TextImage[]) => {
     if (currentExport) throw new Error('an export is already running');
-    const job = runExport(project, options.height, options.outPath, (ratio) => send({ type: 'progress', ratio }));
+    const job = runExport(project, options.height, options.outPath, texts, (ratio) => send({ type: 'progress', ratio }));
     currentExport = job;
     void job.done.then((event) => {
       currentExport = null;
@@ -178,6 +179,34 @@ function registerIpc(): void {
 
   ipcMain.handle('shell:showItem', (_e, path: string) => {
     shell.showItemInFolder(path);
+  });
+
+  ipcMain.handle('file:readText', (_e, path: string) => readFileSync(path, 'utf8'));
+
+  ipcMain.handle(
+    'file:openText',
+    async (_e, extensions: string[], defaultPath: string | null): Promise<TextFile | null> => {
+      if (!win) return null;
+      const res = await dialog.showOpenDialog(win, {
+        properties: ['openFile'],
+        defaultPath: defaultPath ?? undefined,
+        filters: [{ name: extensions.join(', '), extensions }],
+      });
+      if (res.canceled || res.filePaths.length === 0) return null;
+      const path = res.filePaths[0];
+      return { path, content: readFileSync(path, 'utf8') };
+    },
+  );
+
+  ipcMain.handle('file:saveText', async (_e, content: string, defaultName: string, extensions: string[]) => {
+    if (!win) return null;
+    const res = await dialog.showSaveDialog(win, {
+      defaultPath: defaultName,
+      filters: [{ name: extensions.join(', '), extensions }],
+    });
+    if (res.canceled || !res.filePath) return null;
+    writeFileSync(res.filePath, content, 'utf8');
+    return res.filePath;
   });
 }
 
