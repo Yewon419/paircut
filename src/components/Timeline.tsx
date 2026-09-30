@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AnyClip, Project, Track } from '../../shared/project';
-import { assetById, clipDuration, clipEnd, isTextClip, projectDuration, resolveTokens } from '../../shared/project';
+import { assetById, clipDuration, clipEnd, isMediaClip, isTextClip, projectDuration, resolveTokens } from '../../shared/project';
 import { seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
@@ -157,6 +157,7 @@ export function Timeline() {
     const candidates = snapCandidates(base, clip.id);
     const fps = base.fps;
     const minLen = 1 / fps;
+    const rate = isMediaClip(clip) ? clip.speed : 1;
     let moved = false;
     beginGesture();
 
@@ -182,18 +183,18 @@ export function Timeline() {
         if (snapOn) dt += snapDelta([clip.start + dt], candidates, z);
         dt = frameSnap(dt, fps);
         dt = Math.max(dt, -clip.start);
-        if (!stretchy) dt = Math.max(dt, -clip.in);
+        if (!stretchy) dt = Math.max(dt, -clip.in / rate);
         dt = Math.min(dt, clipDuration(clip) - minLen);
         const next: AnyClip = stretchy
           ? { ...clip, start: clip.start + dt, out: clip.out - dt }
-          : { ...clip, start: clip.start + dt, in: clip.in + dt };
+          : { ...clip, start: clip.start + dt, in: clip.in + dt * rate };
         if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
         updateGesture((b) => updateClip(b, clip.id, () => next));
         return;
       }
       if (snapOn) dt += snapDelta([clipEnd(clip) + dt], candidates, z);
       dt = frameSnap(dt, fps);
-      let out = Math.max(clip.in + minLen, clip.out + dt);
+      let out = Math.max(clip.in + minLen * rate, clip.out + dt * rate);
       if (asset && asset.kind !== 'image') out = Math.min(out, asset.duration);
       const next: AnyClip = { ...clip, out };
       if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
@@ -404,8 +405,8 @@ function ClipView({ project, clip, zoom, selected, dim, onDown }: ClipViewProps)
         style.backgroundSize = 'auto 100%';
         style.backgroundRepeat = 'repeat-x';
       } else {
-        style.backgroundSize = `${asset.duration * zoom}px 100%`;
-        style.backgroundPosition = `${-clip.in * zoom}px 0`;
+        style.backgroundSize = `${(asset.duration * zoom) / clip.speed}px 100%`;
+        style.backgroundPosition = `${(-clip.in * zoom) / clip.speed}px 0`;
         style.backgroundRepeat = 'no-repeat';
       }
     }

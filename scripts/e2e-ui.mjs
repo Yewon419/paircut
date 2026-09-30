@@ -247,6 +247,49 @@ try {
   check('clicking an issue jumps to the clip', jumped.sel === 'c2' && Math.abs(jumped.t - 3) < 1e-6, JSON.stringify(jumped));
   check('safe-zone guide shown', await win.locator('[data-testid="safe-zone"]').isVisible());
 
+  // Speed, volume and fades: timeline ripple and the preview element's rate and gain.
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.locator('[data-clip="c1"]').click();
+  await win.locator('[data-speed="2"]').click();
+  const sped = await win.evaluate(() =>
+    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}`).join(' '));
+  check('2x halves c1 and pulls later clips in', sped === 'c1:0:2 c2:1.5:1 c3:3.5:1', sped);
+  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.waitForTimeout(200);
+  const rate = await win.evaluate(() => window.__cutdesk.audio('c1'));
+  check('preview plays c1 at 2x', rate?.rate === 2 && Math.abs(rate.level - 1) < 1e-6, JSON.stringify(rate));
+  await win.evaluate(() => {
+    const el = document.querySelector('[data-testid="volume"]');
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '150');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  });
+  await win.locator('[data-testid="fade-in"]').fill('1');
+  await win.waitForTimeout(200);
+  const gain = await win.evaluate(() => {
+    const c = window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips[0];
+    return { volume: c.volume, fadeIn: c.fadeIn, level: window.__cutdesk.audio('c1')?.level };
+  });
+  check('volume 150% and 1s fade in give gain 0.75 at 0.5s', gain.volume === 1.5 && gain.fadeIn === 1 && Math.abs(gain.level - 0.75) < 1e-6,
+    JSON.stringify(gain));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  await win.keyboard.press('Control+z');
+  await win.keyboard.press('Control+z');
+  const undone = await win.evaluate(() =>
+    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}:${c.volume}`).join(' '));
+  check('undo restores speed and volume', undone === 'c1:0:1:1 c2:3:1:1 c3:5:1:1', undone);
+  await win.evaluate((p) => window.__cutdesk.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
+    clips: t.clips.map((c) => (c.id === 'c1' ? { ...c, speed: 2, fadeIn: 1, fadeOut: 1 } : c)) })) }), project);
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.locator('[data-clip="c1"]').click({ position: { x: 20, y: 30 } });
+  await win.keyboard.press('KeyS');
+  const halves = await win.evaluate(() =>
+    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.slice(0, 2)
+      .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
+  check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

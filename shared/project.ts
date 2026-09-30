@@ -26,7 +26,20 @@ export interface Clip {
   in: number;
   out: number;
   transform: ClipTransform;
+  /** Linear gain, 1 = unchanged. */
+  volume: number;
+  /** Audio fade lengths in timeline seconds. */
+  fadeIn: number;
+  fadeOut: number;
+  /** Playback rate; the clip lasts (out - in) / speed on the timeline. */
+  speed: number;
 }
+
+export const SPEED_MIN = 0.5;
+export const SPEED_MAX = 2;
+export const VOLUME_MAX = 2;
+
+export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1 };
 
 export type FontId = 'black' | 'bold' | 'medium';
 export type TextAlign = 'center' | 'left';
@@ -150,7 +163,15 @@ export function resolveTokens(text: string, vars: ProjectVars): string {
 
 /** Fills fields added after the first project format so older files still open. */
 export function normalizeProject(p: Project): Project {
-  return { ...p, vars: { ...DEFAULT_VARS, ...(p.vars ?? {}) }, markers: p.markers ?? [] };
+  return {
+    ...p,
+    vars: { ...DEFAULT_VARS, ...(p.vars ?? {}) },
+    markers: p.markers ?? [],
+    tracks: p.tracks.map((t) => ({
+      ...t,
+      clips: t.clips.map((c) => (isMediaClip(c) ? { ...MEDIA_CLIP_DEFAULTS, ...c } : c)),
+    })),
+  };
 }
 
 export const IMAGE_DEFAULT_DURATION = 3;
@@ -175,7 +196,21 @@ export function emptyProject(): Project {
 }
 
 export function clipDuration(clip: AnyClip): number {
-  return clip.out - clip.in;
+  return isMediaClip(clip) ? (clip.out - clip.in) / clip.speed : clip.out - clip.in;
+}
+
+/** Position in the source file shown at timeline time t. */
+export function sourceTime(clip: Clip, t: number): number {
+  return clip.in + (t - clip.start) * clip.speed;
+}
+
+/** Clip gain at timeline time t: volume times linear fade ramps, the same curve as ffmpeg afade. */
+export function audioGain(clip: Clip, t: number): number {
+  const local = t - clip.start;
+  const rest = clipDuration(clip) - local;
+  const up = clip.fadeIn > 0 ? Math.min(1, Math.max(0, local / clip.fadeIn)) : 1;
+  const down = clip.fadeOut > 0 ? Math.min(1, Math.max(0, rest / clip.fadeOut)) : 1;
+  return clip.volume * up * down;
 }
 
 export function clipEnd(clip: AnyClip): number {

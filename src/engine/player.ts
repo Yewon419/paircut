@@ -1,5 +1,14 @@
 import type { Clip, MediaAsset, Project, Rect, TextClip, Track } from '../../shared/project';
-import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
+import {
+  assetById,
+  audioGain,
+  clipEnd,
+  isMediaClip,
+  isTextClip,
+  placeVisual,
+  projectDuration,
+  sourceTime,
+} from '../../shared/project';
 import { setPlayhead, useEditor } from '../store';
 import { animState, cachedRaster, DESIGN_WIDTH, drawText } from './text';
 
@@ -8,6 +17,9 @@ type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
 interface Entry {
   el: MediaEl;
   assetId: string;
+  /** Routes element audio so volume can exceed 1 and fades can ramp. */
+  gain: GainNode | null;
+  level: number;
 }
 
 const PRELOAD_AHEAD = 1.0;
@@ -17,6 +29,12 @@ class Compositor {
   private entries = new Map<string, Entry>();
   private canvas: HTMLCanvasElement | null = null;
   private redrawQueued = false;
+  private audio: AudioContext | null = null;
+
+  private audioContext(): AudioContext {
+    this.audio ??= new AudioContext();
+    return this.audio;
+  }
 
   attach(canvas: HTMLCanvasElement | null): void {
     this.canvas = canvas;
@@ -29,6 +47,7 @@ class Compositor {
     if (existing) this.release(clip.id);
     const url = window.api.mediaUrl(asset.path);
     let el: MediaEl;
+    let gain: GainNode | null = null;
     if (asset.kind === 'image') {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -43,9 +62,12 @@ class Compositor {
       if (media instanceof HTMLVideoElement) media.playsInline = true;
       media.addEventListener('seeked', () => this.requestDraw());
       media.addEventListener('loadeddata', () => this.requestDraw());
+      const ctx = this.audioContext();
+      gain = ctx.createGain();
+      ctx.createMediaElementSource(media).connect(gain).connect(ctx.destination);
       el = media;
     }
-    const entry = { el, assetId: asset.id };
+    const entry = { el, assetId: asset.id, gain, level: 1 };
     this.entries.set(clip.id, entry);
     return entry;
   }
@@ -58,6 +80,7 @@ class Compositor {
       entry.el.removeAttribute('src');
       entry.el.load();
     }
+    entry.gain?.disconnect();
     this.entries.delete(clipId);
   }
 
@@ -70,29 +93,45 @@ class Compositor {
         const asset = assetById(project, clip.assetId);
         const entry = this.entryFor(clip, asset);
         if (entry.el instanceof HTMLImageElement) continue;
-        this.syncMedia(entry.el, track, clip, t, playing);
+        this.syncMedia(entry, entry.el, track, clip, t, playing);
       }
     }
     for (const id of [...this.entries.keys()]) if (!live.has(id)) this.release(id);
   }
 
-  private syncMedia(el: HTMLMediaElement, track: Track, clip: Clip, t: number, playing: boolean): void {
+  private syncMedia(entry: Entry, el: HTMLMediaElement, track: Track, clip: Clip, t: number, playing: boolean): void {
     const active = t >= clip.start && t < clipEnd(clip);
     el.muted = track.muted;
+    if (el.playbackRate !== clip.speed) el.playbackRate = clip.speed;
+    this.setLevel(entry, track.muted || !active ? 0 : audioGain(clip, t));
     if (!active) {
       if (!el.paused) el.pause();
       const upcoming = t < clip.start && clip.start - t < PRELOAD_AHEAD;
       if (upcoming && Math.abs(el.currentTime - clip.in) > 0.05) el.currentTime = clip.in;
       return;
     }
-    const want = clip.in + (t - clip.start);
+    const want = sourceTime(clip, t);
     if (playing) {
-      if (Math.abs(el.currentTime - want) > PLAY_DRIFT) el.currentTime = want;
+      if (this.audio?.state === 'suspended') void this.audio.resume();
+      if (Math.abs(el.currentTime - want) > PLAY_DRIFT * clip.speed) el.currentTime = want;
       if (el.paused) void el.play().catch(() => undefined);
     } else {
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - want) > 0.5 / 60) el.currentTime = want;
     }
+  }
+
+  private setLevel(entry: Entry, level: number): void {
+    entry.level = level;
+    if (!entry.gain || !this.audio) return;
+    entry.gain.gain.setTargetAtTime(level, this.audio.currentTime, 0.01);
+  }
+
+  /** Current playback rate and gain target of a clip's element, for the UI e2e. */
+  audioState(clipId: string): { rate: number; level: number } | null {
+    const entry = this.entries.get(clipId);
+    if (!entry || entry.el instanceof HTMLImageElement) return null;
+    return { rate: entry.el.playbackRate, level: entry.level };
   }
 
   requestDraw(): void {

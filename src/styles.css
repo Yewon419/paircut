@@ -761,6 +761,15 @@ input[type='range'] {
   padding: 10px;
 }
 
+.transform-controls .button-row {
+  padding: 0;
+}
+
+.button-row button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .board-path {
   display: flex;
   gap: 4px;

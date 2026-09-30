@@ -114,19 +114,20 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
       if (asset.kind === 'image') {
         inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(dur), '-i', asset.path);
       } else {
-        inputArgs.push('-ss', num(clip.in), '-t', num(dur), '-i', asset.path);
+        inputArgs.push('-ss', num(clip.in), '-t', num(clip.out - clip.in), '-i', asset.path);
       }
       if (!track.hidden) {
         const r = placeVisual(asset.width, asset.height, W, H, clip.transform);
         const label = `v${idx}`;
+        const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
         filters.push(
-          `[${idx}:v]fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,format=yuva420p,` +
             `setpts=PTS-STARTPTS+${num(clip.start)}/TB[${label}]`,
         );
         overlay(label, String(r.x), String(r.y), clip);
       }
       if (asset.kind === 'video' && asset.hasAudio && !track.muted) {
-        audioLabels.push(pushAudio(filters, idx, clip.start));
+        audioLabels.push(pushAudio(filters, idx, clip));
       }
     }
   }
@@ -136,8 +137,8 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
       if (!isMediaClip(clip)) continue;
       const asset = assetById(project, clip.assetId);
       const idx = inputIndex++;
-      inputArgs.push('-ss', num(clip.in), '-t', num(clipDuration(clip)), '-i', asset.path);
-      if (!track.muted) audioLabels.push(pushAudio(filters, idx, clip.start));
+      inputArgs.push('-ss', num(clip.in), '-t', num(clip.out - clip.in), '-i', asset.path);
+      if (!track.muted) audioLabels.push(pushAudio(filters, idx, clip));
     }
   }
 
@@ -154,13 +155,17 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   return { inputArgs, filterGraph: filters.join(';\n'), duration, width: W, height: H, fps };
 }
 
-function pushAudio(filters: string[], idx: number, start: number): string {
+/** Speed, volume and fades mirror audioGain() in the preview; afade's default curve is linear. */
+function pushAudio(filters: string[], idx: number, clip: Clip): string {
   const label = `a${idx}`;
-  const delayMs = Math.round(start * 1000);
-  filters.push(
-    `[${idx}:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo,` +
-      `asetpts=PTS-STARTPTS,adelay=${delayMs}:all=1[${label}]`,
-  );
+  const dur = clipDuration(clip);
+  const chain = ['aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', 'asetpts=PTS-STARTPTS'];
+  if (clip.speed !== 1) chain.push(`atempo=${num(clip.speed)}`);
+  if (clip.volume !== 1) chain.push(`volume=${num(clip.volume)}`);
+  if (clip.fadeIn > 0) chain.push(`afade=t=in:st=0:d=${num(clip.fadeIn)}`);
+  if (clip.fadeOut > 0) chain.push(`afade=t=out:st=${num(Math.max(0, dur - clip.fadeOut))}:d=${num(clip.fadeOut)}`);
+  chain.push(`adelay=${Math.round(clip.start * 1000)}:all=1`);
+  filters.push(`[${idx}:a]${chain.join(',')}[${label}]`);
   return label;
 }
 

@@ -7,7 +7,7 @@ import { SidePanel } from './components/SidePanel';
 import { textImagesFor } from './exportTexts';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
-import { pause, seek, startPausedSync, togglePlay } from './engine/player';
+import { compositor, pause, seek, startPausedSync, togglePlay } from './engine/player';
 import { deleteSelected, loadProject, redo, splitAtPlayhead, undo, useEditor } from './store';
 
 async function saveProject(saveAs: boolean): Promise<void> {
@@ -39,6 +39,7 @@ export function App() {
         },
         state: () => useEditor.getState(),
         texts: (height: number) => textImagesFor(useEditor.getState().project, height),
+        audio: (clipId: string) => compositor.audioState(clipId),
       };
     });
   }, []);

@@ -9,6 +9,7 @@
 - 내보내기: 같은 프로젝트 JSON → ffmpeg `filter_complex`(`shared/exportGraph.ts`), 로컬 ffmpeg(`CUTDESK_FFMPEG`로 경로 변경 가능)
 - 배치 규칙은 `shared/project.ts`의 `placeVisual` 하나를 미리보기와 내보내기가 같이 쓴다(9:16 꽉 채우기, 레터박스 없음)
 - 로컬 파일은 `media://` 프로토콜(Range·CORS 지원)로 읽는다. CORS가 없으면 캔버스가 오염돼 픽셀 읽기와 WebGL이 막힌다
+- 클립 볼륨·페이드·속도: 미리보기는 요소마다 WebAudio GainNode(`audioGain`)와 `playbackRate`, 내보내기는 `setpts`·`atempo`·`volume`·`afade`(선형). 타임라인 길이는 `(out - in) / speed`, 소스 위치는 `sourceTime`
 - 텍스트는 렌더러 캔버스가 Pretendard(Black·Bold·Medium, OFL, `src/fonts`)로 그린다(`src/engine/text.ts`). 미리보기는 그 비트맵을 그리고, 내보내기는 같은 함수로 출력 크기 PNG를 만들어 ffmpeg에 넘긴다(`src/exportTexts.ts`). 등장 효과(팝·페이드·올라오기) 시간값은 `shared/project.ts` 한 곳
 - 배지 숫자는 토큰: `{D}`(올리는 날→복학일), `{월급}`, `{목표}`. 값은 프로젝트 `vars`, 콘티를 불러오면 보드 설정과 게시일로 채운다
 - 운영 보드(`board.json`)는 읽기만 한다. 쓰지 않는다
@@ -18,12 +19,12 @@
 2. 텍스트·자막 + 빛뜰 자막·배지 프리셋 + 운영 보드 콘티 불러오기 + SRT (완료)
 3. 대표님 결정(2026-09-30): 흔들림·글리치 같은 화면 효과는 넣지 않는다(대비 톤, 규칙 2-2). 전환은 크로스 디졸브 하나
    - 3a 콘티 규칙 실시간 점검(`src/rules.ts`, 점검 탭, 안전 영역 가이드): 길이 15~35초, 메인 컷 2초, 두 줄(딴지 제외)·줄당 16자·초당 12자, 안전 영역, 배지 위치, 레터박스, 빈 화면, 무음 (완료)
-   - 3b 오디오(클립 볼륨·페이드)·속도(0.5~2배)
+   - 3b 오디오(클립 볼륨 0~200%·페이드 인/아웃)·속도(0.5~2배, 소리는 음높이 유지) (완료). 속도를 바꾸면 같은 트랙 뒤 클립이 따라 움직인다(다른 트랙의 자막은 그대로). 분할하면 안쪽 페이드는 0이 된다
    - 3c 색 보정(밝기·대비·채도·색온도) + 빛뜰 보정 프리셋(CHARACTER 2-1)
    - 3d 크로스 디졸브
 
 ## 검증
-- `npm test` = 빌드 + `scripts/e2e-export.mjs`(실제 ffmpeg 출력의 픽셀·음량 검사) + `scripts/e2e-ui.mjs`(Electron 실행, 미리보기 캔버스와 내보낸 프레임 비교(텍스트 포함), 분할·되돌리기·드래그·트림, 프리셋 추가·텍스트 수정, 실제 board.json p001 콘티 불러오기, SRT 내보내기·가져오기)
+- `npm test` = 빌드 + `scripts/e2e-export.mjs`(실제 ffmpeg 출력의 픽셀·음량 검사) + `scripts/e2e-ui.mjs`(Electron 실행, 미리보기 캔버스와 내보낸 프레임 비교(텍스트 포함), 분할·되돌리기·드래그·트림, 프리셋 추가·텍스트 수정, 실제 board.json p001 콘티 불러오기, SRT 내보내기·가져오기, 콘티 규칙, 속도·볼륨·페이드)
 - `npm run typecheck`, `npm run lint`
 
 ## 알려진 한계

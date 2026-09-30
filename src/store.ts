@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import type { AnyClip, Clip, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
-import { clipEnd, emptyProject, IDENTITY_TRANSFORM, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
+import {
+  clipEnd,
+  emptyProject,
+  IDENTITY_TRANSFORM,
+  isMediaClip,
+  isTextClip,
+  MEDIA_CLIP_DEFAULTS,
+  normalizeProject,
+  projectDuration,
+  sourceTime,
+} from '../shared/project';
 
 const HISTORY_LIMIT = 200;
 
@@ -151,7 +161,15 @@ export function trackKindFor(asset: MediaAsset): TrackKind {
 }
 
 export function makeClip(asset: MediaAsset, start: number): Clip {
-  return { id: uid('c'), assetId: asset.id, start, in: 0, out: asset.duration, transform: { ...IDENTITY_TRANSFORM } };
+  return {
+    id: uid('c'),
+    assetId: asset.id,
+    start,
+    in: 0,
+    out: asset.duration,
+    transform: { ...IDENTITY_TRANSFORM },
+    ...MEDIA_CLIP_DEFAULTS,
+  };
 }
 
 export function addAssets(assets: MediaAsset[]): void {
@@ -240,6 +258,23 @@ export function updateMediaClip(base: Project, clipId: string, update: (c: Clip)
   return updateClip(base, clipId, (c) => (isMediaClip(c) ? update(c) : c));
 }
 
+/** Changes playback speed over the same source range; later clips on the track shift so nothing overlaps or gaps. */
+export function setClipSpeed(base: Project, clipId: string, speed: number): Project {
+  const found = findClip(base, clipId);
+  if (!found || !isMediaClip(found.clip)) return base;
+  const old = found.clip;
+  const oldEnd = clipEnd(old);
+  const next = { ...old, speed };
+  const delta = clipEnd(next) - oldEnd;
+  return withTrack(base, found.track.id, (t) => ({
+    ...t,
+    clips: t.clips.map((c) => {
+      if (c.id === clipId) return next;
+      return c.start >= oldEnd - 1e-6 ? { ...c, start: c.start + delta } : c;
+    }),
+  }));
+}
+
 export function updateTextClip(base: Project, clipId: string, update: (c: TextClip) => TextClip): Project {
   return updateClip(base, clipId, (c) => (isTextClip(c) ? update(c) : c));
 }
@@ -266,10 +301,10 @@ export function splitAtPlayhead(): void {
             { ...c, id: uid('c'), start: t, in: 0, out: clipEnd(c) - t },
           ];
         }
-        const cut = c.in + (t - c.start);
+        const cut = sourceTime(c, t);
         return [
-          { ...c, out: cut },
-          { ...c, id: uid('c'), start: t, in: cut },
+          { ...c, out: cut, fadeOut: 0 },
+          { ...c, id: uid('c'), start: t, in: cut, fadeIn: 0 },
         ];
       }),
     })),

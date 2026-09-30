@@ -7,6 +7,9 @@ import {
   isTextClip,
   projectDuration,
   resolveTokens,
+  SPEED_MAX,
+  SPEED_MIN,
+  VOLUME_MAX,
 } from '../../shared/project';
 import { formatSeconds, formatTime } from '../format';
 import { NAVY, PRESETS } from '../presets';
@@ -15,6 +18,7 @@ import {
   commit,
   endGesture,
   findClip,
+  setClipSpeed,
   setVars,
   updateGesture,
   updateMediaClip,
@@ -27,6 +31,8 @@ const FONTS: { id: FontId; label: string }[] = [
   { id: 'bold', label: 'Bold' },
   { id: 'medium', label: 'Medium' },
 ];
+
+const SPEEDS = [0.5, 1, 1.5, 2];
 
 const ANIMS: { id: TextAnim; label: string }[] = [
   { id: 'none', label: '없음' },
@@ -257,6 +263,12 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
     updateGesture((base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, ...patch } })));
   const setTransform = (patch: Partial<ClipTransform>) =>
     commit((p) => updateMediaClip(p, id, (c) => ({ ...c, transform: { ...c.transform, ...patch } })));
+  const hasAudio = asset.kind === 'audio' || (asset.kind === 'video' && asset.hasAudio);
+  const dur = clipDuration(clip);
+  const setFade = (key: 'fadeIn' | 'fadeOut', value: number) =>
+    commit((p) =>
+      updateMediaClip(p, id, (c) => ({ ...c, [key]: Math.max(0, Math.min(clipDuration(c), value || 0)) })),
+    );
 
   return (
     <aside className="panel inspector">
@@ -273,6 +285,83 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
         <dt>길이</dt>
         <dd>{formatSeconds(clipDuration(clip))}</dd>
       </dl>
+      {asset.kind !== 'image' && (
+        <div className="transform-controls">
+          <label>
+            <span>속도 {clip.speed.toFixed(2)}x</span>
+            <input
+              type="range"
+              min={SPEED_MIN * 100}
+              max={SPEED_MAX * 100}
+              step={5}
+              value={Math.round(clip.speed * 100)}
+              onPointerDown={beginGesture}
+              onPointerUp={endGesture}
+              onChange={(e) => updateGesture((base) => setClipSpeed(base, id, Number(e.target.value) / 100))}
+              data-testid="speed"
+            />
+          </label>
+          <div className="button-row">
+            {SPEEDS.map((v) => (
+              <button
+                key={v}
+                className={clip.speed === v ? 'on' : ''}
+                onClick={() => commit((p) => setClipSpeed(p, id, v))}
+                data-speed={v}
+              >
+                {v}x
+              </button>
+            ))}
+          </div>
+          <p className="hint">길이가 바뀌면 같은 트랙 뒤 클립이 따라 움직여요. 소리는 음높이를 유지해요.</p>
+        </div>
+      )}
+      {hasAudio && (
+        <div className="transform-controls">
+          <label>
+            <span>소리 {Math.round(clip.volume * 100)}%</span>
+            <input
+              type="range"
+              min={0}
+              max={VOLUME_MAX * 100}
+              step={1}
+              value={Math.round(clip.volume * 100)}
+              onPointerDown={beginGesture}
+              onPointerUp={endGesture}
+              onChange={(e) =>
+                updateGesture((base) => updateMediaClip(base, id, (c) => ({ ...c, volume: Number(e.target.value) / 100 })))
+              }
+              data-testid="volume"
+            />
+          </label>
+          <div className="row">
+            <label>
+              <span>페이드 인 (초)</span>
+              <input
+                type="number"
+                min={0}
+                max={dur}
+                step={0.1}
+                value={clip.fadeIn}
+                onChange={(e) => setFade('fadeIn', Number(e.target.value))}
+                data-testid="fade-in"
+              />
+            </label>
+            <label>
+              <span>페이드 아웃 (초)</span>
+              <input
+                type="number"
+                min={0}
+                max={dur}
+                step={0.1}
+                value={clip.fadeOut}
+                onChange={(e) => setFade('fadeOut', Number(e.target.value))}
+                data-testid="fade-out"
+              />
+            </label>
+          </div>
+        </div>
+      )}
       {visual && (
         <div className="transform-controls">
           <label>

@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
+const { normalizeProject } = require('../dist-electron/shared/project.js');
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -30,6 +31,8 @@ export function makeFixtures(target) {
   ff(['-f', 'lavfi', '-i', 'color=c=red:s=800x800', '-frames:v', '1', f('pic.png')]);
   ff(['-f', 'lavfi', '-i', 'sine=f=880:d=3', '-c:a', 'aac', f('tone.m4a')]);
   ff(['-f', 'lavfi', '-i', 'color=c=0xFF00FF:s=401x121', '-frames:v', '1', f('txt.png')]);
+  ff(['-f', 'lavfi', '-i', 'color=c=red:s=320x568:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=blue:s=320x568:r=30:d=2',
+    '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', f('split.mp4')]);
   return f;
 }
 
@@ -88,6 +91,42 @@ async function checkTextLayers(f, base, dir) {
   probe('hidden text track not rendered', 1.0, 536, 1000, false);
 }
 
+/** Speed (setpts + atempo), clip volume and fades. refDb is the same tone at volume 1. */
+async function checkSpeedAndAudio(f, base, assets, dir, refDb) {
+  const split = await importMedia(f('split.mp4'), join(dir, 'cache'));
+  const T = { scale: 1, x: 0, y: 0 };
+  const M = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1 };
+  const project = {
+    ...base,
+    assets: [...base.assets, split],
+    tracks: [
+      { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
+        { ...M, id: 's1', assetId: split.id, start: 0, in: 0, out: 4, transform: T, speed: 2 },
+        { ...M, id: 's2', assetId: assets.pic.id, start: 2, in: 0, out: 2, transform: T },
+      ] },
+      { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [
+        { ...M, id: 's3', assetId: assets.tone.id, start: 0, in: 0, out: 2, transform: T, speed: 0.5, volume: 0.5, fadeIn: 1, fadeOut: 1 },
+      ] },
+    ],
+  };
+  const out = join(dir, 'speed.mp4');
+  const result = await runExport(project, 1920, out, [], () => {}).done;
+  check('speed export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  const dur = Number(JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', out],
+    { encoding: 'utf8' })).format.duration);
+  check('2x video and 0.5x audio give 4s', Math.abs(dur - 4) < 0.1, String(dur));
+  const red = samplePixel(out, 0.5, 536, 956);
+  const blue = samplePixel(out, 1.5, 536, 956);
+  check('2x: source red half at 0.5s', red[0] > 180 && red[2] < 70, red.join(','));
+  check('2x: source blue half already at 1.5s', blue[2] > 180 && blue[0] < 70, blue.join(','));
+  const steady = volumeOf(out, 1.2, 2.8);
+  check('0.5x audio still playing at 3.2s', volumeOf(out, 3.2, 3.4) > -40, `${volumeOf(out, 3.2, 3.4)} dB`);
+  check('volume 50% is about -6 dB', Math.abs(steady - (refDb - 6.02)) < 1.5, `${steady} vs ref ${refDb}`);
+  check('fade in starts quiet', volumeOf(out, 0, 0.1) < steady - 12, `${volumeOf(out, 0, 0.1)} dB`);
+  check('fade out ends quiet', volumeOf(out, 3.9, 4.0) < steady - 12, `${volumeOf(out, 3.9, 4.0)} dB`);
+}
+
 let failures = 0;
 function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
@@ -102,7 +141,7 @@ export async function buildFixtureProject(f, cacheDir) {
   const T = { scale: 1, x: 0, y: 0 };
   return {
     assets: { land, rot, pic, tone },
-    project: {
+    project: normalizeProject({
       version: 1, width: 1080, height: 1920, fps: 30,
       assets: [land, rot, pic, tone],
       vars: { uploadDate: '2026-10-03', ddayTarget: '2027-09-01', salary: 0, goal: 2236300 },
@@ -120,7 +159,7 @@ export async function buildFixtureProject(f, cacheDir) {
           { id: 'c4', assetId: tone.id, start: 2, in: 0, out: 3, transform: T },
         ] },
       ],
-    },
+    }),
   };
 }
 
@@ -161,6 +200,7 @@ async function main() {
   check('silent after 5.2s', volumeOf(out, 5.3, 6.8) < -60, `${volumeOf(out, 5.3, 6.8)} dB`);
 
   await checkTextLayers(f, project, dir);
+  await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
 
   if (failures > 0) {
     console.error(`${failures} check(s) failed`);
