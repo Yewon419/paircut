@@ -309,7 +309,7 @@ export function splitAtPlayhead(): void {
   commit((p) => splitClips(p, t, targets));
 }
 
-/** Cuts the given clips at timeline time t; inner fades of media clips are dropped. */
+/** Cuts the given clips at timeline time t; inner fades of media clips are dropped and the cut is hard. */
 export function splitClips(p: Project, t: number, targets: Set<string>): Project {
   return {
     ...p,
@@ -326,7 +326,7 @@ export function splitClips(p: Project, t: number, targets: Set<string>): Project
         const cut = sourceTime(c, t);
         return [
           { ...c, out: cut, fadeOut: 0 },
-          { ...c, id: uid('c'), start: t, in: cut, fadeIn: 0 },
+          { ...c, id: uid('c'), start: t, in: cut, fadeIn: 0, dissolve: 0 },
         ];
       }),
     })),

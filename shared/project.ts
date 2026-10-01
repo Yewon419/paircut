@@ -37,13 +37,16 @@ export interface Clip {
   /** Playback rate; the clip lasts (out - in) / speed on the timeline. */
   speed: number;
   color: ClipColor;
+  /** Cross dissolve from the clip just before this one on the same track, in seconds, centered on the cut. 0 = hard cut. */
+  dissolve: number;
 }
 
 export const SPEED_MIN = 0.5;
 export const SPEED_MAX = 2;
 export const VOLUME_MAX = 2;
+export const DISSOLVE_MAX = 2;
 
-export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR };
+export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0 };
 
 export type FontId = 'black' | 'bold' | 'medium';
 export type TextAlign = 'center' | 'left';
@@ -219,6 +222,44 @@ export function audioGain(clip: Clip, t: number): number {
 
 export function clipEnd(clip: AnyClip): number {
   return clip.start + clipDuration(clip);
+}
+
+const CUT_EPS = 1e-6;
+
+/**
+ * Dissolve length actually used: only on video tracks, only when the previous clip ends exactly where
+ * this one starts, and never longer than either clip.
+ */
+export function effectiveDissolve(track: Track, clip: Clip): number {
+  if (clip.dissolve <= 0 || track.kind !== 'video') return 0;
+  const prev = track.clips.find((c) => c !== clip && isMediaClip(c) && Math.abs(clipEnd(c) - clip.start) < CUT_EPS);
+  if (!prev) return 0;
+  return Math.min(clip.dissolve, clipDuration(prev), clipDuration(clip));
+}
+
+/** When a media clip is on screen: its own range widened by half of each dissolve on its cuts. */
+export interface VisualSpan {
+  from: number;
+  to: number;
+  /** Length of the incoming dissolve that starts at `from`; 0 = appears at full opacity. */
+  fadeIn: number;
+}
+
+export function visualSpan(track: Track, clip: Clip): VisualSpan {
+  const fadeIn = effectiveDissolve(track, clip);
+  const next = track.clips.find((c) => c !== clip && isMediaClip(c) && Math.abs(c.start - clipEnd(clip)) < CUT_EPS);
+  const out = next && isMediaClip(next) ? effectiveDissolve(track, next) : 0;
+  return { from: clip.start - fadeIn / 2, to: clipEnd(clip) + out / 2, fadeIn };
+}
+
+/** Opacity at t: ramps linearly from 0 to 1 across the incoming dissolve, the same ramp as ffmpeg fade. */
+export function visualAlpha(span: VisualSpan, t: number): number {
+  return span.fadeIn > 0 ? Math.min(1, Math.max(0, (t - span.from) / span.fadeIn)) : 1;
+}
+
+/** Source position for a frame at t; past either end of the file it holds the first or last frame. */
+export function frameTime(clip: Clip, sourceDuration: number, t: number): number {
+  return Math.min(sourceDuration, Math.max(0, sourceTime(clip, t)));
 }
 
 export function projectDuration(project: Project): number {

@@ -3,11 +3,13 @@ import {
   assetById,
   audioGain,
   clipEnd,
+  frameTime,
   isMediaClip,
   isTextClip,
   placeVisual,
   projectDuration,
-  sourceTime,
+  visualAlpha,
+  visualSpan,
 } from '../../shared/project';
 import { setPlayhead, useEditor } from '../store';
 import { isNeutral } from '../../shared/color';
@@ -102,18 +104,23 @@ class Compositor {
     for (const id of [...this.entries.keys()]) if (!live.has(id)) this.release(id);
   }
 
+  /** Sound follows the clip's own range; the picture also runs through the dissolves around it. */
   private syncMedia(entry: Entry, el: HTMLMediaElement, track: Track, clip: Clip, t: number, playing: boolean): void {
-    const active = t >= clip.start && t < clipEnd(clip);
+    const audible = t >= clip.start && t < clipEnd(clip);
+    const span = visualSpan(track, clip);
+    const active = t >= span.from && t < span.to;
     el.muted = track.muted;
     if (el.playbackRate !== clip.speed) el.playbackRate = clip.speed;
-    this.setLevel(entry, track.muted || !active ? 0 : audioGain(clip, t));
+    this.setLevel(entry, track.muted || !audible ? 0 : audioGain(clip, t));
+    const length = Number.isFinite(el.duration) ? el.duration : Infinity;
     if (!active) {
       if (!el.paused) el.pause();
-      const upcoming = t < clip.start && clip.start - t < PRELOAD_AHEAD;
-      if (upcoming && Math.abs(el.currentTime - clip.in) > 0.05) el.currentTime = clip.in;
+      const upcoming = t < span.from && span.from - t < PRELOAD_AHEAD;
+      const first = frameTime(clip, length, span.from);
+      if (upcoming && Math.abs(el.currentTime - first) > 0.05) el.currentTime = first;
       return;
     }
-    const want = sourceTime(clip, t);
+    const want = frameTime(clip, length, t);
     if (playing) {
       if (this.audio?.state === 'suspended') void this.audio.resume();
       if (Math.abs(el.currentTime - want) > PLAY_DRIFT * clip.speed) el.currentTime = want;
@@ -143,7 +150,9 @@ class Compositor {
     const busy = () =>
       project.tracks.some((track) =>
         track.clips.some((c) => {
-          if (!isMediaClip(c) || t < c.start || t >= clipEnd(c)) return false;
+          if (!isMediaClip(c)) return false;
+          const span = visualSpan(track, c);
+          if (t < span.from || t >= span.to) return false;
           const el = this.entries.get(c.id)?.el;
           if (!el) return true;
           if (el instanceof HTMLImageElement) return !el.complete;
@@ -202,28 +211,38 @@ class Compositor {
     for (let i = visual.length - 1; i >= 0; i--) {
       const track = visual[i];
       if (track.hidden) continue;
-      const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
-      if (!clip) continue;
-      if (isTextClip(clip)) {
-        drawText(ctx, cachedRaster(clip, project.vars, canvas.width, canvas.height), animState(clip, t), k);
+      if (track.kind === 'text') {
+        const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
+        if (clip && isTextClip(clip)) drawText(ctx, cachedRaster(clip, project.vars, canvas.width, canvas.height), animState(clip, t), k);
         continue;
       }
-      const entry = this.entries.get(clip.id);
-      if (!entry) continue;
-      const el = entry.el;
-      const ready =
-        el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 : el instanceof HTMLVideoElement && el.readyState >= 2;
-      if (!ready) continue;
-      const r = this.rectFor(project, clip);
-      if (!r) continue;
-      if (isNeutral(clip.color)) {
-        ctx.drawImage(el as CanvasImageSource, r.x, r.y, r.w, r.h);
-        continue;
+      for (const clip of track.clips) {
+        if (!isMediaClip(clip)) continue;
+        const span = visualSpan(track, clip);
+        if (t < span.from || t >= span.to) continue;
+        ctx.globalAlpha = visualAlpha(span, t);
+        this.drawClip(ctx, project, clip);
+        ctx.globalAlpha = 1;
       }
-      const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
-      const graded = grader.apply(el as TexImageSource, Math.round(r.w * fit), Math.round(r.h * fit), clip.color);
-      ctx.drawImage(graded, r.x, r.y, r.w, r.h);
     }
+  }
+
+  private drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip): void {
+    const entry = this.entries.get(clip.id);
+    if (!entry) return;
+    const el = entry.el;
+    const ready =
+      el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 : el instanceof HTMLVideoElement && el.readyState >= 2;
+    if (!ready) return;
+    const r = this.rectFor(project, clip);
+    if (!r) return;
+    if (isNeutral(clip.color)) {
+      ctx.drawImage(el as CanvasImageSource, r.x, r.y, r.w, r.h);
+      return;
+    }
+    const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
+    const graded = grader.apply(el as TexImageSource, Math.round(r.w * fit), Math.round(r.h * fit), clip.color);
+    ctx.drawImage(graded, r.x, r.y, r.w, r.h);
   }
 }
 

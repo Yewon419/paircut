@@ -336,6 +336,10 @@ input[type='range'] {
   color: var(--dim);
 }
 
+.transform-controls .label {
+  color: var(--dim);
+}
+
 .transform-controls .row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -506,6 +510,17 @@ input[type='range'] {
 
 .tl-clip.dim {
   opacity: 0.45;
+}
+
+/* Dissolve: a solid wedge over the half that sits after the cut. */
+.tl-dissolve {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.35);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+  pointer-events: none;
 }
 
 .tl-clip-label {

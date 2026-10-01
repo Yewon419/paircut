@@ -55,6 +55,7 @@ export const EditOp = z.discriminatedUnion('op', [
     fadeIn: sec.optional(),
     fadeOut: sec.optional(),
     speed: z.number().min(0.5).max(2).optional().describe('later clips on the track shift with it'),
+    dissolve: z.number().min(0).max(2).optional().describe('cross dissolve from the clip just before on the same video track, centered on the cut; 0 = hard cut'),
     scale: z.number().min(0.1).max(4).optional(),
     x: z.number().min(-1).max(1).optional(),
     y: z.number().min(-1).max(1).optional(),

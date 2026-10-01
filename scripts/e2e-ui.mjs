@@ -4,9 +4,11 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
+import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
 
-const { BITTEUL_COLOR, gradePixel } = createRequire(import.meta.url)('../dist-electron/shared/color.js');
+const require = createRequire(import.meta.url);
+const { BITTEUL_COLOR, gradePixel } = require('../dist-electron/shared/color.js');
+const { importMedia } = require('../dist-electron/electron/media.js');
 
 const root = resolve(import.meta.dirname, '..');
 let failures = 0;
@@ -428,6 +430,39 @@ try {
   await win.locator('[data-tab="claude"]').click();
   check('Claude tab has model select and input', ['sonnet', 'haiku', 'opus'].includes(await win.locator('[data-testid="agent-model"]').inputValue()) &&
     (await win.locator('[data-testid="agent-input"]').count()) === 1);
+
+  // Cross dissolve: preview against export across both cuts, inspector buttons, timeline mark, split.
+  const split = await importMedia(f('split.mp4'), join(dir, 'cache'));
+  const dproj = dissolveProject(base, split);
+  await win.evaluate((p) => window.__cutdesk.load(p), dproj);
+  const dissolved = join(dir, 'dissolve.mp4');
+  await exportTo(dissolved);
+  for (const [t] of DISSOLVE_SAMPLES) {
+    await tool('screenshot', { t });
+    const shown = await readCanvas({ x: 536, y: 956 });
+    const made = samplePixel(dissolved, t, 536, 956);
+    const off = Math.max(...shown.map((v, k) => Math.abs(v - made[k])));
+    check(`dissolve preview matches export at ${t}s`, off <= 20, `preview ${shown} / export ${made}`);
+  }
+  const dissolveOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.dissolve, id);
+  await win.locator('[data-tab="media"]').click();
+  await win.locator('[data-clip="dx"]').click();
+  check('first clip cannot dissolve', await win.locator('[data-dissolve="0.5"]').isDisabled());
+  await win.locator('[data-clip="dy"]').click();
+  check('second clip shows its 1s dissolve', (await win.locator('[data-dissolve="1"]').getAttribute('class')) === 'on');
+  await win.locator('[data-dissolve="0.5"]').click();
+  const mark = await win.locator('[data-clip="dy"] [data-dissolve-mark]').boundingBox();
+  const zoomNow = await win.evaluate(() => window.__cutdesk.state().zoom);
+  check('dissolve set from the inspector and marked on the timeline', (await dissolveOf('dy')) === 0.5 &&
+    Math.abs(mark.width - 0.25 * zoomNow) < 2, `mark ${mark?.width}px at zoom ${zoomNow}`);
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  check('undo restores the dissolve', (await dissolveOf('dy')) === 1);
+  const cut = await tool('edit', { ops: [{ op: 'split', clip: 'dy', t: 2 }] });
+  const half = /-> (c-\w+)/.exec(cut.text)?.[1];
+  check('split keeps the dissolve on the left half only', (await dissolveOf('dy')) === 1 && (await dissolveOf(half)) === 0, cut.text);
+  const viaClaude = await tool('edit', { ops: [{ op: 'set_clip', clip: 'dz', dissolve: 0.3 }] });
+  check('Claude can set a dissolve and reads it back', !viaClaude.isError && (await tool('get_state')).text.includes('dissolve=0.3'), viaClaude.text);
 
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);

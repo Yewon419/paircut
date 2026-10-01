@@ -69,6 +69,7 @@ function clipLine(p: Project, c: AnyClip): string {
   const extra = [alias(p, asset.id)];
   if (asset.kind !== 'image') extra.push(`src=${n(c.in)}-${n(c.out)}`);
   if (c.speed !== 1) extra.push(`speed=${n(c.speed)}`);
+  if (c.dissolve > 0) extra.push(`dissolve=${n(c.dissolve)}`);
   if (c.volume !== 1) extra.push(`vol=${n(c.volume)}`);
   if (c.fadeIn > 0) extra.push(`fadeIn=${n(c.fadeIn)}`);
   if (c.fadeOut > 0) extra.push(`fadeOut=${n(c.fadeOut)}`);
@@ -250,6 +251,7 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       next = updateMediaClip(next, op.clip, (c) => ({
         ...c,
         volume: op.volume ?? c.volume,
+        dissolve: op.dissolve ?? c.dissolve,
         fadeIn: op.fadeIn ?? c.fadeIn,
         fadeOut: op.fadeOut ?? c.fadeOut,
         transform: { scale: op.scale ?? c.transform.scale, x: op.x ?? c.transform.x, y: op.y ?? c.transform.y },

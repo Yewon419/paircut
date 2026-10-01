@@ -6,6 +6,8 @@ import {
   assetById,
   clipDuration,
   ddayOf,
+  DISSOLVE_MAX,
+  effectiveDissolve,
   IDENTITY_TRANSFORM,
   isTextClip,
   projectDuration,
@@ -38,6 +40,7 @@ const FONTS: { id: FontId; label: string }[] = [
 ];
 
 const SPEEDS = [0.5, 1, 1.5, 2];
+const DISSOLVES = [0, 0.3, 0.5, 1];
 
 const COLOR_SLIDERS: { key: keyof ClipColor; label: string; min: number }[] = [
   { key: 'brightness', label: '밝기', min: -100 },
@@ -267,6 +270,34 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   );
 }
 
+/** Dissolve from the clip just before this one; it sits half before and half after the cut. */
+function DissolveControls({ project, clip }: { project: Project; clip: Clip }) {
+  const track = findClip(project, clip.id)?.track;
+  if (!track) return null;
+  const joined = effectiveDissolve(track, { ...clip, dissolve: DISSOLVE_MAX }) > 0;
+  const used = effectiveDissolve(track, clip);
+  const set = (v: number) => commit((p) => updateMediaClip(p, clip.id, (c) => ({ ...c, dissolve: v })));
+  return (
+    <div className="transform-controls">
+      <span className="label">앞 클립에서 디졸브</span>
+      <div className="button-row">
+        {DISSOLVES.map((v) => (
+          <button key={v} className={clip.dissolve === v ? 'on' : ''} disabled={!joined} onClick={() => set(v)} data-dissolve={v}>
+            {v === 0 ? '없음' : `${v}초`}
+          </button>
+        ))}
+      </div>
+      <p className="hint">
+        {!joined
+          ? '바로 앞에 붙은 클립이 있어야 써요.'
+          : used < clip.dissolve
+            ? `클립이 짧아서 ${formatSeconds(used)}만 겹쳐요.`
+            : '컷을 가운데 두고 앞뒤로 반씩 겹쳐요. 영상 길이와 자막 위치는 그대로예요.'}
+      </p>
+    </div>
+  );
+}
+
 function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; visual: boolean }) {
   const asset = assetById(project, clip.assetId);
   const id = clip.id;
@@ -329,6 +360,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
           <p className="hint">길이가 바뀌면 같은 트랙 뒤 클립이 따라 움직여요. 소리는 음높이를 유지해요.</p>
         </div>
       )}
+      {visual && <DissolveControls project={project} clip={clip} />}
       {hasAudio && (
         <div className="transform-controls">
           <label>

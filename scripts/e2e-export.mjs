@@ -57,6 +57,60 @@ function volumeOf(file, from, to) {
   return m[1] === '-inf' ? -Infinity : Number(m[1]);
 }
 
+/**
+ * Three cuts of split.mp4 (red 0-2s, blue 2-4s) with 1s dissolves into the second and third.
+ * x: red 0-1.5. y: source 2.1-3.6 at 1.5-3.0, so its dissolve reads 1.6-2.1 from before its in point (red until 2.0).
+ * z: source 0-1.5 at 3.0-4.5; y has no source after 4.0 and z none before 0, so those halves hold a frame.
+ */
+export function dissolveProject(base, split) {
+  const T = { scale: 1, x: 0, y: 0 };
+  const M = MEDIA_CLIP_DEFAULTS;
+  return {
+    ...base,
+    assets: [...base.assets, split],
+    markers: [],
+    tracks: [
+      { id: 't-1', kind: 'text', muted: false, hidden: false, clips: [] },
+      { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
+        { ...M, id: 'dx', assetId: split.id, start: 0, in: 0, out: 1.5, transform: T },
+        { ...M, id: 'dy', assetId: split.id, start: 1.5, in: 2.1, out: 3.6, transform: T, dissolve: 1 },
+        { ...M, id: 'dz', assetId: split.id, start: 3, in: 0, out: 1.5, transform: T, dissolve: 1 },
+      ] },
+      { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] },
+    ],
+  };
+}
+
+/** Expected center color at t for dissolveProject: [red weight, blue weight]. */
+export const DISSOLVE_SAMPLES = [
+  [0.5, 1, 0],
+  [1.25, 1, 0],
+  [1.5, 0.5, 0.5],
+  [1.75, 0.25, 0.75],
+  [2.25, 0, 1],
+  [3.0, 0.5, 0.5],
+  [3.75, 1, 0],
+];
+
+async function checkDissolve(f, base, dir) {
+  const split = await importMedia(f('split.mp4'), join(dir, 'cache'));
+  const out = join(dir, 'dissolve.mp4');
+  const result = await runExport(dissolveProject(base, split), 1920, out, [], () => {}).done;
+  check('dissolve export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  const dur = Number(JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', out],
+    { encoding: 'utf8' })).format.duration);
+  check('dissolves keep the timeline length (4.5s)', Math.abs(dur - 4.5) < 0.1, String(dur));
+  const red = samplePixel(out, 0.5, 536, 956);
+  const blue = samplePixel(out, 2.25, 536, 956);
+  for (const [t, wr, wb] of DISSOLVE_SAMPLES) {
+    const got = samplePixel(out, t, 536, 956);
+    const want = red.map((r, i) => Math.round(r * wr + blue[i] * wb));
+    const off = Math.max(...got.map((v, i) => Math.abs(v - want[i])));
+    check(`dissolve at ${t}s is ${Math.round(wb * 100)}% blue`, off <= 15, `got ${got} want ${want}`);
+  }
+}
+
 const STYLE = { font: 'black', size: 68, color: '#FFFFFF', strokeColor: '#13293D', strokeWidth: 5, background: null,
   align: 'center', highlight: '', highlightColor: '#FFD166', highlightDigits: false };
 
@@ -235,6 +289,7 @@ async function main() {
   await checkTextLayers(f, project, dir);
   await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
   await checkColor(project, assets.swatch, dir);
+  await checkDissolve(f, project, dir);
 
   if (failures > 0) {
     console.error(`${failures} check(s) failed`);

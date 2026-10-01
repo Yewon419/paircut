@@ -10,8 +10,9 @@ import {
   POP_FROM,
   projectDuration,
   RISE_PX,
+  visualSpan,
 } from './project';
-import type { Clip, Project, TextClip, Track } from './project';
+import type { Clip, Project, Track } from './project';
 import { colorKey, cubeFile, isNeutral } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
@@ -81,11 +82,11 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   let overlayCount = 0;
 
   const layers = new Map(textLayers.map((l) => [l.clipId, l]));
-  const overlay = (label: string, x: string, y: string, clip: Clip | TextClip) => {
+  const overlay = (label: string, x: string, y: string, from: number, to: number) => {
     const out = `o${overlayCount++}`;
     filters.push(
       `[${base}][${label}]overlay=x='${x}':y='${y}':eof_action=pass:` +
-        `enable='between(t,${num(clip.start)},${num(clipEnd(clip) - 0.0001)})'[${out}]`,
+        `enable='between(t,${num(from)},${num(to - 0.0001)})'[${out}]`,
     );
     base = out;
   };
@@ -124,30 +125,43 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
           clip.anim === 'rise'
             ? `+${num((RISE_PX * W) / project.width)}*(1-min(1,(t-${num(clip.start)})/${ANIM_IN}))`
             : '';
-        overlay(label, String(layer.x), `${layer.y}${rise}`, clip);
+        overlay(label, String(layer.x), `${layer.y}${rise}`, clip.start, clipEnd(clip));
         continue;
       }
       if (!isMediaClip(clip)) continue;
       const asset = assetById(project, clip.assetId);
-      const dur = clipDuration(clip);
       const idx = inputIndex++;
+      // Dissolves widen the picture around the cut: real source frames where the file has them, held frames past its ends.
+      const span = track.hidden ? { from: clip.start, to: clipEnd(clip), fadeIn: 0 } : visualSpan(track, clip);
+      const pre = clip.start - span.from;
+      const post = span.to - clipEnd(clip);
+      let lead = 0;
+      let hold = '';
       if (asset.kind === 'image') {
-        inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(dur), '-i', asset.path);
+        inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(span.to - span.from), '-i', asset.path);
       } else {
-        inputArgs.push('-ss', num(clip.in), '-t', num(clip.out - clip.in), '-i', asset.path);
+        lead = Math.min(pre * clip.speed, clip.in);
+        const tail = Math.min(post * clip.speed, Math.max(0, asset.duration - clip.out));
+        inputArgs.push('-ss', num(clip.in - lead), '-t', num(clip.out - clip.in + lead + tail), '-i', asset.path);
+        const holdStart = pre - lead / clip.speed;
+        const holdEnd = post - tail / clip.speed;
+        if (holdStart > 1e-4 || holdEnd > 1e-4) {
+          hold = `tpad=start_mode=clone:start_duration=${num(holdStart)}:stop_mode=clone:stop_duration=${num(holdEnd)},`;
+        }
       }
       if (!track.hidden) {
         const r = placeVisual(asset.width, asset.height, W, H, clip.transform);
         const label = `v${idx}`;
         const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
+        const fade = span.fadeIn > 0 ? `fade=t=in:st=0:d=${num(span.fadeIn)}:alpha=1,` : '';
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${grade(clip)}format=yuva420p,` +
-            `setpts=PTS-STARTPTS+${num(clip.start)}/TB[${label}]`,
+          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${grade(clip)}format=yuva420p,` +
+            `${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
-        overlay(label, String(r.x), String(r.y), clip);
+        overlay(label, String(r.x), String(r.y), span.from, span.to);
       }
       if (asset.kind === 'video' && asset.hasAudio && !track.muted) {
-        audioLabels.push(pushAudio(filters, idx, clip));
+        audioLabels.push(pushAudio(filters, idx, clip, lead));
       }
     }
   }
@@ -158,7 +172,7 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
       const asset = assetById(project, clip.assetId);
       const idx = inputIndex++;
       inputArgs.push('-ss', num(clip.in), '-t', num(clip.out - clip.in), '-i', asset.path);
-      if (!track.muted) audioLabels.push(pushAudio(filters, idx, clip));
+      if (!track.muted) audioLabels.push(pushAudio(filters, idx, clip, 0));
     }
   }
 
@@ -175,11 +189,15 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   return { inputArgs, luts: [...luts.values()], filterGraph: filters.join(';\n'), duration, width: W, height: H, fps };
 }
 
-/** Speed, volume and fades mirror audioGain() in the preview; afade's default curve is linear. */
-function pushAudio(filters: string[], idx: number, clip: Clip): string {
+/**
+ * Speed, volume and fades mirror audioGain() in the preview; afade's default curve is linear.
+ * `lead` is source time read before `in` for a dissolve; sound keeps to the clip's own range.
+ */
+function pushAudio(filters: string[], idx: number, clip: Clip, lead: number): string {
   const label = `a${idx}`;
   const dur = clipDuration(clip);
   const chain = ['aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', 'asetpts=PTS-STARTPTS'];
+  chain.push(`atrim=start=${num(lead)}:duration=${num(clip.out - clip.in)}`, 'asetpts=PTS-STARTPTS');
   if (clip.speed !== 1) chain.push(`atempo=${num(clip.speed)}`);
   if (clip.volume !== 1) chain.push(`volume=${num(clip.volume)}`);
   if (clip.fadeIn > 0) chain.push(`afade=t=in:st=0:d=${num(clip.fadeIn)}`);

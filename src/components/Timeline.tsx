@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AnyClip, Project, Track } from '../../shared/project';
-import { assetById, clipDuration, clipEnd, isMediaClip, isTextClip, projectDuration, resolveTokens } from '../../shared/project';
+import {
+  assetById,
+  clipDuration,
+  clipEnd,
+  effectiveDissolve,
+  isMediaClip,
+  isTextClip,
+  projectDuration,
+  resolveTokens,
+} from '../../shared/project';
 import { seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
@@ -363,6 +372,7 @@ export function Timeline() {
                       zoom={zoom}
                       selected={clip.id === selectedClipId}
                       dim={row.track.hidden}
+                      dissolve={isMediaClip(clip) ? effectiveDissolve(row.track, clip) : 0}
                       onDown={startClipDrag}
                     />
                   ))}
@@ -383,10 +393,12 @@ interface ClipViewProps {
   zoom: number;
   selected: boolean;
   dim: boolean;
+  /** Seconds of incoming dissolve actually used; its half after the cut is marked inside the clip. */
+  dissolve: number;
   onDown: (e: React.PointerEvent, clip: AnyClip, mode: 'move' | 'trim-start' | 'trim-end') => void;
 }
 
-function ClipView({ project, clip, zoom, selected, dim, onDown }: ClipViewProps) {
+function ClipView({ project, clip, zoom, selected, dim, dissolve, onDown }: ClipViewProps) {
   const width = clipDuration(clip) * zoom;
   const style: React.CSSProperties = { left: clip.start * zoom, width };
   let kind: string;
@@ -419,6 +431,7 @@ function ClipView({ project, clip, zoom, selected, dim, onDown }: ClipViewProps)
       onPointerDown={(e) => onDown(e, clip, 'move')}
       title={label}
     >
+      {dissolve > 0 && <div className="tl-dissolve" style={{ width: (dissolve / 2) * zoom }} data-dissolve-mark={dissolve} />}
       <div className="tl-clip-label">
         {label} · {clipDuration(clip).toFixed(1)}초
       </div>
