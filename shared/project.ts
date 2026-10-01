@@ -1,3 +1,6 @@
+import type { ClipColor } from './color';
+import { NEUTRAL_COLOR } from './color';
+
 export type MediaKind = 'video' | 'audio' | 'image';
 
 export interface MediaAsset {
@@ -33,13 +36,14 @@ export interface Clip {
   fadeOut: number;
   /** Playback rate; the clip lasts (out - in) / speed on the timeline. */
   speed: number;
+  color: ClipColor;
 }
 
 export const SPEED_MIN = 0.5;
 export const SPEED_MAX = 2;
 export const VOLUME_MAX = 2;
 
-export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1 };
+export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR };
 
 export type FontId = 'black' | 'bold' | 'medium';
 export type TextAlign = 'center' | 'left';

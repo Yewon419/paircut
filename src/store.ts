@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { ClipColor } from '../shared/color';
 import type { AnyClip, Clip, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
 import {
   clipEnd,
@@ -272,6 +273,16 @@ export function setClipSpeed(base: Project, clipId: string, speed: number): Proj
       if (c.id === clipId) return next;
       return c.start >= oldEnd - 1e-6 ? { ...c, start: c.start + delta } : c;
     }),
+  }));
+}
+
+/** Gives every clip on video tracks (video and image) the same color, as one undo step. */
+export function applyColorToAll(color: ClipColor): void {
+  commit((p) => ({
+    ...p,
+    tracks: p.tracks.map((t) =>
+      t.kind === 'video' ? { ...t, clips: t.clips.map((c) => (isMediaClip(c) ? { ...c, color: { ...color } } : c)) } : t,
+    ),
   }));
 }
 

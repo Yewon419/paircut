@@ -12,6 +12,7 @@ import {
   RISE_PX,
 } from './project';
 import type { Clip, Project, TextClip, Track } from './project';
+import { colorKey, cubeFile, isNeutral } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
 export interface TextLayer {
@@ -23,8 +24,15 @@ export interface TextLayer {
   h: number;
 }
 
+/** A .cube file the exporter writes next to the filter script; ffmpeg runs with that folder as cwd. */
+export interface LutFile {
+  name: string;
+  content: string;
+}
+
 export interface ExportPlan {
   inputArgs: string[];
+  luts: LutFile[];
   filterGraph: string;
   duration: number;
   width: number;
@@ -54,7 +62,19 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   const inputArgs: string[] = [];
   const filters: string[] = [];
   const audioLabels: string[] = [];
+  const luts = new Map<string, LutFile>();
   let inputIndex = 0;
+
+  const grade = (clip: Clip): string => {
+    if (isNeutral(clip.color)) return '';
+    const key = colorKey(clip.color);
+    let lut = luts.get(key);
+    if (!lut) {
+      lut = { name: `lut${luts.size}.cube`, content: cubeFile(clip.color) };
+      luts.set(key, lut);
+    }
+    return `format=rgba,lut3d=file=${lut.name}:interp=trilinear,`;
+  };
 
   filters.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${num(duration)}[bg0]`);
   let base = 'bg0';
@@ -121,7 +141,7 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         const label = `v${idx}`;
         const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${grade(clip)}format=yuva420p,` +
             `setpts=PTS-STARTPTS+${num(clip.start)}/TB[${label}]`,
         );
         overlay(label, String(r.x), String(r.y), clip);
@@ -152,7 +172,7 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
     );
   }
 
-  return { inputArgs, filterGraph: filters.join(';\n'), duration, width: W, height: H, fps };
+  return { inputArgs, luts: [...luts.values()], filterGraph: filters.join(';\n'), duration, width: W, height: H, fps };
 }
 
 /** Speed, volume and fades mirror audioGain() in the preview; afade's default curve is linear. */

@@ -1,3 +1,6 @@
+import { useState } from 'react';
+import type { ClipColor } from '../../shared/color';
+import { NEUTRAL_COLOR } from '../../shared/color';
 import type { Clip, ClipTransform, FontId, Project, TextAnim, TextClip, TextStyle } from '../../shared/project';
 import {
   assetById,
@@ -11,9 +14,11 @@ import {
   SPEED_MIN,
   VOLUME_MAX,
 } from '../../shared/project';
+import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
 import { NAVY, PRESETS } from '../presets';
 import {
+  applyColorToAll,
   beginGesture,
   commit,
   endGesture,
@@ -33,6 +38,14 @@ const FONTS: { id: FontId; label: string }[] = [
 ];
 
 const SPEEDS = [0.5, 1, 1.5, 2];
+
+const COLOR_SLIDERS: { key: keyof ClipColor; label: string; min: number }[] = [
+  { key: 'brightness', label: '밝기', min: -100 },
+  { key: 'contrast', label: '대비', min: -100 },
+  { key: 'saturation', label: '채도', min: -100 },
+  { key: 'temperature', label: '색온도', min: -100 },
+  { key: 'look', label: '빛뜰 톤', min: 0 },
+];
 
 const ANIMS: { id: TextAnim; label: string }[] = [
   { id: 'none', label: '없음' },
@@ -401,6 +414,83 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
           <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 확대가 바뀌어요.</p>
         </div>
       )}
+      {visual && <ColorControls clip={clip} />}
     </aside>
+  );
+}
+
+function ColorControls({ clip }: { clip: Clip }) {
+  usePresets((s) => s.user);
+  const [name, setName] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const id = clip.id;
+  const setColor = (color: ClipColor) => commit((p) => updateMediaClip(p, id, (c) => ({ ...c, color })));
+  const save = () => {
+    setError(null);
+    try {
+      savePreset(name, clip.color);
+      setName('');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <div className="transform-controls">
+      <div className="panel-sub">색 보정</div>
+      <div className="button-row wrap">
+        {allPresets().map((p) => (
+          <span key={p.id} className="chip">
+            <button onClick={() => setColor(p.color)} data-color-preset={p.name}>
+              {p.name}
+            </button>
+            {!p.builtin && (
+              <button className="chip-x" onClick={() => deletePreset(p.id)} title="프리셋 삭제" data-delete-preset={p.name}>
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        <button onClick={() => setColor(NEUTRAL_COLOR)}>원래대로</button>
+      </div>
+      {COLOR_SLIDERS.map(({ key, label, min }) => (
+        <label key={key}>
+          <span>
+            {label} {Math.round(clip.color[key] * 100)}
+          </span>
+          <input
+            type="range"
+            min={min}
+            max={100}
+            step={1}
+            value={Math.round(clip.color[key] * 100)}
+            onPointerDown={beginGesture}
+            onPointerUp={endGesture}
+            onChange={(e) =>
+              updateGesture((base) =>
+                updateMediaClip(base, id, (c) => ({ ...c, color: { ...c.color, [key]: Number(e.target.value) / 100 } })),
+              )
+            }
+            data-color={key}
+          />
+        </label>
+      ))}
+      <div className="button-row">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+          placeholder="지금 값을 프리셋으로"
+          data-testid="preset-name"
+        />
+        <button onClick={save} disabled={!name.trim()} data-testid="preset-save">
+          저장
+        </button>
+      </div>
+      {error && <div className="error">{error}</div>}
+      <button onClick={() => applyColorToAll(clip.color)} data-testid="color-all">
+        모든 영상·사진 클립에 적용
+      </button>
+      <p className="hint">빛뜰 보정은 밝게, 대비는 부드럽게, 초록은 채도를 낮추고 파랑은 세룰리안으로 모아요(CHARACTER 2-1).</p>
+    </div>
   );
 }

@@ -1,9 +1,12 @@
 // UI end-to-end: launches the real Electron app, drives the editor, and checks that the
 // preview canvas matches the exported MP4 at the same timestamps.
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, freshDir, makeFixtures, samplePixel } from './e2e-export.mjs';
+import { buildFixtureProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
+
+const { BITTEUL_COLOR, gradePixel } = createRequire(import.meta.url)('../dist-electron/shared/color.js');
 
 const root = resolve(import.meta.dirname, '..');
 let failures = 0;
@@ -14,7 +17,7 @@ function check(name, ok, detail) {
 
 const dir = freshDir('ui');
 const f = makeFixtures(dir);
-const { project: base } = await buildFixtureProject(f, join(dir, 'cache'));
+const { assets: fx, project: base } = await buildFixtureProject(f, join(dir, 'cache'));
 const outlined = (size, font) => ({ font, size, color: '#FFFFFF', strokeColor: '#13293D', strokeWidth: 5, background: null,
   align: 'center', highlight: '', highlightColor: '#FFD166', highlightDigits: false });
 const text = (id, start, out, body, style, x, y, anim) => ({ id, start, in: 0, out, text: body, preset: 'sub', style, x, y, anim });
@@ -48,8 +51,7 @@ try {
   });
 
   // Preview vs export at the same instants.
-  const out = join(dir, 'out.mp4');
-  await win.evaluate(
+  const exportTo = (target) => win.evaluate(
     (outPath) =>
       new Promise((res, rej) => {
         const off = window.api.onExportEvent((ev) => {
@@ -63,8 +65,10 @@ try {
         });
         void window.api.startExport(window.__cutdesk.state().project, { outPath, height: 1920 }, window.__cutdesk.texts(1920));
       }),
-    out,
+    target,
   );
+  const out = join(dir, 'out.mp4');
+  await exportTo(out);
   check('export via IPC finished', true);
   const layers = Object.fromEntries((await win.evaluate(() => window.__cutdesk.texts(1920))).map((l) => [l.clipId, l]));
   const badge = layers['x-badge'];
@@ -289,6 +293,79 @@ try {
     window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.slice(0, 2)
       .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
   check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
+  // Color correction: preview (WebGL LUT) against the shared pixel function and the ffmpeg lut3d export.
+  await win.evaluate(({ p, swatchId }) => {
+    const main = p.tracks.find((t) => t.id === 'v-main');
+    const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1 };
+    window.__cutdesk.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
+  }, { p: project, swatchId: fx.swatch.id });
+  await win.locator('[data-clip="g1"]').click();
+  await win.locator('[data-color-preset="빛뜰 보정"]').click();
+  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.waitForTimeout(400);
+  const graded = join(dir, 'graded.mp4');
+  await exportTo(graded);
+  for (const [i, src] of SWATCHES.entries()) {
+    const at = { x: 540, y: i * 480 + 236 };
+    const shown = await readCanvas(at);
+    const want = gradePixel(src.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+    const made = samplePixel(graded, 0.5, at.x, at.y);
+    const off = (a, b) => Math.max(...a.map((v, k) => Math.abs(v - b[k])));
+    check(`graded preview ${src.join(',')} matches pixel function and export`, off(shown, want) <= 4 && off(shown, made) <= 6,
+      `preview ${shown} / function ${want} / export ${made}`);
+  }
+  const videoPixel = async (color) => {
+    await win.evaluate(({ p, c }) => window.__cutdesk.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
+      clips: t.clips.map((k) => (k.id === 'c1' ? { ...k, color: c } : k)) })) }), { p: project, c: color });
+    const before = await win.evaluate(() => window.__draws);
+    await win.evaluate(() => window.__cutdesk.seek(0.5));
+    await win.waitForFunction((n) => window.__draws > n, before);
+    let last = null;
+    for (let i = 0; i < 50; i++) {
+      await win.waitForTimeout(100);
+      const cur = await readCanvas({ x: 8, y: 1200 });
+      if (cur.some((v) => v > 0) && last && cur.join() === last.join()) return cur;
+      last = cur;
+    }
+    return last;
+  };
+  const plain = await videoPixel({ brightness: 0, contrast: 0, saturation: 0, temperature: 0, look: 0 });
+  const gradedVideo = await videoPixel(BITTEUL_COLOR);
+  const wantVideo = gradePixel(plain.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+  check('graded video frame goes through the LUT', Math.max(...gradedVideo.map((v, k) => Math.abs(v - wantVideo[k]))) <= 12,
+    `plain ${plain} / graded ${gradedVideo} / function ${wantVideo}`);
+
+  // Color presets (shared across projects via localStorage) and apply-to-all as one undo step.
+  const setRange = (selector, value) => win.evaluate(({ selector, value }) => {
+    const el = document.querySelector(selector);
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(value));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  }, { selector, value });
+  const sats = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video')
+    .flatMap((t) => t.clips).map((c) => `${c.id}:${c.color.saturation}`).sort().join(' '));
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.locator('[data-clip="c1"]').click();
+  await setRange('[data-color="saturation"]', -40);
+  await win.locator('[data-testid="preset-name"]').fill('e2e 톤');
+  await win.locator('[data-testid="preset-save"]').click();
+  const stored = await win.evaluate(() => JSON.parse(localStorage.getItem('cutdesk.colorPresets')).map((p) => `${p.name}:${p.color.saturation}`).join());
+  check('preset saved with current values', stored.includes('e2e 톤:-0.4'), stored);
+  await win.locator('[data-clip="c2"]').click();
+  await win.locator('[data-color-preset="e2e 톤"]').click();
+  check('preset applies to another clip', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0', await sats());
+  await win.locator('[data-clip="c3"]').click();
+  await win.locator('[data-color-preset="빛뜰 보정"]').click();
+  await win.locator('[data-testid="color-all"]').click();
+  check('apply to all sets every video-track clip', (await sats()) === 'c-top:0 c1:0 c2:0 c3:0' &&
+    (await win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video').flatMap((t) => t.clips).every((c) => c.color.look === 1))));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  check('one undo reverts apply to all', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0', await sats());
+  await win.locator('[data-delete-preset="e2e 톤"]').click();
+  check('preset deleted', (await win.locator('[data-color-preset="e2e 톤"]').count()) === 0 &&
+    !(await win.evaluate(() => localStorage.getItem('cutdesk.colorPresets'))).includes('e2e'));
 
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);

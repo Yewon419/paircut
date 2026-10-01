@@ -32,11 +32,12 @@ export function runExport(
     rmSync(workDir, { recursive: true, force: true });
     throw err;
   }
+  for (const lut of plan.luts) writeFileSync(join(workDir, lut.name), lut.content, 'utf8');
   const scriptPath = join(workDir, 'graph.txt');
   writeFileSync(scriptPath, plan.filterGraph, 'utf8');
   const args = ffmpegArgs(plan, scriptPath, outPath);
 
-  const child = spawn(FFMPEG, args, { windowsHide: true });
+  const child = spawn(FFMPEG, args, { windowsHide: true, cwd: workDir });
   let cancelled = false;
   let stderrTail = '';
   let stdoutBuf = '';

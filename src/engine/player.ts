@@ -10,6 +10,8 @@ import {
   sourceTime,
 } from '../../shared/project';
 import { setPlayhead, useEditor } from '../store';
+import { isNeutral } from '../../shared/color';
+import { grader } from './grade';
 import { animState, cachedRaster, DESIGN_WIDTH, drawText } from './text';
 
 type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
@@ -24,6 +26,7 @@ interface Entry {
 
 const PRELOAD_AHEAD = 1.0;
 const PLAY_DRIFT = 0.2;
+const GRADE_MAX_PX = 2048;
 
 class Compositor {
   private entries = new Map<string, Entry>();
@@ -183,7 +186,14 @@ class Compositor {
         el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 : el instanceof HTMLVideoElement && el.readyState >= 2;
       if (!ready) continue;
       const r = this.rectFor(project, clip);
-      if (r) ctx.drawImage(el as CanvasImageSource, r.x, r.y, r.w, r.h);
+      if (!r) continue;
+      if (isNeutral(clip.color)) {
+        ctx.drawImage(el as CanvasImageSource, r.x, r.y, r.w, r.h);
+        continue;
+      }
+      const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
+      const graded = grader.apply(el as TexImageSource, Math.round(r.w * fit), Math.round(r.h * fit), clip.color);
+      ctx.drawImage(graded, r.x, r.y, r.w, r.h);
     }
   }
 }

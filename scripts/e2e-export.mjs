@@ -7,7 +7,11 @@ import { join, resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
-const { normalizeProject } = require('../dist-electron/shared/project.js');
+const { MEDIA_CLIP_DEFAULTS, normalizeProject } = require('../dist-electron/shared/project.js');
+const { BITTEUL_COLOR, gradePixel } = require('../dist-electron/shared/color.js');
+
+/** Stripes of the swatch fixture, top to bottom, 480px each. */
+export const SWATCHES = [[70, 160, 60], [70, 50, 200], [220, 150, 110], [128, 128, 128]];
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -31,6 +35,9 @@ export function makeFixtures(target) {
   ff(['-f', 'lavfi', '-i', 'color=c=red:s=800x800', '-frames:v', '1', f('pic.png')]);
   ff(['-f', 'lavfi', '-i', 'sine=f=880:d=3', '-c:a', 'aac', f('tone.m4a')]);
   ff(['-f', 'lavfi', '-i', 'color=c=0xFF00FF:s=401x121', '-frames:v', '1', f('txt.png')]);
+  const hex = (c) => `0x${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  ff([...SWATCHES.flatMap((c) => ['-f', 'lavfi', '-i', `color=c=${hex(c)}:s=1080x480`]),
+    '-filter_complex', '[0:v][1:v][2:v][3:v]vstack=inputs=4', '-frames:v', '1', f('swatch.png')]);
   ff(['-f', 'lavfi', '-i', 'color=c=red:s=320x568:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=blue:s=320x568:r=30:d=2',
     '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', f('split.mp4')]);
   return f;
@@ -95,7 +102,7 @@ async function checkTextLayers(f, base, dir) {
 async function checkSpeedAndAudio(f, base, assets, dir, refDb) {
   const split = await importMedia(f('split.mp4'), join(dir, 'cache'));
   const T = { scale: 1, x: 0, y: 0 };
-  const M = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1 };
+  const M = MEDIA_CLIP_DEFAULTS;
   const project = {
     ...base,
     assets: [...base.assets, split],
@@ -127,6 +134,31 @@ async function checkSpeedAndAudio(f, base, assets, dir, refDb) {
   check('fade out ends quiet', volumeOf(out, 3.9, 4.0) < steady - 12, `${volumeOf(out, 3.9, 4.0)} dB`);
 }
 
+/** Color correction through ffmpeg lut3d matches the shared pixel function. */
+async function checkColor(base, swatch, dir) {
+  const T = { scale: 1, x: 0, y: 0 };
+  const clip = { id: 'g1', assetId: swatch.id, start: 0, in: 0, out: 1, transform: T, ...MEDIA_CLIP_DEFAULTS };
+  const project = {
+    ...base,
+    tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
+      { ...clip, color: BITTEUL_COLOR },
+      { ...clip, id: 'g2', start: 1, color: { brightness: 0, contrast: 0, saturation: -1, temperature: 0, look: 0 } },
+    ] }],
+  };
+  const out = join(dir, 'color.mp4');
+  const result = await runExport(project, 1920, out, [], () => {}).done;
+  check('color export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  SWATCHES.forEach((src, i) => {
+    const want = gradePixel(src.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+    const got = samplePixel(out, 0.5, 536, i * 480 + 236);
+    const off = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
+    check(`bitteul look on ${src.join(',')}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
+  });
+  const gray = samplePixel(out, 1.5, 536, 480 + 236);
+  check('saturation -100% gives gray', Math.max(...gray) - Math.min(...gray) <= 4, gray.join(','));
+}
+
 let failures = 0;
 function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
@@ -138,12 +170,13 @@ export async function buildFixtureProject(f, cacheDir) {
   const rot = await importMedia(f('rot.mp4'), cacheDir);
   const pic = await importMedia(f('pic.png'), cacheDir);
   const tone = await importMedia(f('tone.m4a'), cacheDir);
+  const swatch = await importMedia(f('swatch.png'), cacheDir);
   const T = { scale: 1, x: 0, y: 0 };
   return {
-    assets: { land, rot, pic, tone },
+    assets: { land, rot, pic, tone, swatch },
     project: normalizeProject({
       version: 1, width: 1080, height: 1920, fps: 30,
-      assets: [land, rot, pic, tone],
+      assets: [land, rot, pic, tone, swatch],
       vars: { uploadDate: '2026-10-03', ddayTarget: '2027-09-01', salary: 0, goal: 2236300 },
       markers: [],
       tracks: [
@@ -201,6 +234,7 @@ async function main() {
 
   await checkTextLayers(f, project, dir);
   await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
+  await checkColor(project, assets.swatch, dir);
 
   if (failures > 0) {
     console.error(`${failures} check(s) failed`);
