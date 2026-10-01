@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
+import { startAgentBridge } from './components/AgentPanel';
 import { ExportDialog } from './components/ExportDialog';
 import { Inspector } from './components/Inspector';
 import { SidePanel } from './components/SidePanel';
@@ -27,6 +28,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => startPausedSync(), []);
+  useEffect(() => startAgentBridge(), []);
 
   useEffect(() => {
     void window.api.isTest().then((isTest) => {

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
+import type { AgentEvent, AgentToolName } from '../shared/agentOps';
 import type { CutdeskApi, ExportEvent } from '../shared/api';
 
 const MEDIA_SCHEME = 'media';
@@ -24,6 +25,21 @@ const api: CutdeskApi = {
   readTextFile: (path) => ipcRenderer.invoke('file:readText', path),
   openTextFile: (extensions, defaultPath) => ipcRenderer.invoke('file:openText', extensions, defaultPath),
   saveTextFile: (content, defaultName, extensions) => ipcRenderer.invoke('file:saveText', content, defaultName, extensions),
+  agentAsk: (prompt, model) => ipcRenderer.invoke('agent:ask', prompt, model),
+  agentStop: () => ipcRenderer.invoke('agent:stop'),
+  agentReset: () => ipcRenderer.invoke('agent:reset'),
+  onAgentEvent: (listener) => {
+    const handler = (_e: IpcRendererEvent, event: AgentEvent) => listener(event);
+    ipcRenderer.on('agent:event', handler);
+    return () => ipcRenderer.removeListener('agent:event', handler);
+  },
+  onAgentCall: (serve) => {
+    const handler = (_e: IpcRendererEvent, call: { id: number; name: AgentToolName; input: unknown }) => {
+      void serve(call.name, call.input).then((result) => ipcRenderer.send('agent:reply', call.id, result));
+    };
+    ipcRenderer.on('agent:call', handler);
+    return () => ipcRenderer.removeListener('agent:call', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

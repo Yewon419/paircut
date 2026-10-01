@@ -189,22 +189,24 @@ export function appendToMain(asset: MediaAsset): void {
 
 /** Places a clip on a track, or on a new track inserted at `newTrackIndex` when trackId is null. */
 export function placeAsset(asset: MediaAsset, trackId: string | null, start: number, newTrackIndex: number): void {
-  commit((p) => {
-    const clip = makeClip(asset, Math.max(0, frameSnap(start, p.fps)));
-    const kind = trackKindFor(asset);
-    const target = trackId ? p.tracks.find((t) => t.id === trackId) : undefined;
-    if (target && target.kind === kind) {
-      if (overlaps(target, clip.start, clipEnd(clip), null)) {
-        const end = target.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
-        clip.start = end;
-      }
-      return withTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+  commit((p) => withAsset(p, asset, trackId, start, newTrackIndex));
+}
+
+export function withAsset(p: Project, asset: MediaAsset, trackId: string | null, start: number, newTrackIndex: number): Project {
+  const clip = makeClip(asset, Math.max(0, frameSnap(start, p.fps)));
+  const kind = trackKindFor(asset);
+  const target = trackId ? p.tracks.find((t) => t.id === trackId) : undefined;
+  if (target && target.kind === kind) {
+    if (overlaps(target, clip.start, clipEnd(clip), null)) {
+      const end = target.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
+      clip.start = end;
     }
-    const track: Track = { id: uid(kind[0]), kind, muted: false, hidden: false, clips: [clip] };
-    const tracks = [...p.tracks];
-    tracks.splice(clampTrackInsert(p, kind, newTrackIndex), 0, track);
-    return { ...p, tracks };
-  });
+    return withTrack(p, target.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+  }
+  const track: Track = { id: uid(kind[0]), kind, muted: false, hidden: false, clips: [clip] };
+  const tracks = [...p.tracks];
+  tracks.splice(clampTrackInsert(p, kind, newTrackIndex), 0, track);
+  return { ...p, tracks };
 }
 
 const KIND_ORDER: Record<TrackKind, number> = { text: 0, video: 1, audio: 2 };
@@ -278,12 +280,16 @@ export function setClipSpeed(base: Project, clipId: string, speed: number): Proj
 
 /** Gives every clip on video tracks (video and image) the same color, as one undo step. */
 export function applyColorToAll(color: ClipColor): void {
-  commit((p) => ({
+  commit((p) => withColorAll(p, color));
+}
+
+export function withColorAll(p: Project, color: ClipColor): Project {
+  return {
     ...p,
     tracks: p.tracks.map((t) =>
       t.kind === 'video' ? { ...t, clips: t.clips.map((c) => (isMediaClip(c) ? { ...c, color: { ...color } } : c)) } : t,
     ),
-  }));
+  };
 }
 
 export function updateTextClip(base: Project, clipId: string, update: (c: TextClip) => TextClip): Project {
@@ -300,7 +306,12 @@ export function splitAtPlayhead(): void {
   if (selected && inside(selected.clip)) targets.add(selected.clip.id);
   else for (const track of project.tracks) for (const c of track.clips) if (inside(c)) targets.add(c.id);
   if (targets.size === 0) return;
-  commit((p) => ({
+  commit((p) => splitClips(p, t, targets));
+}
+
+/** Cuts the given clips at timeline time t; inner fades of media clips are dropped. */
+export function splitClips(p: Project, t: number, targets: Set<string>): Project {
+  return {
     ...p,
     tracks: p.tracks.map((track) => ({
       ...track,
@@ -319,7 +330,7 @@ export function splitAtPlayhead(): void {
         ];
       }),
     })),
-  }));
+  };
 }
 
 export function deleteSelected(): void {
@@ -339,20 +350,24 @@ function newTextTrack(clips: AnyClip[]): Track {
 
 /** Adds a text clip at the playhead on the first text track with room, else on a new top text track. */
 export function addTextClip(clip: TextClip): void {
-  commit((p) => {
-    const room = p.tracks.find((t) => t.kind === 'text' && !overlaps(t, clip.start, clipEnd(clip), null));
-    if (room) return withTrack(p, room.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
-    return { ...p, tracks: [newTextTrack([clip]), ...p.tracks] };
-  });
+  commit((p) => withTextClip(p, clip));
   set({ selectedClipId: clip.id });
+}
+
+export function withTextClip(p: Project, clip: TextClip): Project {
+  const room = p.tracks.find((t) => t.kind === 'text' && !overlaps(t, clip.start, clipEnd(clip), null));
+  if (room) return withTrack(p, room.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+  return { ...p, tracks: [newTextTrack([clip]), ...p.tracks] };
 }
 
 /** Puts each group of text clips on its own new text track, above existing tracks. */
 export function addTextTracks(groups: TextClip[][], update: (p: Project) => Project = (p) => p): void {
-  commit((p) => {
-    const fresh = groups.filter((g) => g.length > 0).map((g) => newTextTrack(sortClips(g)));
-    return tidyTracks(update({ ...p, tracks: [...fresh, ...p.tracks] }));
-  });
+  commit((p) => tidyTracks(update(withTextTracks(p, groups))));
+}
+
+export function withTextTracks(p: Project, groups: TextClip[][]): Project {
+  const fresh = groups.filter((g) => g.length > 0).map((g) => newTextTrack(sortClips(g)));
+  return { ...p, tracks: [...fresh, ...p.tracks] };
 }
 
 export function setVars(patch: Partial<Project['vars']>): void {

@@ -1,3 +1,4 @@
+import type { AgentEvent, AgentModel, AgentToolName, AgentToolResult } from './agentOps';
 import type { MediaAsset, Project } from './project';
 
 export interface ExportOptions {
@@ -49,6 +50,14 @@ export interface CutdeskApi {
   readTextFile(path: string): Promise<string>;
   openTextFile(extensions: string[], defaultPath: string | null): Promise<TextFile | null>;
   saveTextFile(content: string, defaultName: string, extensions: string[]): Promise<string | null>;
+  /** Sends one chat message to the in-app Claude; replies stream through onAgentEvent. */
+  agentAsk(prompt: string, model: AgentModel): Promise<void>;
+  agentStop(): Promise<void>;
+  /** Forgets the conversation so the next message starts a new session. */
+  agentReset(): Promise<void>;
+  onAgentEvent(listener: (event: AgentEvent) => void): () => void;
+  /** Serves Claude's tool calls that need the editor state (get_state, edit, screenshot). */
+  onAgentCall(handler: (name: AgentToolName, input: unknown) => Promise<AgentToolResult>): () => void;
 }
 
 export const MEDIA_SCHEME = 'media';

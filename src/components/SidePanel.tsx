@@ -5,23 +5,25 @@ import { makeTextClip, PRESETS, presetById } from '../presets';
 import { parseSrt, toSrt } from '../srt';
 import { textClips } from '../../shared/project';
 import { addTextClip, addTextTracks, frameSnap, uid, useEditor } from '../store';
+import { AgentPanel } from './AgentPanel';
 import { MediaBin } from './MediaBin';
 import { pause, seek } from '../engine/player';
 import { formatTime } from '../format';
 import type { RuleIssue } from '../rules';
 import { checkRules } from '../rules';
 
-type Tab = 'media' | 'text' | 'conti' | 'check';
+type Tab = 'media' | 'text' | 'conti' | 'check' | 'claude';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'media', label: '미디어' },
   { id: 'text', label: '텍스트' },
   { id: 'conti', label: '콘티' },
   { id: 'check', label: '점검' },
+  { id: 'claude', label: 'Claude' },
 ];
 
 export const DEFAULT_BOARD_PATH = 'C:\\Users\\windg\\Desktop\\PROJECT\\윈드가든인스타\\board\\board.json';
-const BOARD_KEY = 'cutdesk.boardPath';
+export const BOARD_KEY = 'cutdesk.boardPath';
 
 export function SidePanel() {
   const [tab, setTab] = useState<Tab>('media');
@@ -41,6 +43,7 @@ export function SidePanel() {
       {tab === 'text' && <TextTab />}
       {tab === 'conti' && <ContiTab />}
       {tab === 'check' && <CheckTab issues={issues} />}
+      {tab === 'claude' && <AgentPanel />}
     </div>
   );
 }

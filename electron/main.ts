@@ -6,6 +6,7 @@ import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } f
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
 import { normalizeProject } from '../shared/project';
+import { registerAgent } from './agent';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
 import { importMedia } from './media';
@@ -93,6 +94,7 @@ function createWindow(): void {
     },
   });
   win.setMenuBarVisibility(false);
+  registerAgent(win, isTest);
   void win.loadFile(join(__dirname, '..', '..', 'dist', 'index.html'));
 }
 

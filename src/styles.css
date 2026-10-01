@@ -878,3 +878,78 @@ input[type='range'] {
   flex: 1;
   min-width: 0;
 }
+
+.side > .panel.agent {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.agent .panel-head {
+  gap: 6px;
+}
+
+.agent .panel-head select {
+  margin-left: auto;
+}
+
+.agent-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-msg {
+  white-space: pre-wrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-msg.user {
+  align-self: flex-end;
+  max-width: 90%;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+}
+
+.agent-msg.error {
+  color: var(--danger);
+}
+
+.agent-msg.done,
+.agent-msg.busy {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+.agent-tool {
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 2px solid var(--line);
+  padding-left: 6px;
+}
+
+.agent-input {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.agent-input textarea {
+  flex: 1;
+  resize: none;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px;
+}

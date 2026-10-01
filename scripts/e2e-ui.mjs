@@ -367,6 +367,68 @@ try {
   check('preset deleted', (await win.locator('[data-color-preset="e2e 톤"]').count()) === 0 &&
     !(await win.evaluate(() => localStorage.getItem('cutdesk.colorPresets'))).includes('e2e'));
 
+  // In-app Claude tools, called through the main process exactly as the Agent SDK would (no model call).
+  const tool = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskAgent.callTool(n, i), [name, input]);
+  const snap = () => win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    const clips = s.project.tracks.flatMap((t) => t.clips);
+    return { clips, past: s.past.length, playhead: s.playhead, texts: s.project.tracks.filter((t) => t.kind === 'text').map((t) => t.clips.length) };
+  });
+  const byId = (s, id) => s.clips.find((c) => c.id === id);
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  const state = await tool('get_state');
+  check('get_state lists tracks, clips, issues and presets', /v-main \[video main\]/.test(state.text) && /c1 0-3 A1 /.test(state.text) &&
+    /src=0\.5-3\.5/.test(state.text) && state.text.includes('rule issues') && state.text.includes('"빛뜰 보정"'), `${state.text.length} chars`);
+  console.log(state.text.split('\n').map((l) => `      | ${l}`).join('\n'));
+
+  const agentBase = await snap();
+  const failed = await tool('edit', { ops: [{ op: 'set_clip', clip: 'c1', speed: 2 }, { op: 'delete', clip: 'nope' }] });
+  const agentFail = await snap();
+  check('failing batch changes nothing', failed.isError && failed.text.startsWith('op #1 (delete)') &&
+    byId(agentFail, 'c1').speed === 1 && agentFail.past === agentBase.past, failed.text);
+  const tooLong = await tool('edit', { ops: [{ op: 'trim', clip: 'c1', end: 9 }] });
+  check('trim past the source is refused', tooLong.isError && tooLong.text.includes('source is only'), tooLong.text);
+  const badInput = await tool('edit', { ops: [{ op: 'set_clip', clip: 'c1', speed: 9 }] });
+  check('out-of-range op is rejected by the schema', badInput.isError && badInput.text.includes('ops[0].speed'), badInput.text.replaceAll('\n', ' | '));
+  const viaAlias = await tool('edit', { ops: [{ op: 'add_media', asset: 'A3', track: 'new', start: 0 }] });
+  check('add_media accepts the short asset alias', !viaAlias.isError && /add_media -> c-/.test(viaAlias.text), viaAlias.text);
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+
+  const agentDone = await tool('edit', { ops: [
+    { op: 'set_clip', clip: 'c1', speed: 2 },
+    { op: 'add_text', preset: 'sub', text: 'Claude 자막', start: 0.5 },
+    { op: 'color', clip: 'c2', preset: '빛뜰 보정' },
+    { op: 'seek', t: 1 },
+  ] });
+  const agentAfter = await snap();
+  const added = agentAfter.clips.find((c) => c.text === 'Claude 자막');
+  check('batch applies speed ripple, text, color and seek', !agentDone.isError && byId(agentAfter, 'c1').speed === 2 &&
+    byId(agentAfter, 'c2').start === 1.5 && byId(agentAfter, 'c3').start === 3.5 && byId(agentAfter, 'c2').color.look === 1 &&
+    added?.start === 0.5 && agentAfter.playhead === 1 && agentAfter.past === agentBase.past + 1 && agentDone.text.includes(added?.id), agentDone.text);
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  const agentUndone = await snap();
+  check('one undo reverts the whole batch', byId(agentUndone, 'c1').speed === 1 && byId(agentUndone, 'c2').start === 3 &&
+    byId(agentUndone, 'c2').color.look === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
+
+  await win.evaluate(() => window.__cutdesk.load({ ...window.__cutdesk.state().project, tracks: window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'text') }));
+  const conti2 = await tool('edit', { ops: [{ op: 'import_conti', post: 'p001' }] });
+  check('import_conti reads the board (read only)', !conti2.isError && (await snap()).texts.join() === '11,4', `${conti2.text.slice(0, 60)} ${(await snap()).texts.join()}`);
+
+  const shot = await tool('screenshot', { t: 0.5 });
+  const jpeg = Buffer.from(shot.jpegBase64 ?? '', 'base64');
+  const sof = jpeg.indexOf(Buffer.from([0xff, 0xc0]));
+  const dims = sof > 0 ? `${jpeg.readUInt16BE(sof + 7)}x${jpeg.readUInt16BE(sof + 5)}` : '?';
+  check('screenshot is a 270x480 JPEG of the preview', jpeg[0] === 0xff && jpeg[1] === 0xd8 && dims === '270x480',
+    `${dims}, ${jpeg.length} bytes`);
+  const appShot = await tool('screenshot_app');
+  check('screenshot_app captures the window', appShot.jpegBase64?.startsWith('/9j/') && /editor window 800x\d+/.test(appShot.text), appShot.text);
+
+  await win.locator('[data-tab="claude"]').click();
+  check('Claude tab has model select and input', ['sonnet', 'haiku', 'opus'].includes(await win.locator('[data-testid="agent-model"]').inputValue()) &&
+    (await win.locator('[data-testid="agent-input"]').count()) === 1);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });
