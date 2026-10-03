@@ -4,7 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk' with { 'resolution-mode': 'import' };
-import type { AgentEvent, AgentModel, AgentToolName, AgentToolResult } from '../shared/agentOps';
+import type { AgentEvent, AgentModel, AgentToolName, AgentToolResult, ToolName } from '../shared/agentOps';
 import { AGENT_TOOLS, EditOp } from '../shared/agentOps';
 
 /**
@@ -13,6 +13,7 @@ import { AGENT_TOOLS, EditOp } from '../shared/agentOps';
  */
 const SERVER = 'cutdesk';
 const RENDERER_TIMEOUT_MS = 30_000;
+const EXPORT_TIMEOUT_MS = 20 * 60_000;
 const APP_SHOT_WIDTH = 800;
 
 const SYSTEM_PROMPT = `You operate cutdesk, a 1080x1920 reels editor for the Instagram account 빛뜰. Reply in Korean, briefly, as plain text without markdown.
@@ -41,16 +42,16 @@ function send(event: AgentEvent): void {
   win?.webContents.send('agent:event', event);
 }
 
-function callRenderer(name: AgentToolName, input: unknown): Promise<AgentToolResult> {
+function callRenderer(name: ToolName, input: unknown, timeoutMs = RENDERER_TIMEOUT_MS): Promise<AgentToolResult> {
   const w = win;
   if (!w) return Promise.resolve({ text: 'editor window is closed', isError: true });
   const id = nextCall++;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      console.error(`[agent] renderer did not answer ${name} within ${RENDERER_TIMEOUT_MS}ms`, input);
+      console.error(`[agent] renderer did not answer ${name} within ${timeoutMs}ms`, input);
       resolve({ text: `${name} timed out in the editor`, isError: true });
-    }, RENDERER_TIMEOUT_MS);
+    }, timeoutMs);
     pending.set(id, { resolve, timer });
     w.webContents.send('agent:call', { id, name, input });
   });
@@ -68,6 +69,11 @@ async function appShot(): Promise<AgentToolResult> {
 export async function callTool(name: AgentToolName, input: unknown): Promise<AgentToolResult> {
   if (name === 'screenshot_app') return appShot();
   return callRenderer(name, input);
+}
+
+/** Bridge-only tools that need the editor window; export waits for the whole render. */
+export function callRendererTool(name: Exclude<ToolName, 'screenshot_app' | 'probe_media'>, input: unknown): Promise<AgentToolResult> {
+  return callRenderer(name, input, name === 'export' ? EXPORT_TIMEOUT_MS : RENDERER_TIMEOUT_MS);
 }
 
 function reply(result: AgentToolResult): ToolReply {

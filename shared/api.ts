@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentModel, AgentToolName, AgentToolResult } from './agentOps';
+import type { AgentEvent, AgentModel, AgentToolResult, ToolName } from './agentOps';
 import type { MediaAsset, Project } from './project';
 
 export interface ExportOptions {
@@ -56,8 +56,8 @@ export interface CutdeskApi {
   /** Forgets the conversation so the next message starts a new session. */
   agentReset(): Promise<void>;
   onAgentEvent(listener: (event: AgentEvent) => void): () => void;
-  /** Serves Claude's tool calls that need the editor state (get_state, edit, screenshot). */
-  onAgentCall(handler: (name: AgentToolName, input: unknown) => Promise<AgentToolResult>): () => void;
+  /** Serves tool calls that need the editor state: the in-app Claude's and the local bridge's. */
+  onAgentCall(handler: (name: ToolName, input: unknown) => Promise<AgentToolResult>): () => void;
 }
 
 export const MEDIA_SCHEME = 'media';

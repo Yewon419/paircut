@@ -2,11 +2,13 @@ import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { Readable } from 'node:stream';
+import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
 import { normalizeProject } from '../shared/project';
-import { registerAgent } from './agent';
+import { callRendererTool, callTool, registerAgent } from './agent';
+import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
 import { importMedia } from './media';
@@ -98,6 +100,28 @@ function createWindow(): void {
   void win.loadFile(join(__dirname, '..', '..', 'dist', 'index.html'));
 }
 
+async function probePaths(paths: string[]): Promise<MediaAsset[]> {
+  const dir = cacheDir();
+  const assets: MediaAsset[] = [];
+  for (const p of paths) assets.push(await importMedia(p, dir));
+  return assets;
+}
+
+/** Local bridge dispatch: file probing runs here, everything else in the editor window. */
+async function bridgeTool(name: ToolName, input: unknown): Promise<AgentToolResult> {
+  if (name === 'probe_media') {
+    const paths = (input as { paths?: unknown }).paths;
+    if (!Array.isArray(paths) || !paths.every((x) => typeof x === 'string')) return { text: 'probe_media needs { paths: string[] }', isError: true };
+    try {
+      return { text: JSON.stringify(await probePaths(paths)) };
+    } catch (err) {
+      return { text: `probe_media failed for ${JSON.stringify(paths)}: ${(err as Error).message}`, isError: true };
+    }
+  }
+  if (name === 'load_project' || name === 'export') return callRendererTool(name, input);
+  return callTool(name, input);
+}
+
 function send(event: ExportEvent): void {
   win?.webContents.send('export:event', event);
 }
@@ -119,12 +143,7 @@ function registerIpc(): void {
     return res.canceled ? [] : res.filePaths;
   });
 
-  ipcMain.handle('media:probe', async (_e, paths: string[]): Promise<MediaAsset[]> => {
-    const dir = cacheDir();
-    const assets: MediaAsset[] = [];
-    for (const p of paths) assets.push(await importMedia(p, dir));
-    return assets;
-  });
+  ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
 
   ipcMain.handle('project:save', async (_e, project: Project, path: string | null) => {
     let target = path;
@@ -216,6 +235,7 @@ void app.whenReady().then(() => {
   protocol.handle(MEDIA_SCHEME, serveFile);
   registerIpc();
   createWindow();
+  if (!isTest) app.on('will-quit', startBridge(app.getPath('userData'), bridgeTool));
 });
 
 app.on('window-all-closed', () => {

@@ -1,14 +1,15 @@
 import { z } from 'zod';
-import type { AgentToolName, AgentToolResult } from '../shared/agentOps';
+import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import { EditOp } from '../shared/agentOps';
 import type { ClipColor } from '../shared/color';
 import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
-import { assetById, clipDuration, clipEnd, isMediaClip, isTextClip, projectDuration } from '../shared/project';
+import { assetById, clipDuration, clipEnd, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
 import { draftFromRows, parseBoard } from './conti';
 import { compositor, pause } from './engine/player';
+import { textImagesFor } from './exportTexts';
 import { makeTextClip, presetById } from './presets';
 import { checkRules } from './rules';
 import {
@@ -41,6 +42,7 @@ const SHOT_H = 480;
 
 const EditInput = z.object({ ops: z.array(EditOp).min(1) });
 const ShotInput = z.object({ t: z.number().min(0).optional() });
+const ExportInput = z.object({ outPath: z.string().min(1), height: z.number().int().positive().default(1920) });
 
 const n = (x: number): string => String(Math.round(x * 100) / 100);
 const q = (s: string): string => JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}…` : s);
@@ -360,11 +362,50 @@ export async function screenshot(input: unknown): Promise<AgentToolResult> {
   return { text: `preview at ${n(playhead)}s (${SHOT_W}x${SHOT_H})`, jpegBase64 };
 }
 
-export async function runAgentTool(name: AgentToolName, input: unknown): Promise<AgentToolResult> {
+/** Bridge: replaces the whole project as one undo step, keeping the open file path. */
+function loadProjectTool(input: unknown): AgentToolResult {
+  const project = (input as { project?: Project }).project;
+  if (!project || project.version !== 1 || !Array.isArray(project.tracks) || !Array.isArray(project.assets)) {
+    return { text: 'load_project needs { project } with version 1, tracks and assets; nothing was changed', isError: true };
+  }
+  const ids = new Set(project.assets.map((a) => a.id));
+  const orphan = project.tracks.flatMap((t) => t.clips).find((c) => isMediaClip(c) && !ids.has(c.assetId));
+  if (orphan) return { text: `load_project: clip ${orphan.id} uses a missing asset; nothing was changed`, isError: true };
+  const next = normalizeProject(project);
+  commit(() => next);
+  useEditor.setState({ selectedClipId: null });
+  return { text: `ok, project replaced as one undo step (${n(projectDuration(next))}s)` };
+}
+
+/** Bridge: renders the current project to outPath and resolves when the file is written. */
+async function exportTool(input: unknown): Promise<AgentToolResult> {
+  const { outPath, height } = ExportInput.parse(input);
+  const project = useEditor.getState().project;
+  const done = await new Promise<string>((resolve, reject) => {
+    const off = window.api.onExportEvent((ev) => {
+      if (ev.type === 'done') {
+        off();
+        resolve(ev.outPath);
+      } else if (ev.type === 'error' || ev.type === 'cancelled') {
+        off();
+        reject(new Error(ev.type === 'error' ? ev.message : 'export cancelled'));
+      }
+    });
+    window.api.startExport(project, { outPath, height }, textImagesFor(project, height)).catch((err: unknown) => {
+      off();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+  return { text: `exported ${done} (${n(projectDuration(project))}s, height ${height})` };
+}
+
+export async function runAgentTool(name: ToolName, input: unknown): Promise<AgentToolResult> {
   try {
     if (name === 'get_state') return { text: stateText() };
     if (name === 'edit') return await applyEdit(input);
     if (name === 'screenshot') return await screenshot(input);
+    if (name === 'load_project') return loadProjectTool(input);
+    if (name === 'export') return await exportTool(input);
     return { text: `${name} is handled by the main process`, isError: true };
   } catch (err) {
     console.error(`[agent] ${name} failed`, err);

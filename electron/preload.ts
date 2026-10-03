@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
-import type { AgentEvent, AgentToolName } from '../shared/agentOps';
+import type { AgentEvent, ToolName } from '../shared/agentOps';
 import type { CutdeskApi, ExportEvent } from '../shared/api';
 
 const MEDIA_SCHEME = 'media';
@@ -34,7 +34,7 @@ const api: CutdeskApi = {
     return () => ipcRenderer.removeListener('agent:event', handler);
   },
   onAgentCall: (serve) => {
-    const handler = (_e: IpcRendererEvent, call: { id: number; name: AgentToolName; input: unknown }) => {
+    const handler = (_e: IpcRendererEvent, call: { id: number; name: ToolName; input: unknown }) => {
       void serve(call.name, call.input).then((result) => ipcRenderer.send('agent:reply', call.id, result));
     };
     ipcRenderer.on('agent:call', handler);
