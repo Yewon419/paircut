@@ -80,9 +80,16 @@ export interface TextStyle {
   tracking: number;
   /** 0..1 opacity of a soft shadow in strokeColor; 0 = none */
   shadow: number;
+  /** Family name of a font installed on this PC; '' = use `font`. Never bundled, so other PCs fall back to `font`. */
+  customFont: string;
 }
 
-export const TEXT_STYLE_DEFAULTS = { tracking: 0, shadow: 0 };
+export const TEXT_STYLE_DEFAULTS = { tracking: 0, shadow: 0, customFont: '' };
+
+/** Names that would break out of the quoted CSS family in a canvas font string. */
+export function validCustomFont(name: string): boolean {
+  return name.length <= 100 && !/["\\;{}]/.test(name);
+}
 
 /** On-screen text. `in` is always 0 so the generic timeline math (clipEnd, trim) applies unchanged. */
 export interface TextClip {

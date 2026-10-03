@@ -513,6 +513,39 @@ try {
   const cropBad = await tool('edit', { ops: [{ op: 'set_clip', clip: 'k2', crop: { l: 0.9 } }] });
   check('Claude crop past 95% across is rejected', cropBad.isError === true && (await cropOf('k2')).l === 0.3, cropBad.text);
 
+  // Installed (PC) fonts: Malgun Gothic ships with Windows; the made-up name must fall back to the bundled font.
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  const subWidth = () => win.evaluate(() => window.__cutdesk.texts(1920).find((l) => l.clipId === 'x-sub').w);
+  const plainWidth = await subWidth();
+  await win.locator('[data-tab="media"]').click();
+  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.locator('[data-clip="x-sub"]').click();
+  await win.locator('[data-testid="font-select"]').selectOption('__pc');
+  await win.locator('[data-testid="pc-font"]').fill('Malgun Gothic');
+  await win.locator('[data-testid="pc-font"]').press('Enter');
+  const styleOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i).style, id);
+  check('PC font set from the inspector', (await styleOf('x-sub')).customFont === 'Malgun Gothic' &&
+    (await win.locator('[data-testid="pc-font-status"]').textContent()).includes('설치된'));
+  const pcWidth = await subWidth();
+  check('PC font changes the drawn text', pcWidth !== plainWidth, `bundled ${plainWidth}px / Malgun ${pcWidth}px`);
+  check('Korean family name finds the same font', await win.evaluate(() => {
+    const c = document.createElement('canvas').getContext('2d');
+    const w = (f) => { c.font = f; return c.measureText('이건 내 첫 릴스야').width; };
+    return w('72px "맑은 고딕", monospace') === w('72px "Malgun Gothic", monospace');
+  }));
+  await win.locator('[data-testid="pc-font"]').fill('No Such Font 7f3');
+  await win.locator('[data-testid="pc-font"]').press('Enter');
+  check('missing PC font warns and falls back to the bundled font', (await subWidth()) === plainWidth &&
+    (await win.locator('[data-testid="pc-font-status"]').textContent()).includes('찾을 수 없어서'));
+  await win.locator('[data-testid="font-select"]').selectOption('bold');
+  check('picking a bundled font clears the PC font', (await styleOf('x-sub')).customFont === '' && (await styleOf('x-sub')).font === 'bold');
+  const pcMissing = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', customFont: 'No Such Font 7f3' }] });
+  check('Claude cannot set a font this PC lacks', pcMissing.isError === true, pcMissing.text);
+  const pcBad = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', customFont: 'x", serif' }] });
+  check('Claude font name with a quote is rejected', pcBad.isError === true, pcBad.text);
+  const pcOk = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', customFont: 'Malgun Gothic' }] });
+  check('Claude sets a PC font and reads it back', !pcOk.isError && (await tool('get_state')).text.includes('pcFont="Malgun Gothic"'), pcOk.text);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

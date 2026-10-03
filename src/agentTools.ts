@@ -4,11 +4,12 @@ import { EditOp } from '../shared/agentOps';
 import type { ClipColor } from '../shared/color';
 import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
-import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
+import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration, validCustomFont } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
 import { draftFromRows, parseBoard } from './conti';
 import { compositor, pause } from './engine/player';
+import { fontInstalled } from './engine/text';
 import { textImagesFor } from './exportTexts';
 import { makeTextClip, presetById } from './presets';
 import { checkRules } from './rules';
@@ -63,6 +64,9 @@ function clipLine(p: Project, c: AnyClip): string {
   const head = `${c.id} ${n(c.start)}-${n(clipEnd(c))}`;
   if (isTextClip(c)) {
     const extra = [`${c.preset}`, q(c.text), `pos=${n(c.x)},${n(c.y)}`, `font=${c.style.font}`, `size=${c.style.size}`];
+    if (c.style.customFont) {
+      extra.push(`pcFont=${q(c.style.customFont)}${fontInstalled(c.style.customFont) ? '' : '(MISSING, drawn in font)'}`);
+    }
     if (c.style.tracking) extra.push(`tracking=${n(c.style.tracking)}`);
     if (c.style.shadow) extra.push(`shadow=${n(c.style.shadow)}`);
     if (c.anim !== 'none') extra.push(`anim=${c.anim}`);
@@ -231,6 +235,10 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
     }
     case 'set_text': {
       needText(p, op.clip);
+      if (op.customFont) {
+        if (!validCustomFont(op.customFont)) throw new OpError(`set_text ${op.clip}: font name ${q(op.customFont)} has characters a font name cannot have`);
+        if (!fontInstalled(op.customFont)) throw new OpError(`set_text ${op.clip}: font ${q(op.customFont)} is not installed on this PC`);
+      }
       d.p = updateTextClip(p, op.clip, (c) => ({
         ...c,
         text: op.text ?? c.text,
@@ -242,6 +250,7 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
           size: op.size ?? c.style.size,
           color: op.color ?? c.style.color,
           font: op.font ?? c.style.font,
+          customFont: op.customFont ?? c.style.customFont,
           tracking: op.tracking ?? c.style.tracking,
           shadow: op.shadow ?? c.style.shadow,
           highlight: op.highlight ?? c.style.highlight,

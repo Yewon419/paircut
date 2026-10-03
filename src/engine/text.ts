@@ -39,7 +39,31 @@ interface Run {
 
 function fontOf(clip: TextClip, k: number): string {
   const f = FONTS[clip.style.font];
-  return `${f.weight} ${clip.style.size * k}px "${f.family}"`;
+  const size = `${clip.style.size * k}px`;
+  // Regular weight so a single-face installed font is not synthetically bolded.
+  if (clip.style.customFont && fontInstalled(clip.style.customFont)) return `400 ${size} "${clip.style.customFont}", "${f.family}"`;
+  return `${f.weight} ${size} "${f.family}"`;
+}
+
+const installed = new Map<string, boolean>();
+
+/**
+ * Whether a font with this family name is installed. The probe text is measured with the name in
+ * front of two different generic fallbacks; if neither width changes, the name matched nothing.
+ */
+export function fontInstalled(name: string): boolean {
+  const known = installed.get(name);
+  if (known !== undefined) return known;
+  const ctx = document.createElement('canvas').getContext('2d');
+  if (!ctx) throw new Error('2d canvas unavailable');
+  const probe = 'abcmwiIl1 가나다힣';
+  const width = (font: string) => {
+    ctx.font = font;
+    return ctx.measureText(probe).width;
+  };
+  const found = ['monospace', 'serif'].some((g) => width(`72px "${name}", ${g}`) !== width(`72px ${g}`));
+  installed.set(name, found);
+  return found;
 }
 
 /** Sets font and letter spacing together so measuring and drawing always agree. */

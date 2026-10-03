@@ -29,6 +29,7 @@ const outlined = (font: TextStyle['font'], size: number, strokeWidth: number): T
   highlightDigits: false,
   tracking: 0,
   shadow: 0,
+  customFont: '',
 });
 
 /** Title type (decided 2026-10-03): white letters on a soft navy shadow, no outline. Switch color to NAVY on bright screens. */
@@ -51,6 +52,7 @@ const badge: TextStyle = {
   highlightDigits: true,
   tracking: 0,
   shadow: 0,
+  customFont: '',
 };
 
 export const PRESETS: TextPreset[] = [

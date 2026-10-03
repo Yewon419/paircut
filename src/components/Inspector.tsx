@@ -16,10 +16,12 @@ import {
   resolveTokens,
   SPEED_MAX,
   SPEED_MIN,
+  validCustomFont,
   VOLUME_MAX,
 } from '../../shared/project';
 import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
+import { fontInstalled } from '../engine/text';
 import { NAVY, PRESETS } from '../presets';
 import {
   applyColorToAll,
@@ -45,6 +47,8 @@ const FONTS: { id: FontId; label: string }[] = [
   { id: 'pres-black', label: '프레젠테이션 Black' },
   { id: 'hand', label: '손글씨' },
 ];
+
+const PC_FONT = '__pc';
 
 const SPEEDS = [0.5, 1, 1.5, 2];
 const DISSOLVES = [0, 0.3, 0.5, 1];
@@ -77,7 +81,7 @@ export function Inspector() {
   const found = selectedClipId ? findClip(project, selectedClipId) : null;
 
   if (!found) return <ProjectPanel project={project} />;
-  if (isTextClip(found.clip)) return <TextPanel project={project} clip={found.clip} />;
+  if (isTextClip(found.clip)) return <TextPanel key={found.clip.id} project={project} clip={found.clip} />;
   return <MediaPanel project={project} clip={found.clip} visual={found.track.kind === 'video'} />;
 }
 
@@ -128,6 +132,39 @@ function ProjectPanel({ project }: { project: Project }) {
   );
 }
 
+function PcFontInput({ style, onSet }: { style: TextStyle; onSet: (name: string) => void }) {
+  const [draft, setDraft] = useState(style.customFont);
+  const name = draft.trim();
+  const ok = validCustomFont(name);
+  const apply = () => {
+    if (ok && name !== style.customFont) onSet(name);
+  };
+  const fallback = FONTS.find((f) => f.id === style.font)?.label ?? style.font;
+  return (
+    <label>
+      <span>PC 설치 폰트 이름</span>
+      <input
+        type="text"
+        value={draft}
+        placeholder="예: a옛날사진관3"
+        data-testid="pc-font"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={apply}
+        onKeyDown={(e) => e.key === 'Enter' && apply()}
+      />
+      <span className="hint" data-testid="pc-font-status">
+        {!ok
+          ? '폰트 이름에 쓸 수 없는 문자가 있어요.'
+          : !name
+            ? 'Windows에 설치된 폰트 이름을 그대로 적어요.'
+            : fontInstalled(name)
+              ? '이 PC에 설치된 폰트예요. 앱에 포함되지 않아서 다른 PC에서는 보이지 않아요.'
+              : `이 PC에서 찾을 수 없어서 ${fallback}(으)로 그려요.`}
+      </span>
+    </label>
+  );
+}
+
 function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   const id = clip.id;
   const style = clip.style;
@@ -137,6 +174,8 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   const resolved = resolveTokens(clip.text, project.vars);
   const lines = resolved.split('\n');
   const longest = Math.max(...lines.map((l) => l.length));
+  const [pcMode, setPcMode] = useState(false);
+  const pc = pcMode || style.customFont !== '';
 
   return (
     <aside className="panel inspector">
@@ -182,12 +221,21 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
         <div className="row">
           <label>
             <span>글꼴</span>
-            <select value={style.font} onChange={(e) => setStyle({ font: e.target.value as FontId })}>
+            <select
+              value={pc ? PC_FONT : style.font}
+              data-testid="font-select"
+              onChange={(e) => {
+                if (e.target.value === PC_FONT) return setPcMode(true);
+                setPcMode(false);
+                setStyle({ font: e.target.value as FontId, customFont: '' });
+              }}
+            >
               {FONTS.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.label}
                 </option>
               ))}
+              <option value={PC_FONT}>PC 설치 폰트...</option>
             </select>
           </label>
           <label>
@@ -195,6 +243,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             <input type="number" min={12} max={300} value={style.size} onChange={(e) => setStyle({ size: Number(e.target.value) })} />
           </label>
         </div>
+        {pc && <PcFontInput key={id} style={style} onSet={(customFont) => setStyle({ customFont })} />}
         <div className="row">
           <label>
             <span>글자색</span>
