@@ -61,7 +61,7 @@ export const CROP_MAX = 0.95;
 
 export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0, crop: NO_CROP };
 
-export type FontId = 'black' | 'bold' | 'semibold' | 'medium' | 'serif';
+export type FontId = 'black' | 'bold' | 'semibold' | 'medium' | 'serif' | 'pres-bold' | 'pres-black' | 'hand';
 export type TextAlign = 'center' | 'left';
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
 

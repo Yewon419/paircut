@@ -41,6 +41,9 @@ const FONTS: { id: FontId; label: string }[] = [
   { id: 'semibold', label: 'SemiBold' },
   { id: 'medium', label: 'Medium' },
   { id: 'serif', label: '명조' },
+  { id: 'pres-bold', label: '프레젠테이션' },
+  { id: 'pres-black', label: '프레젠테이션 Black' },
+  { id: 'hand', label: '손글씨' },
 ];
 
 const SPEEDS = [0.5, 1, 1.5, 2];

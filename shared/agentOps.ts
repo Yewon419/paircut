@@ -45,7 +45,10 @@ export const EditOp = z.discriminatedUnion('op', [
     y: z.number().min(0).max(1).optional(),
     size: z.number().min(12).max(300).optional(),
     color: z.string().optional(),
-    font: z.enum(['black', 'bold', 'semibold', 'medium', 'serif']).optional().describe('serif = Korean myeongjo for titles'),
+    font: z
+      .enum(['black', 'bold', 'semibold', 'medium', 'serif', 'pres-bold', 'pres-black', 'hand'])
+      .optional()
+      .describe('serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting'),
     tracking: z.number().min(-0.1).max(0.3).optional().describe('letter spacing in em, e.g. -0.04'),
     shadow: z.number().min(0).max(1).optional().describe('soft shadow opacity; 0 = none'),
     highlight: z.string().optional().describe('word drawn in highlight color'),

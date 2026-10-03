@@ -7,6 +7,9 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
   semibold: { family: 'Pretendard', weight: 600 },
   medium: { family: 'Pretendard', weight: 500 },
   serif: { family: 'Cutdesk Serif', weight: 800 },
+  'pres-bold': { family: 'Cutdesk Presentation', weight: 700 },
+  'pres-black': { family: 'Cutdesk Presentation', weight: 900 },
+  hand: { family: 'Cutdesk Hand', weight: 400 },
 };
 /** Shadow blur radius as a fraction of the font size. */
 const SHADOW_BLUR = 0.16;

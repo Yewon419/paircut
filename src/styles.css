@@ -27,6 +27,28 @@
   src: url('./fonts/NotoSerifKR-ExtraBold-KS.woff2') format('woff2');
 }
 
+/* Freesentation 7 Bold / 9 Black and Clova Nanum handwriting OeHalmeoni, subsets (see fonts/*-LICENSE.txt) */
+@font-face {
+  font-family: 'Cutdesk Presentation';
+  font-weight: 700;
+  font-style: normal;
+  src: url('./fonts/Freesentation-Bold-KS.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Cutdesk Presentation';
+  font-weight: 900;
+  font-style: normal;
+  src: url('./fonts/Freesentation-Black-KS.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Cutdesk Hand';
+  font-weight: 400;
+  font-style: normal;
+  src: url('./fonts/NanumHandOeHalmeoni-KS.woff2') format('woff2');
+}
+
 @font-face {
   font-family: 'Pretendard';
   font-weight: 900;

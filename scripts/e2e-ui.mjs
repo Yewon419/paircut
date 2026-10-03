@@ -83,6 +83,10 @@ try {
     return s.tracking === 0 && s.shadow === 0;
   }));
   check('serif font loaded', await win.evaluate(() => document.fonts.check('800 40px "Cutdesk Serif"', '판돈')));
+  for (const face of ['700 40px "Cutdesk Presentation"', '900 40px "Cutdesk Presentation"', '400 40px "Cutdesk Hand"']) {
+    check(`bundled font loaded: ${face}`, await win.evaluate((f) => [...document.fonts].some((ff) => ff.status === 'loaded' &&
+      `${ff.weight} 40px "${ff.family.replace(/"/g, '')}"` === f), face));
+  }
   check('badge shows D-333 for 2026-10-03', await win.evaluate(() => {
     const c = window.__cutdesk.state().project.tracks[0].clips[0];
     return c.text;
