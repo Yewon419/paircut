@@ -3,7 +3,9 @@ import {
   assetById,
   audioGain,
   clipEnd,
+  cropBox,
   frameTime,
+  hasCrop,
   isMediaClip,
   isTextClip,
   placeVisual,
@@ -236,13 +238,23 @@ class Compositor {
     if (!ready) return;
     const r = this.rectFor(project, clip);
     if (!r) return;
-    if (isNeutral(clip.color)) {
-      ctx.drawImage(el as CanvasImageSource, r.x, r.y, r.w, r.h);
+    let src: CanvasImageSource = el as CanvasImageSource;
+    let srcW = el instanceof HTMLImageElement ? el.naturalWidth : (el as HTMLVideoElement).videoWidth;
+    let srcH = el instanceof HTMLImageElement ? el.naturalHeight : (el as HTMLVideoElement).videoHeight;
+    if (!isNeutral(clip.color)) {
+      const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
+      srcW = Math.round(r.w * fit);
+      srcH = Math.round(r.h * fit);
+      src = grader.apply(el as TexImageSource, srcW, srcH, clip.color);
+    }
+    if (!hasCrop(clip.crop)) {
+      ctx.drawImage(src, r.x, r.y, r.w, r.h);
       return;
     }
-    const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
-    const graded = grader.apply(el as TexImageSource, Math.round(r.w * fit), Math.round(r.h * fit), clip.color);
-    ctx.drawImage(graded, r.x, r.y, r.w, r.h);
+    const b = cropBox(r, clip.crop);
+    const sx = srcW / r.w;
+    const sy = srcH / r.h;
+    ctx.drawImage(src, b.x * sx, b.y * sy, b.w * sx, b.h * sy, r.x + b.x, r.y + b.y, b.w, b.h);
   }
 }
 

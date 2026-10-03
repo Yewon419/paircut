@@ -4,6 +4,8 @@ import {
   assetById,
   clipDuration,
   clipEnd,
+  cropBox,
+  hasCrop,
   isMediaClip,
   isTextClip,
   placeVisual,
@@ -154,11 +156,13 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         const label = `v${idx}`;
         const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
         const fade = span.fadeIn > 0 ? `fade=t=in:st=0:d=${num(span.fadeIn)}:alpha=1,` : '';
+        const b = hasCrop(clip.crop) ? cropBox(r, clip.crop) : { x: 0, y: 0, w: r.w, h: r.h };
+        const crop = hasCrop(clip.crop) ? `crop=${b.w}:${b.h}:${b.x}:${b.y},` : '';
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${grade(clip)}format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip)}format=yuva420p,` +
             `${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
-        overlay(label, String(r.x), String(r.y), span.from, span.to);
+        overlay(label, String(r.x + b.x), String(r.y + b.y), span.from, span.to);
       }
       if (asset.kind === 'video' && asset.hasAudio && !track.muted) {
         audioLabels.push(pushAudio(filters, idx, clip, lead));

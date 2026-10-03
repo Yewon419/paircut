@@ -22,6 +22,14 @@ export interface ClipTransform {
   y: number;
 }
 
+/** Fractions of the clip picture cut away from each edge; the rest stays where the transform put it. */
+export interface ClipCrop {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
 export interface Clip {
   id: string;
   assetId: string;
@@ -29,6 +37,7 @@ export interface Clip {
   in: number;
   out: number;
   transform: ClipTransform;
+  crop: ClipCrop;
   /** Linear gain, 1 = unchanged. */
   volume: number;
   /** Audio fade lengths in timeline seconds. */
@@ -46,7 +55,11 @@ export const SPEED_MAX = 2;
 export const VOLUME_MAX = 2;
 export const DISSOLVE_MAX = 2;
 
-export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0 };
+export const NO_CROP: ClipCrop = { l: 0, t: 0, r: 0, b: 0 };
+/** Opposite edges together may cut at most this much, so something is always left. */
+export const CROP_MAX = 0.95;
+
+export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0, crop: NO_CROP };
 
 export type FontId = 'black' | 'bold' | 'semibold' | 'medium' | 'serif';
 export type TextAlign = 'center' | 'left';
@@ -308,4 +321,21 @@ export function placeVisual(
   const x = Math.round((frameW - w) / 2 + t.x * frameW);
   const y = Math.round((frameH - h) / 2 + t.y * frameH);
   return { x, y, w, h };
+}
+
+/**
+ * The part of a placed picture kept by the crop, relative to the placed rect. Edges snap to even
+ * pixels because ffmpeg's crop does so on 4:2:0 video; preview uses the same box to match export.
+ */
+export function cropBox(r: Rect, c: ClipCrop): Rect {
+  const even = (v: number) => Math.round(v / 2) * 2;
+  const x = even(c.l * r.w);
+  const y = even(c.t * r.h);
+  const w = Math.max(2, r.w - x - even(c.r * r.w));
+  const h = Math.max(2, r.h - y - even(c.b * r.h));
+  return { x, y, w, h };
+}
+
+export function hasCrop(c: ClipCrop): boolean {
+  return c.l > 0 || c.t > 0 || c.r > 0 || c.b > 0;
 }

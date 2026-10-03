@@ -474,6 +474,41 @@ try {
   const viaClaude = await tool('edit', { ops: [{ op: 'set_clip', clip: 'dz', dissolve: 0.3 }] });
   check('Claude can set a dissolve and reads it back', !viaClaude.isError && (await tool('get_state')).text.includes('dissolve=0.3'), viaClaude.text);
 
+  // Crop: preview against export on an image and a rotated phone clip, inspector sliders, Claude op.
+  const cropOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.crop, id);
+  const cproj = { ...base, tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
+    { ...base.tracks[1].clips[1], id: 'k1', assetId: fx.swatch.id, start: 0, in: 0, out: 1, crop: { l: 0.1, t: 0.25, r: 0.2, b: 0.25 } },
+    { ...base.tracks[1].clips[2], id: 'k2', assetId: fx.rot.id, start: 1, in: 0, out: 2, crop: { l: 0.3, t: 0.1, r: 0, b: 0.4 } },
+  ] }] };
+  await win.evaluate((p) => window.__cutdesk.load(p), cproj);
+  const cropped = join(dir, 'crop.mp4');
+  await exportTo(cropped);
+  const cropProbes = [
+    [0.5, 536, 236, 'image top cut'], [0.5, 536, 716, 'image kept'], [0.5, 40, 716, 'image left cut'], [0.5, 980, 716, 'image right cut'],
+    [2, 100, 700, 'rotated left cut'], [2, 400, 300, 'rotated kept top-left'], [2, 1000, 1100, 'rotated kept bottom-right'],
+    [2, 700, 700, 'rotated kept middle'], [2, 600, 1500, 'rotated bottom cut'],
+  ];
+  for (const [t, x, y, name] of cropProbes) {
+    await tool('screenshot', { t });
+    const shown = await readCanvas({ x, y, s: 16 });
+    const made = samplePixel(cropped, t, x, y, 16);
+    const off = Math.max(...shown.map((v, k) => Math.abs(v - made[k])));
+    check(`crop preview matches export: ${name}`, off <= 24, `preview ${shown} / export ${made}`);
+  }
+  await win.locator('[data-tab="media"]').click();
+  await win.locator('[data-clip="k1"]').click();
+  await setRange('[data-testid="crop-t"]', 80);
+  check('crop slider keeps opposite edges under 95%', Math.abs((await cropOf('k1')).t - 0.7) < 1e-9, JSON.stringify(await cropOf('k1')));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  check('undo restores the crop', (await cropOf('k1')).t === 0.25);
+  const cropVia = await tool('edit', { ops: [{ op: 'set_clip', clip: 'k2', crop: { r: 0.15 } }] });
+  const k2 = await cropOf('k2');
+  check('Claude sets one crop edge and keeps the others', !cropVia.isError && k2.r === 0.15 && k2.l === 0.3 && k2.b === 0.4 &&
+    (await tool('get_state')).text.includes('crop=0.3,0.1,0.15,0.4'), cropVia.text);
+  const cropBad = await tool('edit', { ops: [{ op: 'set_clip', clip: 'k2', crop: { l: 0.9 } }] });
+  check('Claude crop past 95% across is rejected', cropBad.isError === true && (await cropOf('k2')).l === 0.3, cropBad.text);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

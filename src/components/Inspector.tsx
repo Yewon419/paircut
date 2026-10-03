@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import type { ClipColor } from '../../shared/color';
 import { NEUTRAL_COLOR } from '../../shared/color';
-import type { Clip, ClipTransform, FontId, Project, TextAnim, TextClip, TextStyle } from '../../shared/project';
+import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextStyle } from '../../shared/project';
 import {
   assetById,
   clipDuration,
+  CROP_MAX,
   ddayOf,
   DISSOLVE_MAX,
   effectiveDissolve,
   IDENTITY_TRANSFORM,
   isTextClip,
+  NO_CROP,
   projectDuration,
   resolveTokens,
   SPEED_MAX,
@@ -50,6 +52,13 @@ const COLOR_SLIDERS: { key: keyof ClipColor; label: string; min: number }[] = [
   { key: 'saturation', label: '채도', min: -100 },
   { key: 'temperature', label: '색온도', min: -100 },
   { key: 'look', label: '빛뜰 톤', min: 0 },
+];
+
+const CROP_EDGES: { key: keyof ClipCrop; opposite: keyof ClipCrop; label: string }[] = [
+  { key: 't', opposite: 'b', label: '위' },
+  { key: 'b', opposite: 't', label: '아래' },
+  { key: 'l', opposite: 'r', label: '왼쪽' },
+  { key: 'r', opposite: 'l', label: '오른쪽' },
 ];
 
 const ANIMS: { id: TextAnim; label: string }[] = [
@@ -474,8 +483,44 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
           <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 확대가 바뀌어요.</p>
         </div>
       )}
+      {visual && <CropControls clip={clip} />}
       {visual && <ColorControls clip={clip} />}
     </aside>
+  );
+}
+
+function CropControls({ clip }: { clip: Clip }) {
+  const id = clip.id;
+  const setEdge = (key: keyof ClipCrop, opposite: keyof ClipCrop, percent: number) =>
+    updateGesture((base) =>
+      updateMediaClip(base, id, (c) => ({
+        ...c,
+        crop: { ...c.crop, [key]: Math.max(0, Math.min(percent / 100, CROP_MAX - c.crop[opposite])) },
+      })),
+    );
+  return (
+    <div className="transform-controls">
+      {CROP_EDGES.map(({ key, opposite, label }) => (
+        <label key={key}>
+          <span>
+            자르기 {label} {Math.round(clip.crop[key] * 100)}%
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={CROP_MAX * 100}
+            step={1}
+            value={Math.round(clip.crop[key] * 100)}
+            onPointerDown={beginGesture}
+            onPointerUp={endGesture}
+            onChange={(e) => setEdge(key, opposite, Number(e.target.value))}
+            data-testid={`crop-${key}`}
+          />
+        </label>
+      ))}
+      <button onClick={() => commit((p) => updateMediaClip(p, id, (c) => ({ ...c, crop: { ...NO_CROP } })))}>자르기 없애기</button>
+      <p className="hint">잘린 자리는 아래 트랙이나 검은 배경이 보여요. 위치와 크기는 그대로예요.</p>
+    </div>
   );
 }
 

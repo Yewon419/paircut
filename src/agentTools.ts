@@ -4,7 +4,7 @@ import { EditOp } from '../shared/agentOps';
 import type { ClipColor } from '../shared/color';
 import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
-import { assetById, clipDuration, clipEnd, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
+import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
 import { draftFromRows, parseBoard } from './conti';
@@ -79,6 +79,7 @@ function clipLine(p: Project, c: AnyClip): string {
   if (c.fadeOut > 0) extra.push(`fadeOut=${n(c.fadeOut)}`);
   const tr = c.transform;
   if (tr.scale !== 1 || tr.x !== 0 || tr.y !== 0) extra.push(`scale=${n(tr.scale)} xy=${n(tr.x)},${n(tr.y)}`);
+  if (hasCrop(c.crop)) extra.push(`crop=${n(c.crop.l)},${n(c.crop.t)},${n(c.crop.r)},${n(c.crop.b)}`);
   if (!isNeutral(c.color)) extra.push(`color(${colorText(c.color)})`);
   return `${head} ${extra.join(' ')}`;
 }
@@ -255,8 +256,20 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       for (const [k, v] of [['fadeIn', op.fadeIn], ['fadeOut', op.fadeOut]] as const) {
         if (v !== undefined && v > dur + 1e-6) throw new OpError(`set_clip ${op.clip}: ${k} ${n(v)}s is longer than the clip (${n(dur)}s)`);
       }
+      const target = needMedia(next, op.clip);
+      const crop = { ...target.crop, ...op.crop };
+      if (op.crop !== undefined) {
+        if (assetById(next, target.assetId).kind === 'audio') throw new OpError(`set_clip ${op.clip}: audio clips have no picture to crop`);
+        for (const [k, v] of Object.entries(crop)) {
+          if (v < 0 || v > CROP_MAX) throw new OpError(`set_clip ${op.clip}: crop.${k} ${n(v)} is outside 0-${CROP_MAX}`);
+        }
+        if (crop.l + crop.r > CROP_MAX || crop.t + crop.b > CROP_MAX) {
+          throw new OpError(`set_clip ${op.clip}: crop l+r and t+b must each be at most ${CROP_MAX} (got ${n(crop.l + crop.r)}, ${n(crop.t + crop.b)})`);
+        }
+      }
       next = updateMediaClip(next, op.clip, (c) => ({
         ...c,
+        crop,
         volume: op.volume ?? c.volume,
         dissolve: op.dissolve ?? c.dissolve,
         fadeIn: op.fadeIn ?? c.fadeIn,

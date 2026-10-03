@@ -62,6 +62,11 @@ export const EditOp = z.discriminatedUnion('op', [
     scale: z.number().min(0.1).max(4).optional(),
     x: z.number().min(-1).max(1).optional(),
     y: z.number().min(-1).max(1).optional(),
+    crop: z
+      .object({ l: z.number(), t: z.number(), r: z.number(), b: z.number() })
+      .partial()
+      .optional()
+      .describe('fractions of the picture cut from left/top/right/bottom (0-0.95); position stays put, the cut area shows what is below'),
   }),
   z.object({
     op: z.literal('color'),
