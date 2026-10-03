@@ -60,7 +60,9 @@ function alias(p: Project, assetId: string): string {
 function clipLine(p: Project, c: AnyClip): string {
   const head = `${c.id} ${n(c.start)}-${n(clipEnd(c))}`;
   if (isTextClip(c)) {
-    const extra = [`${c.preset}`, q(c.text), `pos=${n(c.x)},${n(c.y)}`, `size=${c.style.size}`];
+    const extra = [`${c.preset}`, q(c.text), `pos=${n(c.x)},${n(c.y)}`, `font=${c.style.font}`, `size=${c.style.size}`];
+    if (c.style.tracking) extra.push(`tracking=${n(c.style.tracking)}`);
+    if (c.style.shadow) extra.push(`shadow=${n(c.style.shadow)}`);
     if (c.anim !== 'none') extra.push(`anim=${c.anim}`);
     if (c.style.highlight) extra.push(`hl=${q(c.style.highlight)}`);
     return `${head} ${extra.join(' ')}`;
@@ -236,6 +238,9 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
           ...c.style,
           size: op.size ?? c.style.size,
           color: op.color ?? c.style.color,
+          font: op.font ?? c.style.font,
+          tracking: op.tracking ?? c.style.tracking,
+          shadow: op.shadow ?? c.style.shadow,
           highlight: op.highlight ?? c.style.highlight,
         },
       }));

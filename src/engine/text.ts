@@ -1,8 +1,15 @@
 import type { FontId, ProjectVars, TextClip } from '../../shared/project';
 import { ANIM_IN, ANIM_OUT, clipDuration, POP_FROM, resolveTokens, RISE_PX } from '../../shared/project';
 
-export const FONT_FAMILY = 'Pretendard';
-export const FONT_WEIGHT: Record<FontId, number> = { black: 900, bold: 700, medium: 500 };
+const FONTS: Record<FontId, { family: string; weight: number }> = {
+  black: { family: 'Pretendard', weight: 900 },
+  bold: { family: 'Pretendard', weight: 700 },
+  semibold: { family: 'Pretendard', weight: 600 },
+  medium: { family: 'Pretendard', weight: 500 },
+  serif: { family: 'Cutdesk Serif', weight: 800 },
+};
+/** Shadow blur radius as a fraction of the font size. */
+const SHADOW_BLUR = 0.16;
 /** Style sizes are authored for a 1080px-wide frame and scaled to the target frame. */
 export const DESIGN_WIDTH = 1080;
 const MAX_WIDTH_FRAC = 0.88;
@@ -10,7 +17,7 @@ const LINE_HEIGHT = 1.22;
 
 export async function loadFonts(): Promise<void> {
   await Promise.all(
-    Object.values(FONT_WEIGHT).map((w) => document.fonts.load(`${w} 40px "${FONT_FAMILY}"`, '가A1')),
+    Object.values(FONTS).map((f) => document.fonts.load(`${f.weight} 40px "${f.family}"`, '가A1')),
   );
 }
 
@@ -28,7 +35,19 @@ interface Run {
 }
 
 function fontOf(clip: TextClip, k: number): string {
-  return `${FONT_WEIGHT[clip.style.font]} ${clip.style.size * k}px "${FONT_FAMILY}"`;
+  const f = FONTS[clip.style.font];
+  return `${f.weight} ${clip.style.size * k}px "${f.family}"`;
+}
+
+/** Sets font and letter spacing together so measuring and drawing always agree. */
+function applyFont(ctx: CanvasRenderingContext2D, clip: TextClip, k: number): void {
+  ctx.font = fontOf(clip, k);
+  ctx.letterSpacing = `${clip.style.tracking * clip.style.size * k}px`;
+}
+
+/** measureText counts the spacing after the last letter too; drop it so centered lines stay centered. */
+function lineWidth(ctx: CanvasRenderingContext2D, line: string, clip: TextClip, k: number): number {
+  return ctx.measureText(line).width - (line ? clip.style.tracking * clip.style.size * k : 0);
 }
 
 function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
@@ -84,6 +103,13 @@ function runsOf(line: string, clip: TextClip): Run[] {
   return runs;
 }
 
+/** '#RRGGBB' plus an opacity as an rgba() string. */
+function withAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) throw new Error(`expected #RRGGBB color, got ${hex}`);
+  return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
+}
+
 function roundRect(ctx: CanvasRenderingContext2D, w: number, h: number, r: number): void {
   ctx.beginPath();
   ctx.moveTo(r, 0);
@@ -100,7 +126,7 @@ let measureCtx: CanvasRenderingContext2D | null = null;
 export function wrappedLines(clip: TextClip, vars: ProjectVars, frameW: number): string[] {
   measureCtx ??= document.createElement('canvas').getContext('2d');
   if (!measureCtx) throw new Error('2d context unavailable');
-  measureCtx.font = fontOf(clip, frameW / DESIGN_WIDTH);
+  applyFont(measureCtx, clip, frameW / DESIGN_WIDTH);
   return wrapLines(measureCtx, resolveTokens(clip.text, vars), MAX_WIDTH_FRAC * frameW);
 }
 
@@ -111,16 +137,16 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2d context unavailable');
-  const font = fontOf(clip, k);
-  ctx.font = font;
+  applyFont(ctx, clip, k);
   const text = resolveTokens(clip.text, vars);
   const lines = wrapLines(ctx, text, MAX_WIDTH_FRAC * frameW);
-  const widths = lines.map((l) => ctx.measureText(l).width);
+  const widths = lines.map((l) => lineWidth(ctx, l, clip, k));
   const size = style.size * k;
   const lineH = size * LINE_HEIGHT;
   const stroke = style.background ? 0 : style.strokeWidth * k;
-  const padX = style.background ? size * 0.45 : stroke + 2;
-  const padY = style.background ? size * 0.28 : stroke + 2;
+  const blur = style.background ? 0 : style.shadow > 0 ? size * SHADOW_BLUR : 0;
+  const padX = style.background ? size * 0.45 : stroke + blur * 2 + 2;
+  const padY = style.background ? size * 0.28 : stroke + blur * 2 + 2;
   const w = Math.ceil(Math.max(1, ...widths) + padX * 2);
   const h = Math.ceil(lines.length * lineH + padY * 2);
   canvas.width = w;
@@ -131,28 +157,39 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
     roundRect(ctx, w, h, 6 * k);
     ctx.fill();
   }
-  ctx.font = font;
+  applyFont(ctx, clip, k);
   ctx.textBaseline = 'middle';
   ctx.lineJoin = 'round';
-  lines.forEach((line, i) => {
-    const y = padY + lineH * (i + 0.5);
-    let x = style.align === 'center' ? (w - widths[i]) / 2 : padX;
-    const runs = runsOf(line, clip);
-    if (stroke > 0) {
-      ctx.lineWidth = stroke * 2;
-      ctx.strokeStyle = style.strokeColor;
+  const placed = lines.map((line, i) => ({
+    y: padY + lineH * (i + 0.5),
+    x: style.align === 'center' ? (w - widths[i]) / 2 : padX,
+    runs: runsOf(line, clip),
+  }));
+  // The shadow goes on the first pass only (stroke if any, else fill) so it is cast once.
+  if (blur > 0) {
+    ctx.shadowColor = withAlpha(style.strokeColor, style.shadow);
+    ctx.shadowBlur = blur;
+  }
+  if (stroke > 0) {
+    ctx.lineWidth = stroke * 2;
+    ctx.strokeStyle = style.strokeColor;
+    for (const { x, y, runs } of placed) {
       let sx = x;
       for (const r of runs) {
         ctx.strokeText(r.text, sx, y);
         sx += ctx.measureText(r.text).width;
       }
     }
+    ctx.shadowColor = 'transparent';
+  }
+  for (const { x, y, runs } of placed) {
+    let fx = x;
     for (const r of runs) {
       ctx.fillStyle = r.color;
-      ctx.fillText(r.text, x, y);
-      x += ctx.measureText(r.text).width;
+      ctx.fillText(r.text, fx, y);
+      fx += ctx.measureText(r.text).width;
     }
-  });
+  }
 
   const ax = clip.x * frameW;
   const ay = clip.y * frameH;

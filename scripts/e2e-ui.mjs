@@ -32,6 +32,7 @@ const project = {
     { id: 't-2', kind: 'text', muted: false, hidden: false, clips: [
       text('x-sub', 0, 2, '미리보기와 내보내기', outlined(68, 'black'), 0.5, 0.6, 'none'),
       text('x-pop', 2.5, 2, '팝 등장', outlined(92, 'black'), 0.5, 0.27, 'pop'),
+      text('x-title', 5, 1.8, '판돈은 복학입니다', { ...outlined(88, 'serif'), strokeWidth: 0, tracking: -0.04, shadow: 0.9 }, 0.5, 0.45, 'none'),
     ] },
     ...base.tracks,
   ],
@@ -76,6 +77,12 @@ try {
   const badge = layers['x-badge'];
   const sub = layers['x-sub'];
   const pop = layers['x-pop'];
+  const title = layers['x-title'];
+  check('old-format style gets tracking/shadow defaults', await win.evaluate(() => {
+    const s = window.__cutdesk.state().project.tracks[1].clips[0].style;
+    return s.tracking === 0 && s.shadow === 0;
+  }));
+  check('serif font loaded', await win.evaluate(() => document.fonts.check('800 40px "Cutdesk Serif"', '판돈')));
   check('badge shows D-333 for 2026-10-03', await win.evaluate(() => {
     const c = window.__cutdesk.state().project.tracks[0].clips[0];
     return c.text;
@@ -110,6 +117,9 @@ try {
     { t: 1.0, x: Math.round(sub.x + sub.w / 2) - 24, y: Math.round(sub.y + sub.h / 2) - 24, s: 48 },
     { t: 2.6, x: pop.x + 20, y: Math.round(pop.y + pop.h / 2) - 24, s: 48 },
     { t: 3.5, x: pop.x + 20, y: Math.round(pop.y + pop.h / 2) - 24, s: 48 },
+    // Serif title: glyph center and the shadow-only margin.
+    { t: 5.5, x: Math.round(title.x + title.w / 2) - 24, y: Math.round(title.y + title.h / 2) - 24, s: 48 },
+    { t: 5.5, x: title.x + 4, y: Math.round(title.y + title.h / 2) - 24, s: 48 },
   ];
   for (const p of probes) {
     // Chromium holds requestAnimationFrame for ~400ms while a video element seeks, so the canvas can

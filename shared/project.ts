@@ -48,7 +48,7 @@ export const DISSOLVE_MAX = 2;
 
 export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0 };
 
-export type FontId = 'black' | 'bold' | 'medium';
+export type FontId = 'black' | 'bold' | 'semibold' | 'medium' | 'serif';
 export type TextAlign = 'center' | 'left';
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
 
@@ -63,7 +63,13 @@ export interface TextStyle {
   highlight: string;
   highlightColor: string;
   highlightDigits: boolean;
+  /** Extra space between letters in em, e.g. -0.04 */
+  tracking: number;
+  /** 0..1 opacity of a soft shadow in strokeColor; 0 = none */
+  shadow: number;
 }
+
+export const TEXT_STYLE_DEFAULTS = { tracking: 0, shadow: 0 };
 
 /** On-screen text. `in` is always 0 so the generic timeline math (clipEnd, trim) applies unchanged. */
 export interface TextClip {
@@ -176,7 +182,9 @@ export function normalizeProject(p: Project): Project {
     markers: p.markers ?? [],
     tracks: p.tracks.map((t) => ({
       ...t,
-      clips: t.clips.map((c) => (isMediaClip(c) ? { ...MEDIA_CLIP_DEFAULTS, ...c } : c)),
+      clips: t.clips.map((c) =>
+        isMediaClip(c) ? { ...MEDIA_CLIP_DEFAULTS, ...c } : { ...c, style: { ...TEXT_STYLE_DEFAULTS, ...c.style } },
+      ),
     })),
   };
 }

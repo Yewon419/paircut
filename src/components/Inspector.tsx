@@ -36,7 +36,9 @@ import {
 const FONTS: { id: FontId; label: string }[] = [
   { id: 'black', label: 'Black' },
   { id: 'bold', label: 'Bold' },
+  { id: 'semibold', label: 'SemiBold' },
   { id: 'medium', label: 'Medium' },
+  { id: 'serif', label: '명조' },
 ];
 
 const SPEEDS = [0.5, 1, 1.5, 2];
@@ -167,7 +169,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
         </label>
         <div className="row">
           <label>
-            <span>굵기</span>
+            <span>글꼴</span>
             <select value={style.font} onChange={(e) => setStyle({ font: e.target.value as FontId })}>
               {FONTS.map((f) => (
                 <option key={f.id} value={f.id}>
@@ -187,7 +189,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             <input type="color" value={style.color} onChange={(e) => setStyle({ color: e.target.value })} />
           </label>
           <label>
-            <span>테두리</span>
+            <span>테두리·그림자 색</span>
             <span className="inline">
               <input type="color" value={style.strokeColor} onChange={(e) => setStyle({ strokeColor: e.target.value })} />
               <input
@@ -198,6 +200,32 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
                 onChange={(e) => setStyle({ strokeWidth: Number(e.target.value) })}
               />
             </span>
+          </label>
+        </div>
+        <div className="row">
+          <label>
+            <span>자간(%)</span>
+            <input
+              type="number"
+              min={-10}
+              max={30}
+              step={1}
+              data-testid="text-tracking"
+              value={Math.round(style.tracking * 100)}
+              onChange={(e) => setStyle({ tracking: Number(e.target.value) / 100 })}
+            />
+          </label>
+          <label>
+            <span>그림자(%)</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={10}
+              data-testid="text-shadow"
+              value={Math.round(style.shadow * 100)}
+              onChange={(e) => setStyle({ shadow: Number(e.target.value) / 100 })}
+            />
           </label>
         </div>
         <label className="check">
