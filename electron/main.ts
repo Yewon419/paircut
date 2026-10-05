@@ -11,7 +11,7 @@ import { callRendererTool, callTool, registerAgent } from './agent';
 import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
-import { importMedia } from './media';
+import { importMedia, makeSolidImage } from './media';
 
 const isTest = process.env.CUTDESK_TEST === '1';
 
@@ -107,6 +107,16 @@ async function probePaths(paths: string[]): Promise<MediaAsset[]> {
   return assets;
 }
 
+/** A one-color image asset; the PNG lives under userData so it outlives the project folder layout. */
+async function makeSolid(color: string, width: number, height: number): Promise<MediaAsset> {
+  const dir = join(app.getPath('userData'), 'solids');
+  mkdirSync(dir, { recursive: true });
+  const path = await makeSolidImage(color, width, height, dir);
+  const asset = await importMedia(path, cacheDir());
+  const hex = color.toUpperCase();
+  return { ...asset, name: `단색 ${hex}`, solid: hex };
+}
+
 /** Local bridge dispatch: file probing runs here, everything else in the editor window. */
 async function bridgeTool(name: ToolName, input: unknown): Promise<AgentToolResult> {
   if (name === 'probe_media') {
@@ -144,6 +154,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
+  ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
 
   ipcMain.handle('project:save', async (_e, project: Project, path: string | null) => {
     let target = path;

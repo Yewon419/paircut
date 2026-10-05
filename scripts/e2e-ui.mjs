@@ -1,6 +1,6 @@
 // UI end-to-end: launches the real Electron app, drives the editor, and checks that the
 // preview canvas matches the exported MP4 at the same timestamps.
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
@@ -545,6 +545,202 @@ try {
   check('Claude font name with a quote is rejected', pcBad.isError === true, pcBad.text);
   const pcOk = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', customFont: 'Malgun Gothic' }] });
   check('Claude sets a PC font and reads it back', !pcOk.isError && (await tool('get_state')).text.includes('pcFont="Malgun Gothic"'), pcOk.text);
+
+  // Typography: whole-text rotation and styled parts, drawn by the same rasterizer for preview and export.
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  const layerOf = (id) => win.evaluate((i) => window.__cutdesk.texts(1920).find((l) => l.clipId === i), id);
+  const flat = await layerOf('x-sub');
+  const rotOk = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', rotation: 90 }] });
+  const turned = await layerOf('x-sub');
+  check('rotation 90 turns the text box on its side', !rotOk.isError && turned.h > turned.w && Math.abs(turned.h - flat.w) <= 2 &&
+    Math.abs(turned.y + turned.h / 2 - (flat.y + flat.h / 2)) <= 2, `flat ${flat.w}x${flat.h}, turned ${turned.w}x${turned.h}`);
+  await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', rotation: 0 }] });
+  const back = await layerOf('x-sub');
+  check('rotation 0 draws the same box as before', back.w === flat.w && back.h === flat.h && back.x === flat.x && back.pngBase64 === flat.pngBase64);
+  const spanOk = await tool('edit', { ops: [
+    { op: 'span', clip: 'x-sub', match: '내보내기', color: '#FF3B30', scale: 1.6, rotate: -12, dy: -10 },
+    { op: 'span', clip: 'x-sub', match: '미리', font: 'thin' },
+  ] });
+  const styled = await layerOf('x-sub');
+  check('styled parts grow the text box', !spanOk.isError && styled.w > flat.w && styled.h > flat.h, `${flat.w}x${flat.h} -> ${styled.w}x${styled.h}`);
+  check('styled parts read back in get_state', (await tool('get_state')).text.includes('span("내보내기"#0 color=#FF3B30 scale=1.6 rot=-12 dxy=0,-10)'));
+  const redShare = await win.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let red = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] < 90 && d[i + 2] < 90 && d[i + 3] > 200) red++;
+    return red;
+  }, styled.pngBase64);
+  check('styled part is drawn in its color', redShare > 500, `${redShare} red px`);
+  writeFileSync(join(dir, 'typography.png'), Buffer.from(styled.pngBase64, 'base64'));
+  const spanMerge = await tool('edit', { ops: [{ op: 'span', clip: 'x-sub', match: '내보내기', rotate: 0 }] });
+  check('repeating a span merges values', !spanMerge.isError && (await tool('get_state')).text.includes('span("내보내기"#0 color=#FF3B30 scale=1.6 rot=0 dxy=0,-10)'));
+  const spanMissing = await tool('edit', { ops: [{ op: 'span', clip: 'x-sub', match: '없는 말' }] });
+  check('a part the text lacks is rejected', spanMissing.isError === true, spanMissing.text);
+  const spanSecond = await tool('edit', { ops: [{ op: 'span', clip: 'x-sub', match: '내보내기', nth: 1, color: '#000000' }] });
+  check('a missing second occurrence is rejected', spanSecond.isError === true, spanSecond.text);
+  await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', text: '미리 보고 내보내기' }] });
+  check('a span follows its words when other text changes', (await tool('get_state')).text.includes('span("내보내기"#0') &&
+    !(await tool('get_state')).text.includes('MISSING'));
+  await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', text: '바뀐 문장' }] });
+  check('a span whose words are gone is flagged', (await tool('get_state')).text.includes('MISSING'));
+  await tool('edit', { ops: [{ op: 'span', clip: 'x-sub', match: '내보내기', remove: true }, { op: 'span', clip: 'x-sub', match: '미리', remove: true }] });
+  check('removed spans are gone', !(await tool('get_state')).text.includes('span('));
+
+  // The same typography from the inspector: pick letters in the text box, then style the picked part.
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.locator('[data-clip="x-sub"]').click();
+  const clipOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i), id);
+  await win.locator('[data-testid="text-rotation"]').fill('-8');
+  check('rotation set from the inspector', (await clipOf('x-sub')).rotation === -8);
+  await win.locator('[data-testid="text-rotation"]').fill('0');
+  check('span button waits for a selection', await win.locator('[data-testid="span-add"]').isDisabled());
+  const pick = async (from, to) => {
+    const box = win.locator('[data-testid="text-input"]');
+    // Keyboard selection, as a person would make it; a scripted setSelectionRange fires no React onSelect.
+    await box.focus();
+    await win.keyboard.press('Control+Home');
+    for (let i = 0; i < from; i++) await win.keyboard.press('ArrowRight');
+    for (let i = from; i < to; i++) await win.keyboard.press('Shift+ArrowRight');
+    await win.waitForTimeout(100);
+  };
+  await pick(6, 10);
+  await win.locator('[data-testid="span-add"]').click();
+  const pickedSpans = (await clipOf('x-sub')).spans;
+  check('picked letters become a styled part', pickedSpans.length === 1 && pickedSpans[0].match === '내보내기' && pickedSpans[0].nth === 0, JSON.stringify(pickedSpans));
+  await win.locator('[data-testid="span-scale"]').fill('150');
+  await win.locator('[data-testid="span-rotate"]').fill('10');
+  await win.locator('[data-testid="span-color-on"]').check();
+  await win.locator('[data-testid="span-font"]').selectOption('thin');
+  const sp = (await clipOf('x-sub')).spans[0];
+  check('inspector sets size, turn, color and weight of the part', sp.scale === 1.5 && sp.rotate === 10 && sp.color === '#FFD166' && sp.font === 'thin', JSON.stringify(sp));
+  check('inspector styling changes the drawn text', (await layerOf('x-sub')).w > flat.w);
+  await win.locator('[data-testid="span-font"]').selectOption('');
+  check('back to the clip font drops the part font', !('font' in (await clipOf('x-sub')).spans[0]));
+  await pick(0, 2);
+  await win.locator('[data-testid="span-add"]').click();
+  check('a second part gets its own row', (await win.locator('[data-testid="span-row"]').count()) === 2);
+  await win.locator('[data-testid="span-remove"]').first().click();
+  const left = (await clipOf('x-sub')).spans;
+  check('removing a row drops only that part', left.length === 1 && left[0].match === '미리', JSON.stringify(left));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  check('undo brings the removed part back', (await clipOf('x-sub')).spans.length === 2);
+  await win.waitForTimeout(300);
+  await win.screenshot({ path: join(dir, 'span-inspector.png') });
+
+  // Bigger preview: the timeline splitter and the full-area toggle.
+  const stageHeight = () => win.locator('.stage').evaluate((el) => el.getBoundingClientRect().height);
+  const tlHeight = () => win.locator('.timeline').evaluate((el) => el.getBoundingClientRect().height);
+  const stage0 = await stageHeight();
+  const bar = await win.locator('.tl-splitter').boundingBox();
+  await win.mouse.move(bar.x + 200, bar.y + 2);
+  await win.mouse.down();
+  await win.mouse.move(bar.x + 200, bar.y + 122, { steps: 4 });
+  await win.mouse.up();
+  const stage1 = await stageHeight();
+  check('dragging the splitter down shrinks the timeline and grows the preview',
+    Math.abs((await tlHeight()) - 180) <= 2 && stage1 > stage0 + 100, `stage ${stage0} -> ${stage1}`);
+  await win.locator('.tl-splitter').dblclick();
+  check('double-click restores the timeline height', Math.abs((await tlHeight()) - 300) <= 2);
+  await win.locator('[data-testid="preview-big"]').click();
+  const stageBig = await stageHeight();
+  check('big preview hides the timeline and side panels',
+    !(await win.locator('.timeline').isVisible()) && !(await win.locator('.inspector').isVisible()) && stageBig > stage0 + 250,
+    `stage ${stage0} -> ${stageBig}`);
+  await win.locator('.stage').click({ position: { x: 5, y: 5 } });
+  await win.keyboard.press('Escape');
+  check('Escape leaves the big preview', await win.locator('.timeline').isVisible());
+
+  // Solid color backgrounds: made as a frame-size PNG, so preview and export treat them like any picture.
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.locator('[data-tab="media"]').click();
+  await win.locator('[data-testid="solid-color"]').fill('#3366cc');
+  await win.locator('[data-testid="solid-add"]').click();
+  await win.waitForFunction(() => window.__cutdesk.state().project.assets.some((a) => a.solid), null, { timeout: 15000 });
+  const solidAsset = await win.evaluate(() => window.__cutdesk.state().project.assets.find((a) => a.solid));
+  check('solid button adds a frame-size picture', solidAsset.solid === '#3366CC' && solidAsset.kind === 'image' &&
+    solidAsset.width === 1080 && solidAsset.height === 1920 && solidAsset.name === '단색 #3366CC', JSON.stringify(solidAsset));
+  const solidVia = await tool('edit', { ops: [{ op: 'add_solid', color: '#00c853', start: 0, dur: 1, track: 'new' }] });
+  const solidId = /add_solid -> (\S+)/.exec(solidVia.text)?.[1];
+  const solidClip = solidId ? await clipOf(solidId) : null;
+  check('Claude adds a solid for a set time', !solidVia.isError && solidClip !== null && Math.abs(solidClip.out - 1) < 1e-6, solidVia.text);
+  const pixelOfShot = (b64, x, y) => win.evaluate(async ([data, px, py]) => {
+    const img = new Image();
+    img.src = `data:image/jpeg;base64,${data}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    return [...g.getImageData(px, py, 1, 1).data.slice(0, 3)];
+  }, [b64, x, y]);
+  const solidShot = await tool('screenshot', { t: 0.5 });
+  const solidPreview = await pixelOfShot(solidShot.jpegBase64, 135, 200);
+  const near = (a, b) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 40;
+  check('solid shows in the preview', near(solidPreview, [0, 200, 83]), String(solidPreview));
+  const solidOut = join(dir, 'solid.mp4');
+  await exportTo(solidOut);
+  const solidExport = samplePixel(solidOut, 0.5, 540, 800);
+  check('solid shows in the export', near(solidExport, [0, 200, 83]), String(solidExport));
+  await win.locator(`[data-clip="${solidId}"]`).click();
+  await win.locator('[data-testid="solid-recolor"]').fill('#ff8800');
+  await win.locator('[data-testid="solid-apply"]').click();
+  await win.waitForFunction((cid) => {
+    const p = window.__cutdesk.state().project;
+    const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === cid);
+    return p.assets.find((a) => a.id === c.assetId)?.solid === '#FF8800';
+  }, solidId, { timeout: 15000 });
+  check('inspector recolors a solid clip', true);
+  const reuse = await tool('edit', { ops: [{ op: 'add_solid', color: '#FF8800', start: 3, dur: 1, track: 'new' }] });
+  const solidCount = await win.evaluate(() => window.__cutdesk.state().project.assets.filter((a) => a.solid === '#FF8800').length);
+  check('the same color reuses its asset', !reuse.isError && solidCount === 1, reuse.text);
+  const badColor = await tool('edit', { ops: [{ op: 'add_solid', color: 'red' }] });
+  check('a solid color that is not #RRGGBB is rejected', badColor.isError === true, badColor.text);
+
+  // Motion graphics: a see-through webm over a red picture shows red around its green square, in preview and export.
+  const motion = await importMedia(f('motion.webm'), join(dir, 'cache'));
+  check('probe marks a see-through webm', motion.alpha === 'vp9', JSON.stringify({ alpha: motion.alpha, kind: motion.kind }));
+  check('probe leaves plain video opaque', fx.land.alpha === undefined);
+  const pic = fx.pic;
+  const MC = { transform: { scale: 1, x: 0, y: 0 }, crop: { l: 0, t: 0, r: 0, b: 0 }, volume: 1, fadeIn: 0, fadeOut: 0, speed: 1,
+    color: { brightness: 0, contrast: 0, saturation: 0, temperature: 0, look: 0 }, dissolve: 0 };
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [pic, motion],
+    tracks: [
+      { id: 'v-mg', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'mg', assetId: motion.id, start: 0, in: 0, out: 2 }] },
+      { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'bg', assetId: pic.id, start: 0, in: 0, out: 2 }] },
+    ],
+  });
+  check('get_state marks the motion graphic', (await tool('get_state')).text.includes('transparent'));
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  let mgEdge = null;
+  let mgMid = null;
+  for (let i = 0; i < 30; i++) {
+    await win.waitForTimeout(150);
+    const shot = await tool('screenshot', { t: 1 });
+    mgEdge = await pixelOfShot(shot.jpegBase64, 20, 40);
+    mgMid = await pixelOfShot(shot.jpegBase64, 135, 240);
+    if (near(mgMid, [0, 255, 0])) break;
+  }
+  check('preview: motion graphic is see-through around its shape', near(mgEdge, [255, 0, 0]), String(mgEdge));
+  check('preview: motion graphic draws its shape', near(mgMid, [0, 255, 0]), String(mgMid));
+  const mgOut = join(dir, 'motion.mp4');
+  await exportTo(mgOut);
+  const exEdge = samplePixel(mgOut, 1, 80, 160);
+  const exMid = samplePixel(mgOut, 1, 536, 956);
+  check('export: motion graphic is see-through around its shape', near(exEdge, [254, 0, 0]), String(exEdge));
+  check('export: motion graphic draws its shape', near(exMid, [0, 255, 0]), String(exMid));
 
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);

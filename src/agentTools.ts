@@ -4,7 +4,8 @@ import { EditOp } from '../shared/agentOps';
 import type { ClipColor } from '../shared/color';
 import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
-import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration, validCustomFont } from '../shared/project';
+import type { TextSpan } from '../shared/project';
+import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration, resolveTokens, spanIndex, validCustomFont } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
 import { draftFromRows, parseBoard } from './conti';
@@ -55,6 +56,16 @@ function colorText(c: ClipColor): string {
     .join(',');
 }
 
+function spanText(sp: TextSpan, found: boolean): string {
+  const parts = [`${q(sp.match)}#${sp.nth}`];
+  if (sp.color) parts.push(`color=${sp.color}`);
+  if (sp.font) parts.push(`font=${sp.font}`);
+  if (sp.scale !== undefined) parts.push(`scale=${n(sp.scale)}`);
+  if (sp.rotate !== undefined) parts.push(`rot=${n(sp.rotate)}`);
+  if (sp.dx !== undefined || sp.dy !== undefined) parts.push(`dxy=${n(sp.dx ?? 0)},${n(sp.dy ?? 0)}`);
+  return `span(${parts.join(' ')}${found ? '' : ' MISSING, text no longer contains it'})`;
+}
+
 /** Short asset names (A1, A2, ...) instead of 36-character ids; edit accepts either. */
 function alias(p: Project, assetId: string): string {
   return `A${p.assets.findIndex((a) => a.id === assetId) + 1}`;
@@ -71,6 +82,9 @@ function clipLine(p: Project, c: AnyClip): string {
     if (c.style.shadow) extra.push(`shadow=${n(c.style.shadow)}`);
     if (c.anim !== 'none') extra.push(`anim=${c.anim}`);
     if (c.style.highlight) extra.push(`hl=${q(c.style.highlight)}`);
+    if (c.rotation) extra.push(`rot=${n(c.rotation)}`);
+    const text = resolveTokens(c.text, p.vars);
+    for (const sp of c.spans) extra.push(spanText(sp, spanIndex(text, sp.match, sp.nth) !== -1));
     return `${head} ${extra.join(' ')}`;
   }
   const asset = assetById(p, c.assetId);
@@ -97,7 +111,9 @@ export function stateText(): string {
     `vars uploadDate=${v.uploadDate} ddayTarget=${v.ddayTarget} salary=${v.salary} goal=${v.goal}`,
     'assets:',
     ...p.assets.map(
-      (a) => `  ${alias(p, a.id)} ${a.kind} ${q(a.name)}${a.kind === 'image' ? '' : ` ${n(a.duration)}s`} ${a.width}x${a.height}`,
+      (a) =>
+        `  ${alias(p, a.id)} ${a.kind} ${q(a.name)}${a.kind === 'image' ? '' : ` ${n(a.duration)}s`} ${a.width}x${a.height}` +
+        `${a.alpha ? ' transparent' : ''}`,
     ),
     'tracks (top to bottom, upper tracks draw over lower):',
   ];
@@ -225,6 +241,27 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       d.p = withAsset(p, asset, trackId, op.start ?? end, 0);
       return;
     }
+    case 'add_solid': {
+      const made = await window.api.makeSolid(op.color, p.width, p.height);
+      const known = p.assets.find((a) => a.path === made.path);
+      const asset = known ?? made;
+      const withIt = known ? p : { ...p, assets: [...p.assets, made] };
+      const before = clipIds(withIt);
+      let next: Project;
+      if (op.track === 'new') {
+        next = withAsset(withIt, asset, null, op.start ?? 0, 0);
+      } else {
+        const trackId = op.track ?? mainTrackId(withIt, 'video');
+        const track = withIt.tracks.find((t) => t.id === trackId);
+        if (!track || track.kind !== 'video') throw new OpError(`add_solid: ${trackId} is not a video track`);
+        const end = track.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
+        next = withAsset(withIt, asset, trackId, op.start ?? end, 0);
+      }
+      const added = [...clipIds(next)].find((cid) => !before.has(cid));
+      if (!added) throw new OpError('add_solid: clip was not placed');
+      d.p = op.dur === undefined ? next : trimmed(next, added, undefined, needMedia(next, added).start + op.dur);
+      return;
+    }
     case 'add_text': {
       const preset = presetById(op.preset);
       const over: Partial<TextClip> = {};
@@ -245,6 +282,7 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
         x: op.x ?? c.x,
         y: op.y ?? c.y,
         anim: op.anim ?? c.anim,
+        rotation: op.rotation ?? c.rotation,
         style: {
           ...c.style,
           size: op.size ?? c.style.size,
@@ -255,6 +293,31 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
           shadow: op.shadow ?? c.style.shadow,
           highlight: op.highlight ?? c.style.highlight,
         },
+      }));
+      return;
+    }
+    case 'span': {
+      const clip = needText(p, op.clip);
+      const key = (sp: TextSpan) => sp.match === op.match && sp.nth === op.nth;
+      if (op.remove) {
+        if (!clip.spans.some(key)) throw new OpError(`span ${op.clip}: no styled part ${q(op.match)}#${op.nth}`);
+        d.p = updateTextClip(p, op.clip, (c) => ({ ...c, spans: c.spans.filter((sp) => !key(sp)) }));
+        return;
+      }
+      if (spanIndex(resolveTokens(clip.text, p.vars), op.match, op.nth) === -1) {
+        throw new OpError(`span ${op.clip}: occurrence #${op.nth} of ${q(op.match)} is not in the text`);
+      }
+      const prev = clip.spans.find(key) ?? { match: op.match, nth: op.nth };
+      const next: TextSpan = { ...prev };
+      if (op.color !== undefined) next.color = op.color;
+      if (op.font !== undefined) next.font = op.font;
+      if (op.scale !== undefined) next.scale = op.scale;
+      if (op.rotate !== undefined) next.rotate = op.rotate;
+      if (op.dx !== undefined) next.dx = op.dx;
+      if (op.dy !== undefined) next.dy = op.dy;
+      d.p = updateTextClip(p, op.clip, (c) => ({
+        ...c,
+        spans: c.spans.some(key) ? c.spans.map((sp) => (key(sp) ? next : sp)) : [...c.spans, next],
       }));
       return;
     }

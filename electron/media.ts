@@ -15,11 +15,12 @@ const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
 
 interface ProbeStream {
   codec_type?: string;
+  codec_name?: string;
   width?: number;
   height?: number;
   duration?: string;
   disposition?: { attached_pic?: number };
-  tags?: { rotate?: string };
+  tags?: { rotate?: string; alpha_mode?: string; ALPHA_MODE?: string };
   side_data_list?: { rotation?: number }[];
 }
 
@@ -42,6 +43,14 @@ function rotationOf(stream: ProbeStream): number {
   const fromSide = stream.side_data_list?.find((d) => typeof d.rotation === 'number')?.rotation;
   const raw = fromSide ?? Number(stream.tags?.rotate ?? 0);
   return ((Math.round(raw) % 360) + 360) % 360;
+}
+
+/** VP8/VP9 webm with an alpha channel; it is stored beside the picture and only libvpx decodes it. */
+function alphaCodec(stream: ProbeStream): 'vp8' | 'vp9' | null {
+  const flagged = (stream.tags?.alpha_mode ?? stream.tags?.ALPHA_MODE) === '1';
+  if (!flagged) return null;
+  if (stream.codec_name === 'vp8' || stream.codec_name === 'vp9') return stream.codec_name;
+  return null;
 }
 
 export async function probe(path: string): Promise<Omit<MediaAsset, 'thumbPath' | 'wavePath'>> {
@@ -76,7 +85,7 @@ export async function probe(path: string): Promise<Omit<MediaAsset, 'thumbPath' 
   if (!(duration > 0)) throw new Error(`could not read duration: ${path}`);
   if (kind !== 'audio' && !(width > 0 && height > 0)) throw new Error(`could not read frame size: ${path}`);
 
-  return {
+  const asset: Omit<MediaAsset, 'thumbPath' | 'wavePath'> = {
     id: randomUUID(),
     path,
     name: basename(path),
@@ -86,6 +95,9 @@ export async function probe(path: string): Promise<Omit<MediaAsset, 'thumbPath' 
     height,
     hasAudio: kind === 'video' && audio !== undefined,
   };
+  const alpha = kind === 'video' && video ? alphaCodec(video) : null;
+  if (alpha) asset.alpha = alpha;
+  return asset;
 }
 
 function cacheKey(path: string, suffix: string): string {
@@ -131,6 +143,20 @@ export async function makeWaveform(path: string, cacheDir: string): Promise<stri
     '1',
     out,
   ]);
+  return out;
+}
+
+/** A one-color PNG of the given size, reused when the same color and size were made before. */
+export async function makeSolidImage(color: string, width: number, height: number, dir: string): Promise<string> {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(color);
+  if (!m) throw new Error(`solid color must be #RRGGBB, got ${JSON.stringify(color)}`);
+  if (!(Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0)) {
+    throw new Error(`solid size must be positive integers, got ${width}x${height}`);
+  }
+  const hex = m[1].toUpperCase();
+  const out = join(dir, `solid-${hex}-${width}x${height}.png`);
+  if (existsSync(out)) return out;
+  await runTool(FFMPEG, ['-y', '-v', 'error', '-f', 'lavfi', '-i', `color=c=0x${hex}:s=${width}x${height}`, '-frames:v', '1', out]);
   return out;
 }
 

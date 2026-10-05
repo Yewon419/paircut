@@ -14,6 +14,10 @@ export interface MediaAsset {
   hasAudio: boolean;
   thumbPath: string | null;
   wavePath: string | null;
+  /** '#RRGGBB' when the asset is a generated one-color image. */
+  solid?: string;
+  /** Webm codec when the video carries transparency (motion graphics); export must decode it with libvpx. */
+  alpha?: 'vp8' | 'vp9';
 }
 
 export interface ClipTransform {
@@ -61,7 +65,20 @@ export const CROP_MAX = 0.95;
 
 export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0, crop: NO_CROP };
 
-export type FontId = 'black' | 'bold' | 'semibold' | 'medium' | 'serif' | 'pres-bold' | 'pres-black' | 'hand';
+export type FontId =
+  | 'black'
+  | 'extrabold'
+  | 'bold'
+  | 'semibold'
+  | 'medium'
+  | 'regular'
+  | 'light'
+  | 'extralight'
+  | 'thin'
+  | 'serif'
+  | 'pres-bold'
+  | 'pres-black'
+  | 'hand';
 export type TextAlign = 'center' | 'left';
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
 
@@ -91,6 +108,24 @@ export function validCustomFont(name: string): boolean {
   return name.length <= 100 && !/["\\;{}]/.test(name);
 }
 
+/**
+ * Typography on part of a text clip. The styled part is the `nth` (0-based) occurrence of `match`
+ * in the clip text after tokens are resolved, so editing other words keeps it attached.
+ */
+export interface TextSpan {
+  match: string;
+  nth: number;
+  color?: string;
+  font?: FontId;
+  /** Size multiplier against the clip size. */
+  scale?: number;
+  /** Degrees, clockwise, around the span's own center. */
+  rotate?: number;
+  /** Offset in design (1080-wide) pixels. */
+  dx?: number;
+  dy?: number;
+}
+
 /** On-screen text. `in` is always 0 so the generic timeline math (clipEnd, trim) applies unchanged. */
 export interface TextClip {
   id: string;
@@ -103,6 +138,22 @@ export interface TextClip {
   x: number;
   y: number;
   anim: TextAnim;
+  /** Degrees, clockwise, of the whole text around its center. */
+  rotation: number;
+  spans: TextSpan[];
+}
+
+export const TEXT_CLIP_DEFAULTS = { rotation: 0, spans: [] as TextSpan[] };
+
+/** Start index of the `nth` occurrence of `match` in `text`, or -1. */
+export function spanIndex(text: string, match: string, nth: number): number {
+  if (!match) return -1;
+  let from = 0;
+  for (let i = 0; ; i++) {
+    const at = text.indexOf(match, from);
+    if (at === -1 || i === nth) return at;
+    from = at + match.length;
+  }
 }
 
 export type AnyClip = Clip | TextClip;
@@ -203,7 +254,9 @@ export function normalizeProject(p: Project): Project {
     tracks: p.tracks.map((t) => ({
       ...t,
       clips: t.clips.map((c) =>
-        isMediaClip(c) ? { ...MEDIA_CLIP_DEFAULTS, ...c } : { ...c, style: { ...TEXT_STYLE_DEFAULTS, ...c.style } },
+        isMediaClip(c)
+          ? { ...MEDIA_CLIP_DEFAULTS, ...c }
+          : { ...TEXT_CLIP_DEFAULTS, ...c, style: { ...TEXT_STYLE_DEFAULTS, ...c.style } },
       ),
     })),
   };

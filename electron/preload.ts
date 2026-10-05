@@ -9,6 +9,7 @@ const api: CutdeskApi = {
   isTest: () => ipcRenderer.invoke('app:isTest'),
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),
+  makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
   pathForFile: (file) => webUtils.getPathForFile(file),
   mediaUrl: (path) => `${MEDIA_SCHEME}://local/${encodeURIComponent(path)}`,
   saveProject: (project, path) => ipcRenderer.invoke('project:save', project, path),

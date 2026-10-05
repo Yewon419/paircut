@@ -82,6 +82,8 @@ export function makeTextClip(preset: TextPreset, id: string, start: number, over
     x: preset.x,
     y: preset.y,
     anim: preset.anim,
+    rotation: 0,
+    spans: [],
     ...overrides,
   };
 }

@@ -9,7 +9,7 @@ import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, upd
 const PREVIEW_SCALE = 0.5;
 const CENTER_SNAP = 0.012;
 
-export function Preview() {
+export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const wheelTimer = useRef<number | null>(null);
@@ -142,6 +142,9 @@ export function Preview() {
         </button>
         <button className={guides ? 'toggle on' : 'toggle'} onClick={() => setGuides(!guides)} title="위 14%, 아래 35%, 좌우 6%">
           안전 영역
+        </button>
+        <button className={big ? 'toggle on' : 'toggle'} onClick={onToggleBig} title="타임라인과 양옆 패널을 숨기고 미리보기를 키움 (Esc로 복귀)" data-testid="preview-big">
+          크게 보기
         </button>
         <span className="timecode">
           {formatTime(playhead, project.fps)} <span className="dim">/ {formatTime(projectDuration(project), project.fps)}</span>

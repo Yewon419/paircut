@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
 import { startAgentBridge } from './components/AgentPanel';
@@ -17,6 +18,19 @@ async function saveProject(saveAs: boolean): Promise<void> {
   if (path) useEditor.setState({ filePath: path, dirty: false });
 }
 
+const TIMELINE_KEY = 'cutdesk.timelineHeight';
+const TIMELINE_DEFAULT = 300;
+const TIMELINE_MIN = 120;
+
+function clampTimeline(h: number): number {
+  return Math.round(Math.max(TIMELINE_MIN, Math.min(window.innerHeight - 260, h)));
+}
+
+function storedTimelineHeight(): number {
+  const n = Number(localStorage.getItem(TIMELINE_KEY));
+  return Number.isFinite(n) && n > 0 ? clampTimeline(n) : TIMELINE_DEFAULT;
+}
+
 function confirmDiscard(): boolean {
   return !useEditor.getState().dirty || window.confirm('저장하지 않은 변경이 있어요. 버릴까요?');
 }
@@ -26,6 +40,33 @@ export function App() {
   const dirty = useEditor((s) => s.dirty);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [big, setBig] = useState(false);
+  const [timelineHeight, setTimelineHeight] = useState(storedTimelineHeight);
+
+  const dragSplitter = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const y0 = e.clientY;
+    const h0 = timelineHeight;
+    let h = h0;
+    const move = (ev: PointerEvent) => {
+      h = clampTimeline(h0 - (ev.clientY - y0));
+      setTimelineHeight(h);
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      localStorage.setItem(TIMELINE_KEY, String(h));
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
+
+  const resetSplitter = () => {
+    setTimelineHeight(TIMELINE_DEFAULT);
+    localStorage.setItem(TIMELINE_KEY, String(TIMELINE_DEFAULT));
+  };
 
   useEffect(() => startPausedSync(), []);
   useEffect(() => startAgentBridge(), []);
@@ -50,6 +91,10 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, select')) return;
+      if (e.code === 'Escape') {
+        setBig(false);
+        return;
+      }
       const { project, playhead } = useEditor.getState();
       const frame = 1 / project.fps;
       const ctrl = e.ctrlKey || e.metaKey;
@@ -108,7 +153,7 @@ export function App() {
   const title = filePath ? filePath.split(/[\\/]/).pop() : '새 프로젝트';
 
   return (
-    <div className="app">
+    <div className={big ? 'app big' : 'app'} style={{ '--tl-h': `${timelineHeight}px` } as CSSProperties}>
       <header className="topbar">
         <div className="brand">cutdesk</div>
         <nav className="file-actions">
@@ -132,9 +177,10 @@ export function App() {
       )}
       <main className="workspace">
         <SidePanel />
-        <Preview />
+        <Preview big={big} onToggleBig={() => setBig(!big)} />
         <Inspector />
       </main>
+      <div className="tl-splitter" onPointerDown={dragSplitter} onDoubleClick={resetSplitter} title="끌어서 타임라인 높이 조절, 두 번 누르면 원래대로" />
       <Timeline />
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
     </div>

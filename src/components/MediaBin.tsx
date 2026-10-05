@@ -12,6 +12,20 @@ export function MediaBin() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [solid, setSolid] = useState('#000000');
+
+  const addSolid = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { width, height } = useEditor.getState().project;
+      addAssets([await window.api.makeSolid(solid, width, height)]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const importPaths = async (paths: string[]) => {
     if (paths.length === 0) return;
@@ -49,6 +63,12 @@ export function MediaBin() {
         <span>미디어</span>
         <button disabled={busy} onClick={() => void window.api.pickMedia().then(importPaths)}>
           {busy ? '불러오는 중' : '가져오기'}
+        </button>
+      </div>
+      <div className="solid-row">
+        <input type="color" value={solid} data-testid="solid-color" onChange={(e) => setSolid(e.target.value)} title="단색 배경 색" />
+        <button disabled={busy} data-testid="solid-add" onClick={() => void addSolid()}>
+          단색 배경 추가
         </button>
       </div>
       {error && <div className="error">{error}</div>}

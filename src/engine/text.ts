@@ -1,11 +1,16 @@
 import type { FontId, ProjectVars, TextClip } from '../../shared/project';
-import { ANIM_IN, ANIM_OUT, clipDuration, POP_FROM, resolveTokens, RISE_PX } from '../../shared/project';
+import { ANIM_IN, ANIM_OUT, clipDuration, POP_FROM, resolveTokens, RISE_PX, spanIndex } from '../../shared/project';
 
 const FONTS: Record<FontId, { family: string; weight: number }> = {
   black: { family: 'Pretendard', weight: 900 },
+  extrabold: { family: 'Pretendard', weight: 800 },
   bold: { family: 'Pretendard', weight: 700 },
   semibold: { family: 'Pretendard', weight: 600 },
   medium: { family: 'Pretendard', weight: 500 },
+  regular: { family: 'Pretendard', weight: 400 },
+  light: { family: 'Pretendard', weight: 300 },
+  extralight: { family: 'Pretendard', weight: 200 },
+  thin: { family: 'Pretendard', weight: 100 },
   serif: { family: 'Cutdesk Serif', weight: 800 },
   'pres-bold': { family: 'Cutdesk Presentation', weight: 700 },
   'pres-black': { family: 'Cutdesk Presentation', weight: 900 },
@@ -32,17 +37,29 @@ export interface TextRaster {
   h: number;
 }
 
-interface Run {
-  text: string;
+/** How one character is drawn: base style, highlight and spans already folded in. Lengths in frame pixels. */
+interface Look {
   color: string;
+  font: string;
+  tracking: number;
+  scale: number;
+  /** Radians, clockwise. */
+  rotate: number;
+  dx: number;
+  dy: number;
 }
 
-function fontOf(clip: TextClip, k: number): string {
-  const f = FONTS[clip.style.font];
-  const size = `${clip.style.size * k}px`;
+interface Run {
+  text: string;
+  look: Look;
+  width: number;
+}
+
+function fontString(id: FontId, customFont: string, px: number): string {
+  const f = FONTS[id];
   // Regular weight so a single-face installed font is not synthetically bolded.
-  if (clip.style.customFont && fontInstalled(clip.style.customFont)) return `400 ${size} "${clip.style.customFont}", "${f.family}"`;
-  return `${f.weight} ${size} "${f.family}"`;
+  if (customFont && fontInstalled(customFont)) return `400 ${px}px "${customFont}", "${f.family}"`;
+  return `${f.weight} ${px}px "${f.family}"`;
 }
 
 const installed = new Map<string, boolean>();
@@ -66,68 +83,125 @@ export function fontInstalled(name: string): boolean {
   return found;
 }
 
-/** Sets font and letter spacing together so measuring and drawing always agree. */
-function applyFont(ctx: CanvasRenderingContext2D, clip: TextClip, k: number): void {
-  ctx.font = fontOf(clip, k);
-  ctx.letterSpacing = `${clip.style.tracking * clip.style.size * k}px`;
-}
-
-/** measureText counts the spacing after the last letter too; drop it so centered lines stay centered. */
-function lineWidth(ctx: CanvasRenderingContext2D, line: string, clip: TextClip, k: number): number {
-  return ctx.measureText(line).width - (line ? clip.style.tracking * clip.style.size * k : 0);
-}
-
-function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const out: string[] = [];
-  for (const para of text.split('\n')) {
-    const words = para.split(' ');
-    let line = '';
-    for (const word of words) {
-      const candidate = line ? `${line} ${word}` : word;
-      if (ctx.measureText(candidate).width <= maxWidth || !line) {
-        line = candidate;
-      } else {
-        out.push(line);
-        line = word;
-      }
-      while (ctx.measureText(line).width > maxWidth && line.length > 1) {
-        let cut = line.length - 1;
-        while (cut > 1 && ctx.measureText(line.slice(0, cut)).width > maxWidth) cut--;
-        out.push(line.slice(0, cut));
-        line = line.slice(cut);
-      }
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-function runsOf(line: string, clip: TextClip): Run[] {
-  const { color, highlight, highlightColor, highlightDigits } = clip.style;
-  const marks = new Array<boolean>(line.length).fill(false);
+function highlightMarks(text: string, clip: TextClip): boolean[] {
+  const { highlight, highlightDigits } = clip.style;
+  const marks = new Array<boolean>(text.length).fill(false);
   if (highlight) {
     let from = 0;
     for (;;) {
-      const i = line.indexOf(highlight, from);
+      const i = text.indexOf(highlight, from);
       if (i === -1) break;
       for (let j = i; j < i + highlight.length; j++) marks[j] = true;
       from = i + highlight.length;
     }
   }
   if (highlightDigits) {
-    for (let i = 0; i < line.length; i++) {
-      if (/[0-9]/.test(line[i])) marks[i] = true;
-      else if (line[i] === ',' && /[0-9]/.test(line[i - 1] ?? '') && /[0-9]/.test(line[i + 1] ?? '')) marks[i] = true;
+    for (let i = 0; i < text.length; i++) {
+      if (/[0-9]/.test(text[i])) marks[i] = true;
+      else if (text[i] === ',' && /[0-9]/.test(text[i - 1] ?? '') && /[0-9]/.test(text[i + 1] ?? '')) marks[i] = true;
     }
   }
-  const runs: Run[] = [];
-  for (let i = 0; i < line.length; i++) {
-    const c = marks[i] ? highlightColor : color;
-    const last = runs.at(-1);
-    if (last && last.color === c) last.text += line[i];
-    else runs.push({ text: line[i], color: c });
+  return marks;
+}
+
+/** Per-character look; later spans win where spans overlap. */
+function looksOf(text: string, clip: TextClip, k: number): Look[] {
+  const s = clip.style;
+  const size = s.size * k;
+  const marks = highlightMarks(text, clip);
+  const base = { font: fontString(s.font, s.customFont, size), tracking: s.tracking * size, scale: 1, rotate: 0, dx: 0, dy: 0 };
+  // Indexed by UTF-16 unit, like indexOf and slice.
+  const looks: Look[] = Array.from({ length: text.length }, (_, i) => ({ ...base, color: marks[i] ? s.highlightColor : s.color }));
+  for (const span of clip.spans) {
+    const at = spanIndex(text, span.match, span.nth);
+    if (at === -1) continue;
+    const scale = span.scale ?? 1;
+    const font =
+      span.font !== undefined
+        ? fontString(span.font, '', size * scale)
+        : scale !== 1
+          ? fontString(s.font, s.customFont, size * scale)
+          : null;
+    for (let j = at; j < at + span.match.length; j++) {
+      const l = looks[j];
+      looks[j] = {
+        color: span.color ?? l.color,
+        font: font ?? l.font,
+        tracking: s.tracking * size * scale,
+        scale,
+        rotate: ((span.rotate ?? 0) * Math.PI) / 180,
+        dx: (span.dx ?? 0) * k,
+        dy: (span.dy ?? 0) * k,
+      };
+    }
   }
-  return runs;
+  return looks;
+}
+
+function sameLook(a: Look, b: Look): boolean {
+  return (
+    a.color === b.color &&
+    a.font === b.font &&
+    a.tracking === b.tracking &&
+    a.scale === b.scale &&
+    a.rotate === b.rotate &&
+    a.dx === b.dx &&
+    a.dy === b.dy
+  );
+}
+
+/** Characters [a, b) grouped into runs that share a look, each measured with its own font. */
+function runsIn(ctx: CanvasRenderingContext2D, text: string, looks: Look[], a: number, b: number): Run[] {
+  const runs: { text: string; look: Look }[] = [];
+  for (let i = a; i < b; i++) {
+    const last = runs.at(-1);
+    if (last && sameLook(last.look, looks[i])) last.text += text[i];
+    else runs.push({ text: text[i], look: looks[i] });
+  }
+  return runs.map((r) => {
+    ctx.font = r.look.font;
+    ctx.letterSpacing = `${r.look.tracking}px`;
+    return { ...r, width: ctx.measureText(r.text).width };
+  });
+}
+
+/** Advance of [a, b) including the spacing after the last letter, as measureText reports it. */
+function advance(ctx: CanvasRenderingContext2D, text: string, looks: Look[], a: number, b: number): number {
+  return runsIn(ctx, text, looks, a, b).reduce((sum, r) => sum + r.width, 0);
+}
+
+/** Line breaks as [start, end) ranges of the text: explicit newlines, then word wrap, then hard breaks. */
+function wrapRanges(text: string, maxWidth: number, width: (a: number, b: number) => number): [number, number][] {
+  const out: [number, number][] = [];
+  let pos = 0;
+  for (const para of text.split('\n')) {
+    let ls = pos;
+    let le = pos;
+    let wpos = pos;
+    for (const word of para.split(' ')) {
+      const ws = wpos;
+      const we = wpos + word.length;
+      wpos = we + 1;
+      const empty = le === ls;
+      if (empty || width(ls, we) <= maxWidth) {
+        if (empty) ls = ws;
+        le = we;
+      } else {
+        out.push([ls, le]);
+        ls = ws;
+        le = we;
+      }
+      while (width(ls, le) > maxWidth && le - ls > 1) {
+        let cut = le - ls - 1;
+        while (cut > 1 && width(ls, ls + cut) > maxWidth) cut--;
+        out.push([ls, ls + cut]);
+        ls += cut;
+      }
+    }
+    out.push([ls, le]);
+    pos += para.length + 1;
+  }
+  return out;
 }
 
 /** '#RRGGBB' plus an opacity as an rgba() string. */
@@ -153,8 +227,35 @@ let measureCtx: CanvasRenderingContext2D | null = null;
 export function wrappedLines(clip: TextClip, vars: ProjectVars, frameW: number): string[] {
   measureCtx ??= document.createElement('canvas').getContext('2d');
   if (!measureCtx) throw new Error('2d context unavailable');
-  applyFont(measureCtx, clip, frameW / DESIGN_WIDTH);
-  return wrapLines(measureCtx, resolveTokens(clip.text, vars), MAX_WIDTH_FRAC * frameW);
+  const ctx = measureCtx;
+  const text = resolveTokens(clip.text, vars);
+  const looks = looksOf(text, clip, frameW / DESIGN_WIDTH);
+  const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
+  return ranges.map(([a, b]) => text.slice(a, b));
+}
+
+/** A run placed in block coordinates (origin = center of the unrotated text block). */
+interface Placed {
+  run: Run;
+  cx: number;
+  cy: number;
+  h: number;
+}
+
+/** Corners of a w x h rect centered at (cx, cy) turned by `a`, then the whole thing turned by `g` around the origin. */
+function corners(cx: number, cy: number, w: number, h: number, a: number, g: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (const [ux, uy] of [
+    [-w / 2, -h / 2],
+    [w / 2, -h / 2],
+    [w / 2, h / 2],
+    [-w / 2, h / 2],
+  ]) {
+    const x = cx + ux * Math.cos(a) - uy * Math.sin(a);
+    const y = cy + ux * Math.sin(a) + uy * Math.cos(a);
+    out.push([x * Math.cos(g) - y * Math.sin(g), x * Math.sin(g) + y * Math.cos(g)]);
+  }
+  return out;
 }
 
 /** Renders a text clip at its settled (post-animation) state for a frame of the given size. */
@@ -164,34 +265,79 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2d context unavailable');
-  applyFont(ctx, clip, k);
   const text = resolveTokens(clip.text, vars);
-  const lines = wrapLines(ctx, text, MAX_WIDTH_FRAC * frameW);
-  const widths = lines.map((l) => lineWidth(ctx, l, clip, k));
+  const looks = looksOf(text, clip, k);
+  const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
   const size = style.size * k;
-  const lineH = size * LINE_HEIGHT;
+  const baseLineH = size * LINE_HEIGHT;
   const stroke = style.background ? 0 : style.strokeWidth * k;
   const blur = style.background ? 0 : style.shadow > 0 ? size * SHADOW_BLUR : 0;
   const padX = style.background ? size * 0.45 : stroke + blur * 2 + 2;
   const padY = style.background ? size * 0.28 : stroke + blur * 2 + 2;
-  const w = Math.ceil(Math.max(1, ...widths) + padX * 2);
-  const h = Math.ceil(lines.length * lineH + padY * 2);
+  const glyphPad = stroke + blur * 2 + 2;
+
+  const lines = ranges.map(([a, b]) => {
+    const runs = runsIn(ctx, text, looks, a, b);
+    const trailing = b > a ? looks[b - 1].tracking : 0;
+    const width = runs.reduce((sum, r) => sum + r.width, 0) - trailing;
+    const h = baseLineH * Math.max(1, ...runs.map((r) => r.look.scale));
+    return { runs, width, h };
+  });
+  const blockW = Math.max(1, ...lines.map((l) => l.width));
+  const blockH = lines.reduce((sum, l) => sum + l.h, 0);
+  const boxW = blockW + padX * 2;
+  const boxH = blockH + padY * 2;
+
+  const placed: Placed[] = [];
+  let top = -blockH / 2;
+  for (const line of lines) {
+    let x = style.align === 'center' ? -line.width / 2 : -blockW / 2;
+    for (const run of line.runs) {
+      placed.push({ run, cx: x + run.width / 2 + run.look.dx, cy: top + line.h / 2 + run.look.dy, h: baseLineH * run.look.scale });
+      x += run.width;
+    }
+    top += line.h;
+  }
+
+  const rot = (clip.rotation * Math.PI) / 180;
+  const pts = corners(0, 0, boxW, boxH, 0, rot);
+  for (const p of placed) {
+    const l = p.run.look;
+    if (l.rotate !== 0 || l.dx !== 0 || l.dy !== 0 || l.scale !== 1) {
+      pts.push(...corners(p.cx, p.cy, p.run.width + glyphPad * 2, p.h + glyphPad * 2, l.rotate, rot));
+    }
+  }
+  const minX = Math.min(...pts.map((p) => p[0]));
+  const minY = Math.min(...pts.map((p) => p[1]));
+  const w = Math.ceil(Math.max(...pts.map((p) => p[0])) - minX);
+  const h = Math.ceil(Math.max(...pts.map((p) => p[1])) - minY);
   canvas.width = w;
   canvas.height = h;
 
+  ctx.translate(-minX, -minY);
+  ctx.rotate(rot);
   if (style.background) {
+    ctx.save();
+    ctx.translate(-boxW / 2, -boxH / 2);
     ctx.fillStyle = style.background;
-    roundRect(ctx, w, h, 6 * k);
+    roundRect(ctx, boxW, boxH, 6 * k);
     ctx.fill();
+    ctx.restore();
   }
-  applyFont(ctx, clip, k);
   ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
   ctx.lineJoin = 'round';
-  const placed = lines.map((line, i) => ({
-    y: padY + lineH * (i + 0.5),
-    x: style.align === 'center' ? (w - widths[i]) / 2 : padX,
-    runs: runsOf(line, clip),
-  }));
+  const drawRuns = (paint: (r: Run) => void) => {
+    for (const p of placed) {
+      ctx.save();
+      ctx.translate(p.cx, p.cy);
+      if (p.run.look.rotate !== 0) ctx.rotate(p.run.look.rotate);
+      ctx.font = p.run.look.font;
+      ctx.letterSpacing = `${p.run.look.tracking}px`;
+      paint(p.run);
+      ctx.restore();
+    }
+  };
   // The shadow goes on the first pass only (stroke if any, else fill) so it is cast once.
   if (blur > 0) {
     ctx.shadowColor = withAlpha(style.strokeColor, style.shadow);
@@ -200,40 +346,25 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   if (stroke > 0) {
     ctx.lineWidth = stroke * 2;
     ctx.strokeStyle = style.strokeColor;
-    for (const { x, y, runs } of placed) {
-      let sx = x;
-      for (const r of runs) {
-        ctx.strokeText(r.text, sx, y);
-        sx += ctx.measureText(r.text).width;
-      }
-    }
+    drawRuns((r) => ctx.strokeText(r.text, -r.width / 2, 0));
     ctx.shadowColor = 'transparent';
   }
-  for (const { x, y, runs } of placed) {
-    let fx = x;
-    for (const r of runs) {
-      ctx.fillStyle = r.color;
-      ctx.fillText(r.text, fx, y);
-      fx += ctx.measureText(r.text).width;
-    }
-  }
+  drawRuns((r) => {
+    ctx.fillStyle = r.look.color;
+    ctx.fillText(r.text, -r.width / 2, 0);
+  });
 
-  const ax = clip.x * frameW;
+  // The unrotated block box keeps the old anchor: its center for centered text, its left edge otherwise.
+  const ax = clip.x * frameW + (style.align === 'center' ? 0 : boxW / 2);
   const ay = clip.y * frameH;
-  return {
-    canvas,
-    x: Math.round(style.align === 'center' ? ax - w / 2 : ax),
-    y: Math.round(ay - h / 2),
-    w,
-    h,
-  };
+  return { canvas, x: Math.round(ax + minX), y: Math.round(ay + minY), w, h };
 }
 
 const cache = new Map<string, TextRaster>();
 const CACHE_LIMIT = 400;
 
 export function cachedRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
-  const key = JSON.stringify([clip.text, clip.style, clip.x, clip.y, vars, frameW, frameH]);
+  const key = JSON.stringify([clip.text, clip.style, clip.x, clip.y, clip.rotation, clip.spans, vars, frameW, frameH]);
   const hit = cache.get(key);
   if (hit) return hit;
   const raster = rasterizeText(clip, vars, frameW, frameH);

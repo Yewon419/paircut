@@ -11,7 +11,7 @@
 - 로컬 파일은 `media://` 프로토콜(Range·CORS 지원)로 읽는다. CORS가 없으면 캔버스가 오염돼 픽셀 읽기와 WebGL이 막힌다
 - 클립 볼륨·페이드·속도: 미리보기는 요소마다 WebAudio GainNode(`audioGain`)와 `playbackRate`, 내보내기는 `setpts`·`atempo`·`volume`·`afade`(선형). 타임라인 길이는 `(out - in) / speed`, 소스 위치는 `sourceTime`
 - 색 보정: `shared/color.ts`의 `gradePixel` 하나를 33³ 3D LUT로 뽑아, 미리보기는 WebGL2 3D 텍스처(`src/engine/grade.ts`), 내보내기는 `.cube` 파일 + ffmpeg `lut3d=interp=trilinear`(작업 폴더를 cwd로 두고 상대 이름으로 참조)
-- 텍스트는 렌더러 캔버스가 Pretendard(Black·Bold·Medium, OFL, `src/fonts`)로 그린다(`src/engine/text.ts`). 미리보기는 그 비트맵을 그리고, 내보내기는 같은 함수로 출력 크기 PNG를 만들어 ffmpeg에 넘긴다(`src/exportTexts.ts`). 등장 효과(팝·페이드·올라오기) 시간값은 `shared/project.ts` 한 곳
+- 텍스트는 렌더러 캔버스가 Pretendard(Thin~Black 9단계, OFL, `src/fonts`)로 그린다(`src/engine/text.ts`). 미리보기는 그 비트맵을 그리고, 내보내기는 같은 함수로 출력 크기 PNG를 만들어 ffmpeg에 넘긴다(`src/exportTexts.ts`). 등장 효과(팝·페이드·올라오기) 시간값은 `shared/project.ts` 한 곳
 - 배지 숫자는 토큰: `{D}`(올리는 날→복학일), `{월급}`, `{목표}`. 값은 프로젝트 `vars`, 콘티를 불러오면 보드 설정과 게시일로 채운다
 - 운영 보드(`board.json`)는 읽기만 한다. 쓰지 않는다
 
@@ -25,6 +25,12 @@
      - 대표님 추가 지시(2026-10-01): 보정 프리셋 저장(앱 전체 공유, `localStorage` `cutdesk.colorPresets`, 같은 이름은 덮어씀)과 "모든 영상·사진 클립에 적용"(되돌리기 한 번) (완료)
    - 3c+ 앱 안 Claude(대표님 결정 2026-10-01: Agent SDK, 로그인된 Claude Code 구독, 기본 모델 Sonnet). 구현: 사이드 패널 Claude 탭, 도구 4개(get_state 압축 텍스트, edit 일괄·원자적·undo 1단계, screenshot 270x480, screenshot_app). 내장 도구·설정 파일·다른 MCP 없이 실행. 내보내기·저장·열기는 맡기지 않음
    - 3d 크로스 디졸브 (완료). 들어오는 클립의 `dissolve`(초, 0.3·0.5·1 버튼)가 같은 트랙 바로 앞 클립과 붙어 있을 때만 쓰인다. 컷을 가운데 두고 앞뒤로 반씩 겹쳐서 영상 길이·컷·자막 위치는 그대로다. 겹치는 동안 원본에 남은 프레임(트림 바깥)을 쓰고, 원본이 모자라면 첫·끝 프레임을 멈춰 둔다(내보내기는 `tpad` clone). 소리는 컷에서 바뀐다. 분할하면 오른쪽 조각은 디졸브 0
+
+4. 대표님 지시(2026-10-04~05)
+   - 4a 타이포그래피 (완료). 자막 전체 `rotation`(°)과 부분 꾸미기 `spans`: 꾸밀 글자를 "토큰을 채운 문장에서 `match`의 `nth`번째"로 지정해 문장을 고쳐도 따라간다. 부분마다 색·글꼴(두께)·크기 배율·회전·이동(1080 기준 px). 같은 함수(`rasterizeText`)가 글자별 모양을 정해 회전까지 굽고, 캔버스는 회전 결과를 다 담게 커지되 회전 없는 상자의 기준점(가운데 정렬은 중심, 왼쪽 정렬은 왼쪽 끝)은 그대로. 인스펙터는 글상자에서 드래그로 고른 뒤 "선택한 글자 꾸미기", 브릿지는 `span` 연산
+   - 4b 단색 배경 (완료). 프로젝트 크기의 한 색 PNG를 ffmpeg로 만들어(`userData/solids`, 같은 색·크기는 재사용) 일반 사진 에셋으로 넣는다. 에셋 `solid`에 색을 적고, 인스펙터 "이 색으로 바꾸기"는 클립이 가리키는 에셋을 바꾼다. 브릿지는 `add_solid`
+   - 4c 모션그래픽 이식 (완료). 투명 배경 VP9/VP8 webm(`alpha_mode=1`)을 가져오면 에셋 `alpha`가 붙는다. 미리보기는 `<video>`가 알파째 그리고, 내보내기는 그 입력만 `-c:v libvpx-vp9`(VP8은 `libvpx`)로 읽는다. ffmpeg 기본 VP9 디코더는 알파를 버려 뒤가 검게 덮인다. 이 기능 전에 가져온 webm은 다시 가져와야 `alpha`가 붙는다. ProRes 4444 .mov는 Chromium이 재생하지 못해 쓰지 않는다
+   - 4d 미리보기 키우기 (완료). 미리보기와 타임라인 사이 경계를 끌어 타임라인 높이 조절(120px~, `localStorage` `cutdesk.timelineHeight`, 두 번 누르면 300px). "크게 보기"는 타임라인·양옆 패널을 숨기고(언마운트 없이 CSS로) Esc로 돌아온다
 
 ## 검증
 - `npm test` = 빌드 + `scripts/e2e-export.mjs`(실제 ffmpeg 출력의 픽셀·음량 검사) + `scripts/e2e-ui.mjs`(Electron 실행, 미리보기 캔버스와 내보낸 프레임 비교(텍스트 포함), 분할·되돌리기·드래그·트림, 프리셋 추가·텍스트 수정, 실제 board.json p001 콘티 불러오기, SRT 내보내기·가져오기, 콘티 규칙, 속도·볼륨·페이드, 색 보정의 미리보기·함수·내보내기 3자 비교, 디졸브 구간의 미리보기·내보내기 비교와 원본 여유 프레임·멈춘 프레임)

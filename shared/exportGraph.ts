@@ -144,7 +144,9 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
       } else {
         lead = Math.min(pre * clip.speed, clip.in);
         const tail = Math.min(post * clip.speed, Math.max(0, asset.duration - clip.out));
-        inputArgs.push('-ss', num(clip.in - lead), '-t', num(clip.out - clip.in + lead + tail), '-i', asset.path);
+        // ffmpeg's own VP8/VP9 decoders drop the alpha plane; libvpx keeps it so the clip stays see-through.
+        const decoder = asset.alpha ? ['-c:v', asset.alpha === 'vp9' ? 'libvpx-vp9' : 'libvpx'] : [];
+        inputArgs.push('-ss', num(clip.in - lead), '-t', num(clip.out - clip.in + lead + tail), ...decoder, '-i', asset.path);
         const holdStart = pre - lead / clip.speed;
         const holdEnd = post - tail / clip.speed;
         if (holdStart > 1e-4 || holdEnd > 1e-4) {

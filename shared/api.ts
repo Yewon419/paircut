@@ -37,6 +37,8 @@ export interface CutdeskApi {
   isTest(): Promise<boolean>;
   pickMedia(): Promise<string[]>;
   probeMedia(paths: string[]): Promise<MediaAsset[]>;
+  /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */
+  makeSolid(color: string, width: number, height: number): Promise<MediaAsset>;
   pathForFile(file: File): string;
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;

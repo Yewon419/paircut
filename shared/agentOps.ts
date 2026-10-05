@@ -7,6 +7,9 @@ import { z } from 'zod';
  */
 const id = z.string().describe('clip id from get_state');
 const sec = z.number().min(0);
+const font = z
+  .enum(['black', 'extrabold', 'bold', 'semibold', 'medium', 'regular', 'light', 'extralight', 'thin', 'serif', 'pres-bold', 'pres-black', 'hand'])
+  .describe('black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting');
 const color = z
   .object({
     brightness: z.number().min(-1).max(1),
@@ -31,6 +34,13 @@ export const EditOp = z.discriminatedUnion('op', [
     track: z.string().optional().describe('track id; omit for main track, "new" for a new track'),
   }),
   z.object({
+    op: z.literal('add_solid'),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).describe('#RRGGBB'),
+    start: sec.optional().describe('omit to append at the end of the main video track'),
+    dur: z.number().positive().optional().describe('seconds on screen; default 3'),
+    track: z.string().optional().describe('video track id; omit for main track, "new" for a new top video track'),
+  }).describe('one-color full-frame picture, e.g. a background'),
+  z.object({
     op: z.literal('add_text'),
     preset: z.enum(['hook-num', 'hook', 'sub', 'aside', 'badge-dday', 'badge-salary']),
     text: z.string().optional(),
@@ -45,10 +55,7 @@ export const EditOp = z.discriminatedUnion('op', [
     y: z.number().min(0).max(1).optional(),
     size: z.number().min(12).max(300).optional(),
     color: z.string().optional(),
-    font: z
-      .enum(['black', 'bold', 'semibold', 'medium', 'serif', 'pres-bold', 'pres-black', 'hand'])
-      .optional()
-      .describe('serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting'),
+    font: font.optional(),
     customFont: z
       .string()
       .optional()
@@ -57,7 +64,23 @@ export const EditOp = z.discriminatedUnion('op', [
     shadow: z.number().min(0).max(1).optional().describe('soft shadow opacity; 0 = none'),
     highlight: z.string().optional().describe('word drawn in highlight color'),
     anim: z.enum(['none', 'fade', 'pop', 'rise']).optional(),
+    rotation: z.number().min(-180).max(180).optional().describe('degrees clockwise, whole text around its center'),
   }),
+  z
+    .object({
+      op: z.literal('span'),
+      clip: id,
+      match: z.string().min(1).describe('exact text inside the clip (after {D}-style tokens are filled in)'),
+      nth: z.number().int().min(0).default(0).describe('which occurrence of match, 0 = first'),
+      color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+      font: font.optional(),
+      scale: z.number().min(0.2).max(5).optional().describe('size multiplier'),
+      rotate: z.number().min(-180).max(180).optional().describe('degrees clockwise around the part itself'),
+      dx: z.number().min(-1080).max(1080).optional().describe('offset in px of a 1080-wide frame'),
+      dy: z.number().min(-1920).max(1920).optional(),
+      remove: z.boolean().optional().describe('drop the styling of this part'),
+    })
+    .describe('typography on part of a text clip; repeat on the same match+nth to change it, values merge'),
   z.object({
     op: z.literal('set_clip'),
     clip: id,

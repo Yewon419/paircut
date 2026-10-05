@@ -40,6 +40,10 @@ export function makeFixtures(target) {
     '-filter_complex', '[0:v][1:v][2:v][3:v]vstack=inputs=4', '-frames:v', '1', f('swatch.png')]);
   ff(['-f', 'lavfi', '-i', 'color=c=red:s=320x568:r=30:d=2', '-f', 'lavfi', '-i', 'color=c=blue:s=320x568:r=30:d=2',
     '-filter_complex', '[0:v][1:v]concat=n=2:v=1:a=0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', f('split.mp4')]);
+  // Motion graphic: see-through VP9 webm with an opaque green square in the middle.
+  ff(['-f', 'lavfi', '-i', 'color=c=black@0.0:s=1080x1920:r=30:d=2,format=rgba', '-f', 'lavfi', '-i', 'color=c=0x00FF00:s=400x400:r=30:d=2,format=rgba',
+    '-filter_complex', '[0][1]overlay=340:760:format=auto,format=yuva420p', '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p',
+    '-auto-alt-ref', '0', '-b:v', '1M', f('motion.webm')]);
   return f;
 }
 

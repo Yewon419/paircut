@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ClipColor } from '../../shared/color';
 import { NEUTRAL_COLOR } from '../../shared/color';
-import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextStyle } from '../../shared/project';
+import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextSpan, TextStyle } from '../../shared/project';
 import {
   assetById,
   clipDuration,
@@ -15,6 +15,7 @@ import {
   projectDuration,
   resolveTokens,
   SPEED_MAX,
+  spanIndex,
   SPEED_MIN,
   validCustomFont,
   VOLUME_MAX,
@@ -39,9 +40,14 @@ import {
 
 const FONTS: { id: FontId; label: string }[] = [
   { id: 'black', label: 'Black' },
+  { id: 'extrabold', label: 'ExtraBold' },
   { id: 'bold', label: 'Bold' },
   { id: 'semibold', label: 'SemiBold' },
   { id: 'medium', label: 'Medium' },
+  { id: 'regular', label: 'Regular' },
+  { id: 'light', label: 'Light' },
+  { id: 'extralight', label: 'ExtraLight' },
+  { id: 'thin', label: 'Thin' },
   { id: 'serif', label: '명조' },
   { id: 'pres-bold', label: '프레젠테이션' },
   { id: 'pres-black', label: '프레젠테이션 Black' },
@@ -176,6 +182,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   const longest = Math.max(...lines.map((l) => l.length));
   const [pcMode, setPcMode] = useState(false);
   const pc = pcMode || style.customFont !== '';
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
 
   return (
     <aside className="panel inspector">
@@ -193,6 +200,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
           data-testid="text-input"
           onFocus={beginGesture}
           onBlur={endGesture}
+          onSelect={(e) => setSelection({ start: e.currentTarget.selectionStart, end: e.currentTarget.selectionEnd })}
           onChange={(e) => {
             const text = e.target.value;
             live((c) => ({ ...c, text }));
@@ -353,9 +361,183 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             />
           </label>
         </div>
+        <label>
+          <span>회전(°)</span>
+          <input
+            type="number"
+            min={-180}
+            max={180}
+            step={1}
+            data-testid="text-rotation"
+            value={clip.rotation}
+            onChange={(e) => set((c) => ({ ...c, rotation: clampNum(e.target.value, -180, 180) }))}
+          />
+        </label>
         <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 글자 크기가 바뀌어요.</p>
       </div>
+      <SpanControls clip={clip} resolved={resolved} selection={selection} set={set} />
     </aside>
+  );
+}
+
+function clampNum(v: string, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Number(v)));
+}
+
+/** Occurrence number of the selected text among earlier matches, so the span sticks to that spot. */
+function occurrenceAt(text: string, match: string, start: number): number {
+  let nth = 0;
+  let from = 0;
+  for (;;) {
+    const at = text.indexOf(match, from);
+    if (at === -1 || at >= start) return nth;
+    nth++;
+    from = at + match.length;
+  }
+}
+
+/** Copy of the span with `key` set, or dropped when `value` is undefined. */
+function withSpanValue<K extends keyof TextSpan>(sp: TextSpan, key: K, value: TextSpan[K] | undefined): TextSpan {
+  const next = { ...sp };
+  if (value === undefined) delete next[key];
+  else next[key] = value;
+  return next;
+}
+
+function SpanControls({
+  clip,
+  resolved,
+  selection,
+  set,
+}: {
+  clip: TextClip;
+  resolved: string;
+  selection: { start: number; end: number };
+  set: (update: (c: TextClip) => TextClip) => void;
+}) {
+  const picked = clip.text.slice(selection.start, selection.end);
+  const hasToken = /[{}]/.test(picked);
+  const usable = picked.trim() !== '' && !hasToken;
+  const add = () => {
+    if (!usable) return;
+    const nth = occurrenceAt(clip.text, picked, selection.start);
+    set((c) => (c.spans.some((sp) => sp.match === picked && sp.nth === nth) ? c : { ...c, spans: [...c.spans, { match: picked, nth }] }));
+  };
+  const update = (i: number, change: (sp: TextSpan) => TextSpan) =>
+    set((c) => ({ ...c, spans: c.spans.map((sp, j) => (j === i ? change(sp) : sp)) }));
+  const remove = (i: number) => set((c) => ({ ...c, spans: c.spans.filter((_, j) => j !== i) }));
+  const short = picked.length > 12 ? `${picked.slice(0, 12)}…` : picked;
+
+  return (
+    <>
+      <div className="panel-sub">부분 꾸미기</div>
+      <div className="transform-controls">
+        <button data-testid="span-add" disabled={!usable} onClick={add}>
+          {usable ? `선택한 글자 꾸미기: ${short}` : '선택한 글자 꾸미기'}
+        </button>
+        <p className="hint">
+          {hasToken
+            ? '{D} 같은 자리표시는 꾸밀 수 없어요. 그 앞뒤 글자만 골라요.'
+            : '위 글상자에서 글자를 끌어 고른 뒤 눌러요. 문장을 고쳐도 같은 글자를 따라가요.'}
+        </p>
+        {clip.spans.map((sp, i) => (
+          <div key={`${sp.match}#${sp.nth}`} className="span-card" data-testid="span-row">
+            <div className="span-head">
+              <span>
+                “{sp.match}”{sp.nth > 0 ? ` (${sp.nth + 1}번째)` : ''}
+              </span>
+              <button onClick={() => remove(i)} data-testid="span-remove">
+                삭제
+              </button>
+            </div>
+            {spanIndex(resolved, sp.match, sp.nth) === -1 && <p className="span-missing">문장에 이 글자가 없어서 지금은 안 보여요.</p>}
+            <div className="row">
+              <label>
+                <span>두께·글꼴</span>
+                <select
+                  value={sp.font ?? ''}
+                  data-testid="span-font"
+                  onChange={(e) => update(i, (x) => withSpanValue(x, 'font', e.target.value ? (e.target.value as FontId) : undefined))}
+                >
+                  <option value="">자막과 같게</option>
+                  {FONTS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>글자색</span>
+                <span className="inline">
+                  <input
+                    type="checkbox"
+                    checked={sp.color !== undefined}
+                    data-testid="span-color-on"
+                    onChange={(e) => update(i, (x) => withSpanValue(x, 'color', e.target.checked ? clip.style.highlightColor : undefined))}
+                  />
+                  {sp.color !== undefined && (
+                    <input type="color" value={sp.color} data-testid="span-color" onChange={(e) => update(i, (x) => withSpanValue(x, 'color', e.target.value))} />
+                  )}
+                </span>
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                <span>크기(%)</span>
+                <input
+                  type="number"
+                  min={20}
+                  max={500}
+                  step={5}
+                  data-testid="span-scale"
+                  value={Math.round((sp.scale ?? 1) * 100)}
+                  onChange={(e) => update(i, (x) => withSpanValue(x, 'scale', clampNum(e.target.value, 20, 500) / 100))}
+                />
+              </label>
+              <label>
+                <span>회전(°)</span>
+                <input
+                  type="number"
+                  min={-180}
+                  max={180}
+                  step={1}
+                  data-testid="span-rotate"
+                  value={sp.rotate ?? 0}
+                  onChange={(e) => update(i, (x) => withSpanValue(x, 'rotate', clampNum(e.target.value, -180, 180)))}
+                />
+              </label>
+            </div>
+            <div className="row">
+              <label>
+                <span>가로 이동(px)</span>
+                <input
+                  type="number"
+                  min={-1080}
+                  max={1080}
+                  step={2}
+                  data-testid="span-dx"
+                  value={sp.dx ?? 0}
+                  onChange={(e) => update(i, (x) => withSpanValue(x, 'dx', clampNum(e.target.value, -1080, 1080)))}
+                />
+              </label>
+              <label>
+                <span>세로 이동(px)</span>
+                <input
+                  type="number"
+                  min={-1920}
+                  max={1920}
+                  step={2}
+                  data-testid="span-dy"
+                  value={sp.dy ?? 0}
+                  onChange={(e) => update(i, (x) => withSpanValue(x, 'dy', clampNum(e.target.value, -1920, 1920)))}
+                />
+              </label>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -383,6 +565,44 @@ function DissolveControls({ project, clip }: { project: Project; clip: Clip }) {
             ? `클립이 짧아서 ${formatSeconds(used)}만 겹쳐요.`
             : '컷을 가운데 두고 앞뒤로 반씩 겹쳐요. 영상 길이와 자막 위치는 그대로예요.'}
       </p>
+    </div>
+  );
+}
+
+/** Recolors a one-color clip by pointing it at a solid asset of the new color (made once, then reused). */
+function SolidColor({ project, clip, color }: { project: Project; clip: Clip; color: string }) {
+  const [draft, setDraft] = useState(color);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const apply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const made = await window.api.makeSolid(draft, project.width, project.height);
+      commit((p) => {
+        const known = p.assets.find((a) => a.path === made.path);
+        const asset = known ?? made;
+        const assets = known ? p.assets : [...p.assets, made];
+        return updateMediaClip({ ...p, assets }, clip.id, (c) => ({ ...c, assetId: asset.id }));
+      });
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="transform-controls">
+      <label>
+        <span>단색</span>
+        <span className="inline">
+          <input type="color" value={draft} data-testid="solid-recolor" onChange={(e) => setDraft(e.target.value)} />
+          <button disabled={busy || draft.toUpperCase() === color} data-testid="solid-apply" onClick={() => void apply()}>
+            이 색으로 바꾸기
+          </button>
+        </span>
+      </label>
+      {error && <div className="error">{error}</div>}
     </div>
   );
 }
@@ -418,6 +638,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
         <dt>길이</dt>
         <dd>{formatSeconds(clipDuration(clip))}</dd>
       </dl>
+      {asset.solid !== undefined && <SolidColor key={asset.id} project={project} clip={clip} color={asset.solid} />}
       {asset.kind !== 'image' && (
         <div className="transform-controls">
           <label>
