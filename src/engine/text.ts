@@ -3,16 +3,22 @@ import {
   ANIM_IN,
   ANIM_OUT,
   backdropEffect,
+  BLUR_FROM,
   CHROMA_SPLIT,
   clipDuration,
   FROST_LIFT,
   FROST_SIGMA,
   GLITCH_VARIANTS,
   GLOW_BLUR,
+  introProgress,
+  isIntroAnim,
+  letterAlphas,
   POP_FROM,
   resolveTokens,
   RISE_PX,
   spanIndex,
+  TRACK_FROM,
+  WIPE_EDGE,
 } from '../../shared/project';
 
 const FONTS: Record<FontId, { family: string; weight: number }> = {
@@ -253,6 +259,8 @@ export function wrappedLines(clip: TextClip, vars: ProjectVars, frameW: number):
 /** A run placed in block coordinates (origin = center of the unrotated text block). */
 interface Placed {
   run: Run;
+  /** Index of the run's first character in the text. */
+  from: number;
   cx: number;
   cy: number;
   h: number;
@@ -274,8 +282,19 @@ function corners(cx: number, cy: number, w: number, h: number, a: number, g: num
   return out;
 }
 
-/** Renders a text clip at its settled (post-animation) state for a frame of the given size. */
-export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
+/**
+ * Renders a text clip for a frame of the given size. `alphas` gives each character (UTF-16 unit) its opacity, null =
+ * all opaque; line breaks always come from the whole text, so letters never jump while they appear. `spread` adds
+ * letter spacing in font sizes on top of the style's, keeping those line breaks.
+ */
+export function rasterizeText(
+  clip: TextClip,
+  vars: ProjectVars,
+  frameW: number,
+  frameH: number,
+  alphas: readonly number[] | null,
+  spread: number,
+): TextRaster {
   const k = frameW / DESIGN_WIDTH;
   const style = clip.style;
   const canvas = document.createElement('canvas');
@@ -285,6 +304,7 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   const looks = looksOf(text, clip, k);
   const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
   const size = style.size * k;
+  const drawn = spread === 0 ? looks : looks.map((l) => ({ ...l, tracking: l.tracking + spread * size * l.scale }));
   const baseLineH = size * LINE_HEIGHT;
   const knockout = style.effect === 'knockout';
   // A knockout needs a plate to cut the letters out of: the box color if there is one, else the text color.
@@ -296,11 +316,11 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   const glyphPad = stroke + blur * 2 + 2;
 
   const lines = ranges.map(([a, b]) => {
-    const runs = runsIn(ctx, text, looks, a, b);
-    const trailing = b > a ? looks[b - 1].tracking : 0;
+    const runs = runsIn(ctx, text, drawn, a, b);
+    const trailing = b > a ? drawn[b - 1].tracking : 0;
     const width = runs.reduce((sum, r) => sum + r.width, 0) - trailing;
     const h = baseLineH * Math.max(1, ...runs.map((r) => r.look.scale));
-    return { runs, width, h };
+    return { runs, width, h, a };
   });
   const blockW = Math.max(1, ...lines.map((l) => l.width));
   const blockH = lines.reduce((sum, l) => sum + l.h, 0);
@@ -311,9 +331,11 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   let top = -blockH / 2;
   for (const line of lines) {
     let x = style.align === 'center' ? -line.width / 2 : -blockW / 2;
+    let from = line.a;
     for (const run of line.runs) {
-      placed.push({ run, cx: x + run.width / 2 + run.look.dx, cy: top + line.h / 2 + run.look.dy, h: baseLineH * run.look.scale });
+      placed.push({ run, from, cx: x + run.width / 2 + run.look.dx, cy: top + line.h / 2 + run.look.dy, h: baseLineH * run.look.scale });
       x += run.width;
+      from += run.text.length;
     }
     top += line.h;
   }
@@ -346,14 +368,33 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'left';
   ctx.lineJoin = 'round';
-  const drawRuns = (paint: (r: Run) => void) => {
+  // Runs are drawn left-aligned from their start, so a cut-off run or a single letter lands where the whole run would.
+  const drawRuns = (paint: (r: Run, text: string, x: number) => void) => {
     for (const p of placed) {
+      const run = p.run;
+      const a = alphas ? alphas.slice(p.from, p.from + run.text.length) : [];
+      const cut = a.findIndex((v) => v < 1);
       ctx.save();
       ctx.translate(p.cx, p.cy);
-      if (p.run.look.rotate !== 0) ctx.rotate(p.run.look.rotate);
-      ctx.font = p.run.look.font;
-      ctx.letterSpacing = `${p.run.look.tracking}px`;
-      paint(p.run);
+      if (run.look.rotate !== 0) ctx.rotate(run.look.rotate);
+      ctx.font = run.look.font;
+      ctx.letterSpacing = `${run.look.tracking}px`;
+      const left = -run.width / 2;
+      if (cut === -1) {
+        paint(run, run.text, left);
+      } else if (a.slice(cut).every((v) => v <= 0)) {
+        if (cut > 0) paint(run, run.text.slice(0, cut), left);
+      } else {
+        const alpha = ctx.globalAlpha;
+        let i = 0;
+        for (const ch of run.text) {
+          if (a[i] > 0) {
+            ctx.globalAlpha = alpha * a[i];
+            paint(run, ch, left + ctx.measureText(run.text.slice(0, i)).width);
+          }
+          i += ch.length;
+        }
+      }
       ctx.restore();
     }
   };
@@ -365,13 +406,13 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   if (stroke > 0) {
     ctx.lineWidth = stroke * 2;
     ctx.strokeStyle = style.strokeColor;
-    drawRuns((r) => ctx.strokeText(r.text, -r.width / 2, 0));
+    drawRuns((_r, t, x) => ctx.strokeText(t, x, 0));
     ctx.shadowColor = 'transparent';
   }
   if (knockout) ctx.globalCompositeOperation = 'destination-out';
-  drawRuns((r) => {
+  drawRuns((r, t, x) => {
     ctx.fillStyle = r.look.color;
-    ctx.fillText(r.text, -r.width / 2, 0);
+    ctx.fillText(t, x, 0);
   });
   ctx.globalCompositeOperation = 'source-over';
 
@@ -472,17 +513,72 @@ function glitch(r: TextRaster, size: number, text: string): TextRaster {
   return base;
 }
 
+/** Blurred copy, grown so the blur's tail stays inside; alpha multiplies the whole raster. */
+function blurred(r: TextRaster, sigma: number, alpha: number): TextRaster {
+  const m = Math.ceil(3 * sigma);
+  return grown(r, m, (g) => {
+    g.globalAlpha = alpha;
+    if (sigma > 0) g.filter = `blur(${sigma}px)`;
+    g.drawImage(r.canvas, m, m);
+  });
+}
+
+/** Left to right reveal: opaque up to the front, a soft edge after it, nothing past that. */
+function wiped(r: TextRaster, p: number): TextRaster {
+  return grown(r, 0, (g) => {
+    g.drawImage(r.canvas, 0, 0);
+    const edge = Math.max(1, WIPE_EDGE * r.w);
+    const front = p * (r.w + edge) - edge;
+    const ramp = g.createLinearGradient(front, 0, front + edge, 0);
+    ramp.addColorStop(0, 'rgba(0,0,0,1)');
+    ramp.addColorStop(1, 'rgba(0,0,0,0)');
+    g.globalCompositeOperation = 'destination-in';
+    g.fillStyle = ramp;
+    g.fillRect(0, 0, r.w, r.h);
+  });
+}
+
+/** One frame of an intro anim, `local` seconds into the clip. Preview and export both draw intros with this. */
+export function introRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number, local: number): TextRaster {
+  const text = resolveTokens(clip.text, vars);
+  const duration = clipDuration(clip);
+  const anim = clip.anim;
+  if (anim === 'type' || anim === 'word' || anim === 'letters') {
+    return rasterizeText(clip, vars, frameW, frameH, letterAlphas(anim, text, duration, local), 0);
+  }
+  if (anim !== 'blur' && anim !== 'track' && anim !== 'wipe') throw new Error(`not an intro anim: ${anim}`);
+  const p = introProgress(anim, text, duration, local);
+  if (anim === 'track') return blurred(rasterizeText(clip, vars, frameW, frameH, null, TRACK_FROM * (1 - p)), 0, p);
+  const full = cachedRaster(clip, vars, frameW, frameH);
+  if (anim === 'wipe') return wiped(full, p);
+  return blurred(full, BLUR_FROM * clip.style.size * (frameW / DESIGN_WIDTH) * (1 - p), p);
+}
+
 const cache = new Map<string, TextRaster>();
 const CACHE_LIMIT = 400;
 
-export function cachedRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
-  const key = JSON.stringify([clip.text, clip.style, clip.x, clip.y, clip.rotation, clip.spans, vars, frameW, frameH]);
+function remembered(key: string, make: () => TextRaster): TextRaster {
   const hit = cache.get(key);
   if (hit) return hit;
-  const raster = rasterizeText(clip, vars, frameW, frameH);
+  const raster = make();
   if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value as string);
   cache.set(key, raster);
   return raster;
+}
+
+function looksKey(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): unknown[] {
+  return [clip.text, clip.style, clip.x, clip.y, clip.rotation, clip.spans, vars, frameW, frameH];
+}
+
+export function cachedRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
+  const key = JSON.stringify(looksKey(clip, vars, frameW, frameH));
+  return remembered(key, () => rasterizeText(clip, vars, frameW, frameH, null, 0));
+}
+
+/** Intro frame `frame` (at frame / fps seconds into the clip). */
+export function cachedIntro(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number, frame: number, fps: number): TextRaster {
+  const key = JSON.stringify([...looksKey(clip, vars, frameW, frameH), clip.anim, clipDuration(clip), fps, frame]);
+  return remembered(key, () => introRaster(clip, vars, frameW, frameH, frame / fps));
 }
 
 export interface AnimState {
@@ -496,7 +592,8 @@ export interface AnimState {
 export function animState(clip: TextClip, t: number): AnimState {
   if (clip.anim === 'none') return { alpha: 1, scale: 1, dy: 0 };
   const local = t - clip.start;
-  const pIn = Math.max(0, Math.min(1, local / ANIM_IN));
+  // Intro anims bring the letters in themselves, so they only fade out.
+  const pIn = isIntroAnim(clip.anim) ? 1 : Math.max(0, Math.min(1, local / ANIM_IN));
   const pOut = Math.max(0, Math.min(1, (clipDuration(clip) - local) / ANIM_OUT));
   return {
     alpha: pIn * pOut,

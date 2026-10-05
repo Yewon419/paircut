@@ -83,6 +83,12 @@ const ANIMS: { id: TextAnim; label: string }[] = [
   { id: 'pop', label: '팝' },
   { id: 'fade', label: '페이드' },
   { id: 'rise', label: '올라오기' },
+  { id: 'type', label: '타자기' },
+  { id: 'word', label: '단어씩' },
+  { id: 'letters', label: '글자별 페이드' },
+  { id: 'blur', label: '블러 인' },
+  { id: 'track', label: '자간 좁히기' },
+  { id: 'wipe', label: '와이프' },
 ];
 
 const TEXT_EFFECTS: { id: TextEffect; label: string }[] = [

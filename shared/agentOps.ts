@@ -63,7 +63,10 @@ export const EditOp = z.discriminatedUnion('op', [
     tracking: z.number().min(-0.1).max(0.3).optional().describe('letter spacing in em, e.g. -0.04'),
     shadow: z.number().min(0).max(1).optional().describe('soft shadow opacity; 0 = none'),
     highlight: z.string().optional().describe('word drawn in highlight color'),
-    anim: z.enum(['none', 'fade', 'pop', 'rise']).optional(),
+    anim: z
+      .enum(['none', 'fade', 'pop', 'rise', 'type', 'word', 'letters', 'blur', 'track', 'wipe'])
+      .optional()
+      .describe('type/word/letters: letters, words or fading letters appear in turn; blur/track/wipe: blur in, letter spacing closing in, left-to-right reveal'),
     rotation: z.number().min(-180).max(180).optional().describe('degrees clockwise, whole text around its center'),
     effect: z
       .enum(['none', 'invert', 'mono', 'frost', 'knockout', 'glow', 'chroma', 'glitch', 'behind'])

@@ -128,7 +128,7 @@ function textClip(id, start, anim) {
 /** The ffmpeg side of text: pop (scale + pad per frame), fade (alpha), rise (overlay y), hidden tracks. */
 async function checkTextLayers(f, base, dir) {
   const png = readFileSync(f('txt.png')).toString('base64');
-  const layer = (clipId, y) => ({ clipId, pngBase64: png, x: 340, y, w: 401, h: 121, variants: [] });
+  const layer = (clipId, y) => ({ clipId, pngBase64: png, x: 340, y, w: 401, h: 121, variants: [], intro: null });
   const project = {
     ...base,
     tracks: [

@@ -15,6 +15,7 @@ import {
   GLITCH_EVERY,
   GLITCH_STEP,
   hasCrop,
+  isIntroAnim,
   isMediaClip,
   isTextClip,
   matteIndex,
@@ -40,6 +41,15 @@ export interface TextLayer {
   h: number;
   /** Glitch frame PNGs, same size and place as `path`. */
   variants: string[];
+  /** Intro anim frames as an image2 pattern (numbered from 0, the last one the settled text), in their own box. */
+  intro: IntroLayer | null;
+}
+
+export interface IntroLayer {
+  pattern: string;
+  count: number;
+  x: number;
+  y: number;
 }
 
 /** A .cube file the exporter writes next to the filter script; ffmpeg runs with that folder as cwd. */
@@ -207,7 +217,15 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         const textInput = (path: string): string => {
           const idx = inputIndex++;
           inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(dur), '-i', path);
-          const chain = [`fps=${fps}`, 'format=rgba'];
+          return textChain(idx, [`fps=${fps}`, 'format=rgba']);
+        };
+        // One frame per output frame, then the settled text held to the clip's end.
+        const introInput = (intro: IntroLayer): string => {
+          const idx = inputIndex++;
+          inputArgs.push('-framerate', String(fps), '-start_number', '0', '-i', intro.pattern);
+          return textChain(idx, ['format=rgba', `tpad=stop_mode=clone:stop_duration=${num(dur)}`, `trim=duration=${num(dur)}`]);
+        };
+        const textChain = (idx: number, chain: string[]): string => {
           if (clip.anim === 'pop') {
             const f = `(${POP_FROM}+${num(1 - POP_FROM)}*min(1,t/${ANIM_IN}))`;
             chain.push(
@@ -217,24 +235,20 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
               `pad=${layer.w}:${layer.h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000:eval=frame`,
             );
           }
-          if (clip.anim !== 'none') {
-            chain.push(
-              `fade=t=in:st=0:d=${ANIM_IN}:alpha=1`,
-              `fade=t=out:st=${num(Math.max(0, dur - ANIM_OUT))}:d=${ANIM_OUT}:alpha=1`,
-            );
-          }
+          if (clip.anim !== 'none' && !isIntroAnim(clip.anim)) chain.push(`fade=t=in:st=0:d=${ANIM_IN}:alpha=1`);
+          if (clip.anim !== 'none') chain.push(`fade=t=out:st=${num(Math.max(0, dur - ANIM_OUT))}:d=${ANIM_OUT}:alpha=1`);
           chain.push(`setpts=PTS-STARTPTS+${num(clip.start)}/TB`);
           const label = `t${idx}`;
           filters.push(`[${idx}:v]${chain.join(',')}[${label}]`);
           return label;
         };
-        const label = textInput(layer.path);
-        const x = String(layer.x);
+        const label = layer.intro ? introInput(layer.intro) : textInput(layer.path);
+        const x = String(layer.intro ? layer.intro.x : layer.x);
         const rise =
           clip.anim === 'rise'
             ? `+${num((RISE_PX * W) / project.width)}*(1-min(1,(t-${num(clip.start)})/${ANIM_IN}))`
             : '';
-        const y = `${layer.y}${rise}`;
+        const y = `${layer.intro ? layer.intro.y : layer.y}${rise}`;
         const effect = backdropEffect(clip.style.effect);
         const behind = clip.style.effect === 'behind' && behindSubjects(project, clip).length > 0;
         let under = '';
@@ -246,13 +260,16 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         if (effect) {
           backdrop(label, x, y, clip.start, clipEnd(clip), effect);
         } else if (layer.variants.length > 0) {
-          // Same slots as glitchVariant(): the plain letters outside a burst, variant n inside it.
+          // Same slots as glitchVariant(): the plain letters outside a burst, variant n inside it, none during an intro.
           const u = `(t-${num(clip.start)}+${num(GLITCH_EPS)})`;
           const p = `mod(${u},${num(GLITCH_EVERY)})`;
-          overlay(label, x, y, clip.start, clipEnd(clip), `gte(${p},${num(GLITCH_BURST)})`);
+          // Half a frame early so the cut lands between the last intro frame and the first settled one.
+          const settled = `gte(t-${num(clip.start)},${num(((layer.intro?.count ?? 1) - 1.5) / fps)})`;
+          overlay(label, x, y, clip.start, clipEnd(clip), `gte(${p},${num(GLITCH_BURST)})+not(${settled})`);
           layer.variants.forEach((path, v) => {
             const n = `mod(floor(${u}/${num(GLITCH_EVERY)})+floor(${p}/${num(GLITCH_STEP)}),${layer.variants.length})`;
-            overlay(textInput(path), x, y, clip.start, clipEnd(clip), `lt(${p},${num(GLITCH_BURST)})*eq(${n},${v})`);
+            const at = `lt(${p},${num(GLITCH_BURST)})*eq(${n},${v})*${settled}`;
+            overlay(textInput(path), String(layer.x), String(layer.y), clip.start, clipEnd(clip), at);
           });
         } else {
           overlay(label, x, y, clip.start, clipEnd(clip));

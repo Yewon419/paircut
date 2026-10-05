@@ -102,7 +102,8 @@ export type FontId =
   | 'pres-black'
   | 'hand';
 export type TextAlign = 'center' | 'left';
-export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
+/** Intro anims (see INTRO_ANIMS) bring the letters in themselves, frame by frame; the rest ramp the whole block. */
+export type TextAnim = 'none' | 'fade' | 'pop' | 'rise' | 'type' | 'word' | 'letters' | 'blur' | 'track' | 'wipe';
 
 /**
  * How the letters treat the picture under them.
@@ -279,6 +280,98 @@ export const ANIM_IN = 0.25;
 export const ANIM_OUT = 0.15;
 export const POP_FROM = 0.85;
 export const RISE_PX = 40;
+/**
+ * Intro animations bring the letters in themselves: the renderer draws every frame of the intro (preview and export
+ * alike) and the exporter only lines those frames up. After the intro the clip shows its settled raster.
+ */
+export const INTRO_ANIMS = ['type', 'word', 'letters', 'blur', 'track', 'wipe'] as const;
+export type IntroAnim = (typeof INTRO_ANIMS)[number];
+export type StepAnim = 'type' | 'word' | 'letters';
+
+export function isIntroAnim(anim: TextAnim): anim is IntroAnim {
+  return (INTRO_ANIMS as readonly string[]).includes(anim);
+}
+
+/** Seconds per step (letter or word), sped up so the steps end within INTRO_SHARE of the clip. */
+export const TYPE_STEP = 0.06;
+export const WORD_STEP = 0.22;
+export const LETTER_STEP = 0.05;
+/** Seconds one letter of 'letters' takes to fade in. */
+export const LETTER_FADE = 0.3;
+/** Length of the blur, track and wipe intros. */
+export const REVEAL = 0.8;
+export const INTRO_SHARE = 0.6;
+/** Blur intro starts at this blur radius, in font sizes. */
+export const BLUR_FROM = 0.35;
+/** Track intro starts with this much extra letter spacing, in font sizes. */
+export const TRACK_FROM = 0.6;
+/** Soft edge of the wipe, as a share of the text width. */
+export const WIPE_EDGE = 0.25;
+
+/** Text lengths (UTF-16 units) after each letter; whitespace is not a step and a code point is never split. */
+export function letterStops(text: string): number[] {
+  const stops: number[] = [];
+  let i = 0;
+  for (const ch of text) {
+    i += ch.length;
+    if (!/\s/.test(ch)) stops.push(i);
+  }
+  return stops;
+}
+
+/** Text lengths after each word (run of non-whitespace). */
+export function wordStops(text: string): number[] {
+  const stops: number[] = [];
+  for (const m of text.matchAll(/\S+/g)) stops.push((m.index ?? 0) + m[0].length);
+  return stops;
+}
+
+function stepOf(anim: StepAnim, steps: number, duration: number): number {
+  if (steps < 2) return 0;
+  if (anim === 'letters') return Math.min(LETTER_STEP, Math.max(0, INTRO_SHARE * duration - LETTER_FADE) / (steps - 1));
+  return Math.min(anim === 'word' ? WORD_STEP : TYPE_STEP, (INTRO_SHARE * duration) / steps);
+}
+
+/** Seconds from the clip start until the intro is over, never past the clip. */
+export function introLength(anim: IntroAnim, text: string, duration: number): number {
+  if (anim === 'blur' || anim === 'track' || anim === 'wipe') return Math.min(REVEAL, INTRO_SHARE * duration);
+  const stops = anim === 'word' ? wordStops(text) : letterStops(text);
+  const lastStart = Math.max(0, stops.length - 1) * stepOf(anim, stops.length, duration);
+  return Math.min(duration, lastStart + (anim === 'letters' ? LETTER_FADE : 0));
+}
+
+/** Intro frames drawn at local times 0, 1/fps, ...; frame n is shown from start + n / fps. */
+export function introFrames(anim: IntroAnim, text: string, duration: number, fps: number): number {
+  return Math.ceil(introLength(anim, text, duration) * fps - 1e-6);
+}
+
+/** Opacity of each character (UTF-16 unit) `local` seconds into a type, word or letters intro. */
+export function letterAlphas(anim: StepAnim, text: string, duration: number, local: number): number[] {
+  const stops = anim === 'word' ? wordStops(text) : letterStops(text);
+  const alphas = new Array<number>(text.length).fill(1);
+  if (stops.length === 0) return alphas;
+  const step = stepOf(anim, stops.length, duration);
+  let from = 0;
+  stops.forEach((to, k) => {
+    const start = k * step;
+    const a =
+      anim === 'letters'
+        ? Math.max(0, Math.min(1, (local - start) / LETTER_FADE))
+        : local + 1e-6 >= start
+          ? 1
+          : 0;
+    for (let i = from; i < to; i++) alphas[i] = a;
+    from = to;
+  });
+  return alphas;
+}
+
+/** Eased 0..1 progress of a blur, track or wipe intro. */
+export function introProgress(anim: 'blur' | 'track' | 'wipe', text: string, duration: number, local: number): number {
+  const len = introLength(anim, text, duration);
+  const p = len <= 0 ? 1 : Math.max(0, Math.min(1, local / len));
+  return 1 - (1 - p) ** 3;
+}
 
 export const DEFAULT_VARS: ProjectVars = {
   uploadDate: '',

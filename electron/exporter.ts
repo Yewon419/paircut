@@ -28,7 +28,9 @@ export function runExport(
       writeFileSync(vp, Buffer.from(v, 'base64'));
       return vp;
     });
-    return { clipId: t.clipId, path, x: t.x, y: t.y, w: t.w, h: t.h, variants };
+    t.intro?.frames.forEach((f, j) => writeFileSync(join(workDir, `text${i}f${String(j).padStart(4, '0')}.png`), Buffer.from(f, 'base64')));
+    const intro = t.intro ? { pattern: join(workDir, `text${i}f%04d.png`), count: t.intro.frames.length, x: t.intro.x, y: t.intro.y } : null;
+    return { clipId: t.clipId, path, x: t.x, y: t.y, w: t.w, h: t.h, variants, intro };
   });
   let plan;
   try {

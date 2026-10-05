@@ -875,6 +875,34 @@ try {
     check(`glitch frame at ${t}s: preview matches export`, close(burst.shown, burst.made, 10), `${burst.shown} / ${burst.made}`);
   }
 
+  // Intro anims: frames the renderer draws, played by the exporter as an image sequence. The right letter of "I I"
+  // is still coming in mid-intro, so a block over it must differ from the settled text and match the export.
+  const introProject = (anim) => {
+    const pr = fxProject('none', anim);
+    pr.tracks[0].clips = [{ ...fxClip('none', anim), text: 'I I' }];
+    return pr;
+  };
+  await win.evaluate((pr) => window.__cutdesk.load(pr), introProject('none'));
+  const pair = await layerOf('fx');
+  check('a plain text has no intro frames', pair.intro === null);
+  const rightP = { x: pair.x + pair.w - 100, y: pair.y + Math.round(pair.h / 2) - 50, s: 100 };
+  const pairSettled = await settled(1, rightP);
+  for (const [anim, t] of [['type', 0], ['word', 0.1], ['letters', 0.1], ['blur', 0.3], ['track', 0.3], ['wipe', 0.3]]) {
+    await win.evaluate((pr) => window.__cutdesk.load(pr), introProject(anim));
+    const lay = await layerOf('fx');
+    check(`${anim}: exports intro frames`, lay.intro !== null && lay.intro.frames.length > 1, String(lay.intro?.frames.length));
+    const mid = await settled(t, rightP);
+    const late = await settled(1, rightP);
+    const out = join(dir, `intro-${anim}.mp4`);
+    await exportTo(out);
+    const madeMid = samplePixel(out, t, rightP.x, rightP.y, 100);
+    const madeLate = samplePixel(out, 1, rightP.x, rightP.y, 100);
+    check(`${anim}: mid-intro differs from the settled text`, !close(mid, pairSettled, 12), `${mid} vs ${pairSettled}`);
+    check(`${anim}: mid-intro preview matches export`, close(mid, madeMid, 24), `${mid} / ${madeMid}`);
+    check(`${anim}: settled after the intro, preview and export`, close(late, pairSettled, 3) && close(madeLate, pairSettled, 24),
+      `${late} / ${madeLate} want ${pairSettled}`);
+  }
+
   // The effect from the inspector and from Claude.
   await win.evaluate((p) => window.__cutdesk.load(p), fxProject('none', 'none'));
   await win.locator('[data-clip="fx"]').click();

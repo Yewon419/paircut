@@ -16,6 +16,16 @@ export interface TextImage {
   h: number;
   /** Glitch frames as PNG base64, same size and place as the main image. */
   variants: string[];
+  /** Intro anim frames, one per output frame from the clip start, then the settled text; all in one shared box. */
+  intro: TextIntro | null;
+}
+
+export interface TextIntro {
+  frames: string[];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export interface MatteProgress {

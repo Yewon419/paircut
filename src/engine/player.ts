@@ -4,6 +4,7 @@ import {
   audioGain,
   behindOverlap,
   behindSubjects,
+  clipDuration,
   clipEnd,
   cropBox,
   frameTime,
@@ -15,13 +16,16 @@ import {
   matteIndex,
   placeVisual,
   projectDuration,
+  introFrames,
+  isIntroAnim,
+  resolveTokens,
   visualAlpha,
   visualSpan,
 } from '../../shared/project';
 import { setPlayhead, useEditor } from '../store';
 import { isNeutral } from '../../shared/color';
 import { grader } from './grade';
-import { animState, cachedRaster, DESIGN_WIDTH, drawText } from './text';
+import { animState, cachedIntro, cachedRaster, DESIGN_WIDTH, drawText } from './text';
 
 type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
 
@@ -226,8 +230,16 @@ class Compositor {
       if (track.kind === 'text') {
         const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
         if (clip && isTextClip(clip)) {
-          const r = cachedRaster(clip, project.vars, canvas.width, canvas.height);
-          const v = r.variants.length > 0 ? glitchVariant(t - clip.start) : -1;
+          // Intro frames sit on the frame grid, like the image sequence the exporter plays.
+          const frame = Math.floor((t - clip.start) * project.fps + 1e-6);
+          const intro =
+            isIntroAnim(clip.anim) &&
+            frame < introFrames(clip.anim, resolveTokens(clip.text, project.vars), clipDuration(clip), project.fps);
+          const r = intro
+            ? cachedIntro(clip, project.vars, canvas.width, canvas.height, frame, project.fps)
+            : cachedRaster(clip, project.vars, canvas.width, canvas.height);
+          // No glitch bursts during an intro: a burst frame always shows the whole text.
+          const v = r.variants.length > 0 && !intro ? glitchVariant(t - clip.start) : -1;
           const behind = clip.style.effect === 'behind';
           if (behind) this.keepUnder(canvas);
           drawText(ctx, v >= 0 ? { ...r, canvas: r.variants[v] } : r, animState(clip, t), k, clip.style.effect);
