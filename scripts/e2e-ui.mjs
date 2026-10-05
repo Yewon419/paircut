@@ -742,6 +742,198 @@ try {
   check('export: motion graphic is see-through around its shape', near(exEdge, [254, 0, 0]), String(exEdge));
   check('export: motion graphic draws its shape', near(exMid, [0, 255, 0]), String(exMid));
 
+  // Text effects over a red picture: each treats the picture under the letters, preview and export alike.
+  const fxClip = (effect, anim) => ({ ...text('fx', 0, 2, 'I', { ...outlined(300, 'black'), strokeWidth: 0, effect }, 0.5, 0.5, anim),
+    rotation: 0, spans: [] });
+  const fxProject = (effect, anim) => ({
+    ...base,
+    assets: [pic],
+    tracks: [
+      { id: 't-fx', kind: 'text', muted: false, hidden: false, clips: [fxClip(effect, anim)] },
+      { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'bg', assetId: pic.id, start: 0, in: 0, out: 2 }] },
+    ],
+  });
+  await win.evaluate((p) => window.__cutdesk.load(p), fxProject('none', 'none'));
+  const glyph = await layerOf('fx');
+  // A 24px block fully inside the letter, found on the plain raster; centered text keeps the letter in place for every effect.
+  const inside = await win.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    const solid = (x, y) => {
+      for (let j = 0; j < 24; j++) for (let i = 0; i < 24; i++) if (d[((y + j) * c.width + x + i) * 4 + 3] < 250) return false;
+      return true;
+    };
+    const cx = Math.floor(c.width / 2) - 12;
+    for (let y = Math.floor(c.height / 2) - 12; y > 0; y -= 2) {
+      if (!solid(cx, y)) continue;
+      // The letter's right edge on that row, for effects that paint just outside it.
+      let edge = cx;
+      while (edge < c.width && d[((y + 12) * c.width + edge) * 4 + 3] >= 128) edge++;
+      return { x: cx, y, edge };
+    }
+    return null;
+  }, glyph.pngBase64);
+  check('effect probe finds the inside of the letter', inside !== null, JSON.stringify(glyph && { w: glyph.w, h: glyph.h }));
+  const inP = { x: glyph.x + inside.x, y: glyph.y + inside.y, s: 24 };
+  const besideP = { x: glyph.x + glyph.w + 30, y: glyph.y + inside.y, s: 24 };
+  const settled = async (t, p) => {
+    await win.evaluate((at) => window.__cutdesk.seek(at), t);
+    let last = null;
+    for (let i = 0; i < 20; i++) {
+      await win.waitForTimeout(120);
+      const now = await readCanvas(p);
+      if (last && String(now) === String(last)) return now;
+      last = now;
+    }
+    return last;
+  };
+  const close = (a, b, tol) => Math.max(...a.map((v, i) => Math.abs(v - b[i]))) <= tol;
+  const effects = [
+    { effect: 'invert', anim: 'none', t: 1, at: inP, want: [0, 255, 255] },
+    { effect: 'invert', anim: 'fade', t: 0.1, at: inP, want: [153, 102, 102] },
+    { effect: 'mono', anim: 'none', t: 1, at: inP, want: [77, 77, 77] },
+    { effect: 'frost', anim: 'none', t: 1, at: inP, want: [255, 64, 64] },
+    { effect: 'knockout', anim: 'none', t: 1, at: inP, want: [255, 0, 0] },
+    { effect: 'knockout', anim: 'none', t: 1, at: besideP, want: [255, 255, 255] },
+    { effect: 'invert', anim: 'none', t: 1, at: besideP, want: [255, 0, 0] },
+  ];
+  for (const e of effects) {
+    await win.evaluate((p) => window.__cutdesk.load(p), fxProject(e.effect, e.anim));
+    const shown = await settled(e.t, e.at);
+    const out = join(dir, `fx-${e.effect}-${e.anim}.mp4`);
+    await exportTo(out);
+    const made = samplePixel(out, e.t, e.at.x, e.at.y, 24);
+    const where = e.at === inP ? 'inside' : 'beside';
+    check(`${e.effect}${e.anim === 'fade' ? ' mid fade' : ''} ${where} the letter: preview`, close(shown, e.want, 6), `${shown} want ${e.want}`);
+    check(`${e.effect}${e.anim === 'fade' ? ' mid fade' : ''} ${where} the letter: export`, close(made, e.want, 8), `${made} want ${e.want}`);
+  }
+  // Frost over a real picture: the blur reads neighbours, so compare preview with export rather than a formula.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...fxProject('frost', 'none'),
+    assets: [fx.land],
+    tracks: [
+      { id: 't-fx', kind: 'text', muted: false, hidden: false, clips: [fxClip('frost', 'none')] },
+      { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'bg', assetId: fx.land.id, start: 0, in: 0, out: 2 }] },
+    ],
+  });
+  const frostShown = await settled(1, inP);
+  const frostOut = join(dir, 'fx-frost-land.mp4');
+  await exportTo(frostOut);
+  const frostMade = samplePixel(frostOut, 1, inP.x, inP.y, 24);
+  check('frost over footage: preview matches export', close(frostShown, frostMade, 14), `preview ${frostShown} / export ${frostMade}`);
+  // Glow, chroma and glitch are baked into the text images, so preview and export are compared pixel for pixel.
+  const atBoth = async (effect, t, p, size) => {
+    await win.evaluate((pr) => window.__cutdesk.load(pr), fxProject(effect, 'none'));
+    const shown = await settled(t, p);
+    const out = join(dir, `fx-${effect}-${t}.mp4`);
+    await exportTo(out);
+    return { shown, made: samplePixel(out, t, p.x, p.y, size) };
+  };
+  const haloP = { x: glyph.x + inside.edge + 20, y: glyph.y + inside.y, s: 8 };
+  const glowAt = await atBoth('glow', 1, haloP, 8);
+  check('glow lights the picture beside the letter: preview', glowAt.shown[1] > 80, String(glowAt.shown));
+  check('glow: preview matches export', close(glowAt.shown, glowAt.made, 14), `${glowAt.shown} / ${glowAt.made}`);
+  const fringeP = { x: glyph.x + inside.edge + 3, y: glyph.y + inside.y + 8, s: 6 };
+  const chromaAt = await atBoth('chroma', 1, fringeP, 6);
+  check('chroma puts a cyan fringe right of the letter: preview', close(chromaAt.shown, [0, 229, 255], 30), String(chromaAt.shown));
+  check('chroma: preview matches export', close(chromaAt.shown, chromaAt.made, 20), `${chromaAt.shown} / ${chromaAt.made}`);
+  await win.evaluate((pr) => window.__cutdesk.load(pr), fxProject('glitch', 'none'));
+  const gl = await layerOf('fx');
+  check('glitch makes three distinct frames', gl.variants.length === 3 && new Set([gl.pngBase64, ...gl.variants]).size === 4);
+  const plainAt = await atBoth('glitch', 1, inP, 24);
+  check('glitch is plain between bursts', close(plainAt.shown, [255, 255, 255], 6) && close(plainAt.made, [255, 255, 255], 8),
+    `${plainAt.shown} / ${plainAt.made}`);
+  // Mid-burst frames (variant 1 at 0.1s, variant 2 at 1.6s): compare a wide strip across the letter and its shifted bands.
+  const strip = { x: glyph.x - 40, y: glyph.y + Math.round(glyph.h / 2) - 60, s: 120 };
+  const calm = await settled(1, strip);
+  for (const t of [0.1, 1.6]) {
+    const burst = await atBoth('glitch', t, strip, 120);
+    check(`glitch frame at ${t}s differs from the plain letters`, !close(burst.shown, calm, 3), `${burst.shown} vs ${calm}`);
+    check(`glitch frame at ${t}s: preview matches export`, close(burst.shown, burst.made, 10), `${burst.shown} / ${burst.made}`);
+  }
+
+  // The effect from the inspector and from Claude.
+  await win.evaluate((p) => window.__cutdesk.load(p), fxProject('none', 'none'));
+  await win.locator('[data-clip="fx"]').click();
+  await win.locator('[data-testid="text-effect"]').selectOption('mono');
+  check('inspector sets the text effect', (await clipOf('fx')).style.effect === 'mono');
+  const fxOp = await tool('edit', { ops: [{ op: 'set_text', clip: 'fx', effect: 'frost' }] });
+  check('Claude sets the text effect and reads it back', !fxOp.isError && (await tool('get_state')).text.includes('fx=frost'), fxOp.text);
+  const oldStyle = await win.evaluate(() => {
+    const p = structuredClone(window.__cutdesk.state().project);
+    delete p.tracks[0].clips[0].style.effect;
+    return p;
+  });
+  await win.evaluate((p) => window.__cutdesk.load(p), oldStyle);
+  check('a project saved before effects opens with none', (await clipOf('fx')).style.effect === 'none');
+
+  // Behind the subject: masks cut by rembg from a green box sliding over red; the box covers the letter at 1s, not at 0.1s.
+  const boxAsset = await importMedia(f('box.mp4'), join(dir, 'cache'));
+  const behindProject = fxProject('behind', 'none');
+  behindProject.assets = [boxAsset];
+  behindProject.tracks[1].clips = [{ ...MC, id: 'bg', assetId: boxAsset.id, start: 0, in: 0, out: 2 }];
+  await win.evaluate((p) => window.__cutdesk.load(p), behindProject);
+  await win.locator('[data-clip="fx"]').click();
+  check('behind asks for subject masks first', (await win.locator('[data-testid="matte-make"]').count()) === 1);
+  const earlyErr = await win.evaluate((outPath) => window.api
+    .startExport(window.__cutdesk.state().project, { outPath, height: 1920 }, window.__cutdesk.texts(1920))
+    .then(() => 'started', (e) => e.message), join(dir, 'behind-early.mp4'));
+  check('export refuses behind text without masks', earlyErr.includes('subject masks are missing'), earlyErr);
+  const started = Date.now();
+  await win.locator('[data-testid="matte-make"]').click();
+  await win.locator('[data-testid="matte-ready"]').waitFor({ timeout: 300000 });
+  const matte = (await win.evaluate(() => window.__cutdesk.state().project.assets[0].matte));
+  check('rembg cuts a mask per frame', matte?.count >= 60, `${JSON.stringify(matte && { count: matte.count, from: matte.from, to: matte.to })} in ${Math.round((Date.now() - started) / 1000)}s`);
+  for (const [t, want, what] of [[1, [0, 192, 0], 'box in front of the letter'], [0.1, [255, 255, 255], 'letter where the box is not']]) {
+    const shown = await settled(t, inP);
+    const out = join(dir, `behind-${t}.mp4`);
+    await exportTo(out);
+    const made = samplePixel(out, t, inP.x, inP.y, 24);
+    // The preview's own decode of the box (beside the letter) is the reference: the subject must look like the footage.
+    const ref = t === 1 ? await readCanvas(besideP) : want;
+    check(`behind at ${t}s, ${what}: preview`, close(shown, ref, 12), `${shown} want ${ref}`);
+    check(`behind at ${t}s, ${what}: export`, close(made, want, 14), `${made} want ${want}`);
+  }
+
+  // Text templates: save the selected text, add it back, delete it; built-ins hide and come back.
+  const tplProject = fxProject('none', 'none');
+  tplProject.tracks[0].clips = [{ ...fxClip('glow', 'pop'), rotation: 12, spans: [{ match: 'I', nth: 0, color: '#FFD166' }] }];
+  await win.evaluate((p) => window.__cutdesk.load(p), tplProject);
+  await win.locator('[data-tab="text"]').click();
+  check('template save waits for a selected text', await win.locator('[data-testid="template-save"]').isDisabled());
+  await win.locator('[data-clip="fx"]').click();
+  await win.locator('[data-testid="template-name"]').fill('테스트 글로우');
+  await win.locator('[data-testid="template-save"]').click();
+  await win.locator('[data-template="테스트 글로우"]').waitFor({ timeout: 5000 });
+  check('a saved template shows in the text tab', true);
+  const idsBefore = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips))).map((c) => c.id);
+  await win.evaluate(() => window.__cutdesk.seek(3));
+  await win.locator('[data-template="테스트 글로우"]').click();
+  const made = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips))).find((c) => !idsBefore.includes(c.id));
+  check('a template adds the saved text, look, motion and spans',
+    made?.text === 'I' && made.style.effect === 'glow' && made.anim === 'pop' && made.rotation === 12 &&
+      made.spans[0]?.color === '#FFD166' && Math.abs(made.out - 2) < 1e-6 && made.preset.startsWith('u-'),
+    JSON.stringify(made && { text: made.text, effect: made.style.effect, anim: made.anim, rotation: made.rotation, out: made.out }));
+  await win.locator('[data-delete-template="테스트 글로우"]').click();
+  check('deleting a template removes it', (await win.locator('[data-template="테스트 글로우"]').count()) === 0);
+  await win.locator('[data-delete-template="딴지"]').click();
+  check('deleting a built-in template hides it', (await win.locator('[data-preset="aside"]').count()) === 0);
+  await win.reload();
+  await win.waitForFunction(() => window.__cutdesk !== undefined);
+  await win.locator('[data-tab="text"]').click();
+  check('deletions survive a restart', (await win.locator('[data-preset="aside"]').count()) === 0 &&
+    (await win.locator('[data-template="테스트 글로우"]').count()) === 0);
+  await win.locator('[data-testid="template-restore"]').click();
+  check('built-in templates come back', (await win.locator('[data-preset="aside"]').count()) === 1 &&
+    (await win.locator('[data-testid="template-restore"]').count()) === 0);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

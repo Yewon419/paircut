@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react';
 import type { Board } from '../conti';
 import { draftFromRows, parseBoard } from '../conti';
-import { makeTextClip, PRESETS, presetById } from '../presets';
+import type { TextPreset } from '../presets';
+import { makeTextClip, presetById } from '../presets';
+import { allTemplates, deleteTemplate, restoreBuiltinTemplates, saveTemplate, useTemplates } from '../textTemplates';
 import { parseSrt, toSrt } from '../srt';
-import { textClips } from '../../shared/project';
+import { isTextClip, textClips } from '../../shared/project';
 import { addTextClip, addTextTracks, frameSnap, uid, useEditor } from '../store';
 import { AgentPanel } from './AgentPanel';
 import { MediaBin } from './MediaBin';
@@ -50,10 +52,27 @@ export function SidePanel() {
 
 function TextTab() {
   const [error, setError] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const hidden = useTemplates((s) => s.hidden);
+  useTemplates((s) => s.user);
+  const selected = useEditor((s) =>
+    s.project.tracks.flatMap((t) => t.clips).find((c) => c.id === s.selectedClipId && isTextClip(c)),
+  );
 
-  const add = (presetId: string) => {
+  const add = (template: TextPreset) => {
     const { project, playhead } = useEditor.getState();
-    addTextClip(makeTextClip(presetById(presetId), uid('c'), frameSnap(playhead, project.fps)));
+    addTextClip(makeTextClip(template, uid('c'), frameSnap(playhead, project.fps)));
+  };
+
+  const saveSelected = () => {
+    setError(null);
+    if (!selected || !isTextClip(selected)) return;
+    try {
+      saveTemplate(name.trim() || selected.text.slice(0, 12), selected);
+      setName('');
+    } catch (err) {
+      setError((err as Error).message);
+    }
   };
 
   const importSrt = async () => {
@@ -88,17 +107,40 @@ function TextTab() {
   return (
     <section className="panel">
       <div className="panel-head">
-        <span>빛뜰 프리셋</span>
+        <span>템플릿</span>
+        {hidden.length > 0 && (
+          <button className="link" onClick={restoreBuiltinTemplates} data-testid="template-restore">
+            기본 템플릿 되살리기
+          </button>
+        )}
       </div>
       <div className="preset-list">
-        {PRESETS.map((p) => (
-          <button key={p.id} className="preset" onClick={() => add(p.id)} data-preset={p.id}>
-            <span className="preset-name">{p.label}</span>
-            <span className="preset-sample">{p.text}</span>
-          </button>
+        {allTemplates().map((p) => (
+          <div key={p.id} className="preset-row">
+            <button className="preset" onClick={() => add(p)} data-preset={p.id} data-template={p.label}>
+              <span className="preset-name">{p.label}</span>
+              <span className="preset-sample">{p.text}</span>
+            </button>
+            <button className="preset-x" onClick={() => deleteTemplate(p.id)} title="템플릿 삭제" data-delete-template={p.label}>
+              ×
+            </button>
+          </div>
         ))}
       </div>
       <p className="hint">재생 헤드 위치에 추가돼요. 겹치면 위에 새 텍스트 트랙이 생겨요.</p>
+      <div className="button-row">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && saveSelected()}
+          placeholder={selected ? '템플릿 이름 (비우면 문구로)' : '타임라인에서 텍스트를 고르세요'}
+          disabled={!selected}
+          data-testid="template-name"
+        />
+        <button onClick={saveSelected} disabled={!selected} data-testid="template-save">
+          템플릿으로 추가
+        </button>
+      </div>
       <div className="panel-head">
         <span>SRT</span>
       </div>

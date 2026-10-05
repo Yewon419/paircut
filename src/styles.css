@@ -889,6 +889,40 @@ input[type='range'] {
   padding: 8px 10px;
 }
 
+.preset-row {
+  display: flex;
+}
+
+.preset-row .preset {
+  flex: 1;
+  min-width: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.preset-x {
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0 10px;
+  color: var(--dim);
+}
+
+.panel-head .link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--dim);
+  font-weight: 400;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.side .button-row input {
+  flex: 1;
+  min-width: 0;
+}
+
 .preset-name {
   font-weight: 700;
 }

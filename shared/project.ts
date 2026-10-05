@@ -18,6 +18,28 @@ export interface MediaAsset {
   solid?: string;
   /** Webm codec when the video carries transparency (motion graphics); export must decode it with libvpx. */
   alpha?: 'vp8' | 'vp9';
+  /** Subject masks for text drawn behind the subject; see behindSubjects(). */
+  matte?: Matte;
+}
+
+/**
+ * Per-frame subject masks cut by rembg: RGBA PNGs `m00000.png`.. in `dir`, white with alpha = subject.
+ * Frame n is the source picture at from + n / fps (stills have one frame).
+ */
+export interface Matte {
+  dir: string;
+  from: number;
+  to: number;
+  fps: number;
+  count: number;
+}
+
+export function matteFile(matte: Matte, n: number): string {
+  return `${matte.dir}/m${String(n).padStart(5, '0')}.png`;
+}
+
+export function matteIndex(matte: Matte, source: number): number {
+  return Math.min(matte.count - 1, Math.max(0, Math.round((source - matte.from) * matte.fps)));
 }
 
 export interface ClipTransform {
@@ -82,6 +104,50 @@ export type FontId =
 export type TextAlign = 'center' | 'left';
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise';
 
+/**
+ * How the letters treat the picture under them.
+ * invert: difference with the text color (white = photo negative). mono: the picture in gray.
+ * frost: the picture blurred and lifted toward white. knockout: a plate in the text color with the letters cut out.
+ * glow: a soft halo in the text color. chroma: red and cyan copies split sideways behind the letters.
+ * glitch: short bursts where the letters are sliced and shifted with a wider split.
+ * behind: the subject of the footage below (person, object) is drawn again over the letters.
+ */
+export type TextEffect = 'none' | 'invert' | 'mono' | 'frost' | 'knockout' | 'glow' | 'chroma' | 'glitch' | 'behind';
+export type BackdropEffect = 'invert' | 'mono' | 'frost';
+
+export function backdropEffect(effect: TextEffect): BackdropEffect | null {
+  return effect === 'invert' || effect === 'mono' || effect === 'frost' ? effect : null;
+}
+
+/** Gray weights of the canvas 'saturation' blend (Rec. 601 rounded); the exporter mixes channels with the same numbers. */
+export const MONO_WEIGHTS = [0.3, 0.59, 0.11] as const;
+/** Frost blur sigma in pixels of a 1080-wide frame, and how far the blurred picture is mixed toward white. */
+export const FROST_SIGMA = 14;
+export const FROST_LIFT = 0.25;
+/** Glow blur (canvas shadowBlur) and chroma split, as fractions of the font size. */
+export const GLOW_BLUR = 0.35;
+export const CHROMA_SPLIT = 0.035;
+
+/**
+ * Glitch timing in clip-local seconds: a burst every GLITCH_EVERY lasting GLITCH_BURST, switching variant every
+ * GLITCH_STEP. All three have at most 4 decimals so the exporter's expression uses the very same numbers.
+ */
+export const GLITCH_EVERY = 1.5;
+export const GLITCH_BURST = 0.3;
+export const GLITCH_STEP = 0.1;
+export const GLITCH_VARIANTS = 3;
+/** Nudges frame times off the slot edges so float rounding in ffmpeg and JS lands on the same slot. */
+export const GLITCH_EPS = 0.0001;
+
+/** Which glitch variant shows at clip-local time `local`, or -1 for the plain letters. */
+export function glitchVariant(local: number): number {
+  const u = local + GLITCH_EPS;
+  const p = u - GLITCH_EVERY * Math.floor(u / GLITCH_EVERY);
+  if (p >= GLITCH_BURST) return -1;
+  const n = Math.floor(u / GLITCH_EVERY) + Math.floor(p / GLITCH_STEP);
+  return n % GLITCH_VARIANTS;
+}
+
 export interface TextStyle {
   font: FontId;
   size: number;
@@ -99,9 +165,10 @@ export interface TextStyle {
   shadow: number;
   /** Family name of a font installed on this PC; '' = use `font`. Never bundled, so other PCs fall back to `font`. */
   customFont: string;
+  effect: TextEffect;
 }
 
-export const TEXT_STYLE_DEFAULTS = { tracking: 0, shadow: 0, customFont: '' };
+export const TEXT_STYLE_DEFAULTS = { tracking: 0, shadow: 0, customFont: '', effect: 'none' as TextEffect };
 
 /** Names that would break out of the quoted CSS family in a canvas font string. */
 export function validCustomFont(name: string): boolean {
@@ -341,6 +408,56 @@ export function visualAlpha(span: VisualSpan, t: number): number {
 /** Source position for a frame at t; past either end of the file it holds the first or last frame. */
 export function frameTime(clip: Clip, sourceDuration: number, t: number): number {
   return Math.min(sourceDuration, Math.max(0, sourceTime(clip, t)));
+}
+
+/** The clips a 'behind' text hides behind: those on the nearest shown video track below its track that overlap it. */
+export function behindSubjects(project: Project, text: TextClip): Clip[] {
+  const visual = project.tracks.filter((t) => t.kind !== 'audio');
+  const at = visual.findIndex((t) => t.clips.some((c) => c.id === text.id));
+  if (at < 0) return [];
+  const below = visual.slice(at + 1).find((t) => t.kind === 'video' && !t.hidden);
+  if (!below) return [];
+  return below.clips.filter(isMediaClip).filter((c) => c.start < clipEnd(text) && clipEnd(c) > text.start);
+}
+
+/** Timeline span where a 'behind' text and one of its subject clips are both on screen. */
+export function behindOverlap(text: TextClip, clip: Clip): { from: number; to: number } {
+  return { from: Math.max(text.start, clip.start), to: Math.min(clipEnd(text), clipEnd(clip)) };
+}
+
+export interface MatteNeed {
+  assetId: string;
+  from: number;
+  to: number;
+}
+
+function covers(matte: Matte | undefined, fps: number, from: number, to: number): boolean {
+  return !!matte && matte.fps === fps && matte.from <= from + 1e-6 && matte.to >= to - 1e-6;
+}
+
+/** Source ranges the 'behind' texts need masks for, one per asset, merged with what the asset already has. Empty = ready. */
+export function matteNeeds(project: Project): MatteNeed[] {
+  const need = new Map<string, MatteNeed>();
+  for (const track of project.tracks) {
+    if (track.kind !== 'text' || track.hidden) continue;
+    for (const text of textClips(track)) {
+      if (text.style.effect !== 'behind') continue;
+      for (const clip of behindSubjects(project, text)) {
+        const asset = assetById(project, clip.assetId);
+        const span = behindOverlap(text, clip);
+        const from = asset.kind === 'image' ? 0 : frameTime(clip, asset.duration, span.from);
+        const to = asset.kind === 'image' ? 0 : frameTime(clip, asset.duration, span.to);
+        const prev = need.get(asset.id);
+        need.set(asset.id, { assetId: asset.id, from: Math.min(from, prev?.from ?? from), to: Math.max(to, prev?.to ?? to) });
+      }
+    }
+  }
+  return [...need.values()].flatMap((n) => {
+    const m = assetById(project, n.assetId).matte;
+    if (covers(m, project.fps, n.from, n.to)) return [];
+    const keep = m && m.fps === project.fps;
+    return [{ ...n, from: keep ? Math.min(m.from, n.from) : n.from, to: keep ? Math.max(m.to, n.to) : n.to }];
+  });
 }
 
 export function projectDuration(project: Project): number {

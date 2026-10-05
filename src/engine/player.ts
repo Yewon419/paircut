@@ -2,12 +2,17 @@ import type { Clip, MediaAsset, Project, Rect, TextClip, Track } from '../../sha
 import {
   assetById,
   audioGain,
+  behindOverlap,
+  behindSubjects,
   clipEnd,
   cropBox,
   frameTime,
+  glitchVariant,
   hasCrop,
   isMediaClip,
   isTextClip,
+  matteFile,
+  matteIndex,
   placeVisual,
   projectDuration,
   visualAlpha,
@@ -31,12 +36,17 @@ interface Entry {
 const PRELOAD_AHEAD = 1.0;
 const PLAY_DRIFT = 0.2;
 const GRADE_MAX_PX = 2048;
+/** Decoded matte frames kept for scrubbing back and forth. */
+const MATTE_CACHE = 240;
 
 class Compositor {
   private entries = new Map<string, Entry>();
   private canvas: HTMLCanvasElement | null = null;
   private redrawQueued = false;
   private audio: AudioContext | null = null;
+  private matteImages = new Map<string, HTMLImageElement>();
+  private under: CanvasRenderingContext2D | null = null;
+  private subject: CanvasRenderingContext2D | null = null;
 
   private audioContext(): AudioContext {
     this.audio ??= new AudioContext();
@@ -215,7 +225,14 @@ class Compositor {
       if (track.hidden) continue;
       if (track.kind === 'text') {
         const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
-        if (clip && isTextClip(clip)) drawText(ctx, cachedRaster(clip, project.vars, canvas.width, canvas.height), animState(clip, t), k);
+        if (clip && isTextClip(clip)) {
+          const r = cachedRaster(clip, project.vars, canvas.width, canvas.height);
+          const v = r.variants.length > 0 ? glitchVariant(t - clip.start) : -1;
+          const behind = clip.style.effect === 'behind';
+          if (behind) this.keepUnder(canvas);
+          drawText(ctx, v >= 0 ? { ...r, canvas: r.variants[v] } : r, animState(clip, t), k, clip.style.effect);
+          if (behind) this.drawSubjects(ctx, project, clip, t);
+        }
         continue;
       }
       for (const clip of track.clips) {
@@ -226,6 +243,72 @@ class Compositor {
         this.drawClip(ctx, project, clip);
         ctx.globalAlpha = 1;
       }
+    }
+  }
+
+  private offscreen(w: number, h: number): CanvasRenderingContext2D {
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d');
+    if (!g) throw new Error('2d context unavailable');
+    return g;
+  }
+
+  /** Copies the picture under a 'behind' text before the letters go on. */
+  private keepUnder(canvas: HTMLCanvasElement): void {
+    if (!this.under || this.under.canvas.width !== canvas.width || this.under.canvas.height !== canvas.height) {
+      this.under = this.offscreen(canvas.width, canvas.height);
+      this.subject = this.offscreen(canvas.width, canvas.height);
+    }
+    this.under.clearRect(0, 0, canvas.width, canvas.height);
+    this.under.drawImage(canvas, 0, 0);
+  }
+
+  private matteImage(path: string): HTMLImageElement | null {
+    let img = this.matteImages.get(path);
+    if (!img) {
+      if (this.matteImages.size >= MATTE_CACHE) this.matteImages.delete(this.matteImages.keys().next().value as string);
+      img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => this.requestDraw();
+      img.src = window.api.mediaUrl(path);
+      this.matteImages.set(path, img);
+    }
+    return img.complete && img.naturalWidth > 0 ? img : null;
+  }
+
+  /**
+   * Puts the subject back over a 'behind' text: the kept picture, masked by each subject clip's matte frame placed
+   * where that clip is drawn. A clip without a ready matte leaves the letters on top.
+   */
+  private drawSubjects(ctx: CanvasRenderingContext2D, project: Project, text: TextClip, t: number): void {
+    const g = this.subject;
+    const under = this.under;
+    if (!g || !under) return;
+    for (const clip of behindSubjects(project, text)) {
+      const span = behindOverlap(text, clip);
+      if (t < span.from || t >= span.to) continue;
+      const asset = assetById(project, clip.assetId);
+      if (!asset.matte) continue;
+      const source = asset.kind === 'image' ? asset.matte.from : frameTime(clip, asset.duration, t);
+      const img = this.matteImage(matteFile(asset.matte, matteIndex(asset.matte, source)));
+      const r = this.rectFor(project, clip);
+      if (!img || !r) continue;
+      g.globalCompositeOperation = 'source-over';
+      g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+      g.save();
+      if (hasCrop(clip.crop)) {
+        const b = cropBox(r, clip.crop);
+        g.beginPath();
+        g.rect(r.x + b.x, r.y + b.y, b.w, b.h);
+        g.clip();
+      }
+      g.drawImage(img, r.x, r.y, r.w, r.h);
+      g.restore();
+      g.globalCompositeOperation = 'source-in';
+      g.drawImage(under.canvas, 0, 0);
+      ctx.drawImage(g.canvas, 0, 0);
     }
   }
 

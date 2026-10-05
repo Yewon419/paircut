@@ -1,5 +1,19 @@
-import type { FontId, ProjectVars, TextClip } from '../../shared/project';
-import { ANIM_IN, ANIM_OUT, clipDuration, POP_FROM, resolveTokens, RISE_PX, spanIndex } from '../../shared/project';
+import type { FontId, ProjectVars, TextClip, TextEffect } from '../../shared/project';
+import {
+  ANIM_IN,
+  ANIM_OUT,
+  backdropEffect,
+  CHROMA_SPLIT,
+  clipDuration,
+  FROST_LIFT,
+  FROST_SIGMA,
+  GLITCH_VARIANTS,
+  GLOW_BLUR,
+  POP_FROM,
+  resolveTokens,
+  RISE_PX,
+  spanIndex,
+} from '../../shared/project';
 
 const FONTS: Record<FontId, { family: string; weight: number }> = {
   black: { family: 'Pretendard', weight: 900 },
@@ -35,6 +49,8 @@ export interface TextRaster {
   y: number;
   w: number;
   h: number;
+  /** Glitch frames, each the same size and place as `canvas`; empty for every other effect. */
+  variants: HTMLCanvasElement[];
 }
 
 /** How one character is drawn: base style, highlight and spans already folded in. Lengths in frame pixels. */
@@ -270,10 +286,13 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
   const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
   const size = style.size * k;
   const baseLineH = size * LINE_HEIGHT;
-  const stroke = style.background ? 0 : style.strokeWidth * k;
-  const blur = style.background ? 0 : style.shadow > 0 ? size * SHADOW_BLUR : 0;
-  const padX = style.background ? size * 0.45 : stroke + blur * 2 + 2;
-  const padY = style.background ? size * 0.28 : stroke + blur * 2 + 2;
+  const knockout = style.effect === 'knockout';
+  // A knockout needs a plate to cut the letters out of: the box color if there is one, else the text color.
+  const plate = knockout ? (style.background ?? style.color) : style.background;
+  const stroke = plate ? 0 : style.strokeWidth * k;
+  const blur = plate ? 0 : style.shadow > 0 ? size * SHADOW_BLUR : 0;
+  const padX = plate ? size * 0.45 : stroke + blur * 2 + 2;
+  const padY = plate ? size * 0.28 : stroke + blur * 2 + 2;
   const glyphPad = stroke + blur * 2 + 2;
 
   const lines = ranges.map(([a, b]) => {
@@ -316,10 +335,10 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
 
   ctx.translate(-minX, -minY);
   ctx.rotate(rot);
-  if (style.background) {
+  if (plate) {
     ctx.save();
     ctx.translate(-boxW / 2, -boxH / 2);
-    ctx.fillStyle = style.background;
+    ctx.fillStyle = plate;
     roundRect(ctx, boxW, boxH, 6 * k);
     ctx.fill();
     ctx.restore();
@@ -349,15 +368,108 @@ export function rasterizeText(clip: TextClip, vars: ProjectVars, frameW: number,
     drawRuns((r) => ctx.strokeText(r.text, -r.width / 2, 0));
     ctx.shadowColor = 'transparent';
   }
+  if (knockout) ctx.globalCompositeOperation = 'destination-out';
   drawRuns((r) => {
     ctx.fillStyle = r.look.color;
     ctx.fillText(r.text, -r.width / 2, 0);
   });
+  ctx.globalCompositeOperation = 'source-over';
 
   // The unrotated block box keeps the old anchor: its center for centered text, its left edge otherwise.
   const ax = clip.x * frameW + (style.align === 'center' ? 0 : boxW / 2);
   const ay = clip.y * frameH;
-  return { canvas, x: Math.round(ax + minX), y: Math.round(ay + minY), w, h };
+  const raster = { canvas, x: Math.round(ax + minX), y: Math.round(ay + minY), w, h, variants: [] };
+  if (style.effect === 'glow') return glow(raster, size, style.color);
+  if (style.effect === 'chroma') return chroma(raster, size);
+  if (style.effect === 'glitch') return glitch(raster, size, text);
+  return raster;
+}
+
+function blank(w: number, h: number): CanvasRenderingContext2D {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d');
+  if (!g) throw new Error('2d context unavailable');
+  return g;
+}
+
+/** The raster grown by m on every side, same place on screen. */
+function grown(r: TextRaster, m: number, draw: (g: CanvasRenderingContext2D) => void): TextRaster {
+  const g = blank(r.w + 2 * m, r.h + 2 * m);
+  draw(g);
+  return { canvas: g.canvas, x: r.x - m, y: r.y - m, w: r.w + 2 * m, h: r.h + 2 * m, variants: [] };
+}
+
+function tinted(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
+  const g = blank(src.width, src.height);
+  g.drawImage(src, 0, 0);
+  g.globalCompositeOperation = 'source-in';
+  g.fillStyle = color;
+  g.fillRect(0, 0, src.width, src.height);
+  return g.canvas;
+}
+
+function glow(r: TextRaster, size: number, color: string): TextRaster {
+  const blur = size * GLOW_BLUR;
+  // Canvas shadows are a gaussian of sigma blur/2; 1.5 * blur keeps the tail inside the raster.
+  const m = Math.ceil(blur * 1.5);
+  return grown(r, m, (g) => {
+    g.shadowColor = color;
+    g.shadowBlur = blur;
+    g.drawImage(r.canvas, m, m);
+    g.shadowBlur = blur / 3;
+    g.drawImage(r.canvas, m, m);
+    g.shadowColor = 'transparent';
+    g.drawImage(r.canvas, m, m);
+  });
+}
+
+/** Red copy left, cyan copy right, the letters on top. */
+function split(g: CanvasRenderingContext2D, src: HTMLCanvasElement, x: number, y: number, d: number): void {
+  g.drawImage(tinted(src, '#FF2A4F'), x - d, y);
+  g.globalCompositeOperation = 'lighter';
+  g.drawImage(tinted(src, '#00E5FF'), x + d, y);
+  g.globalCompositeOperation = 'source-over';
+  g.drawImage(src, x, y);
+}
+
+function chroma(r: TextRaster, size: number): TextRaster {
+  const d = Math.max(1, Math.round(size * CHROMA_SPLIT));
+  return grown(r, d, (g) => split(g, r.canvas, d, d, d));
+}
+
+/** Seeded so a text always glitches the same way, in the preview and in every export. */
+function random(seedText: string, variant: number): () => number {
+  let s = variant * 0x9e3779b1;
+  for (let i = 0; i < seedText.length; i++) s = Math.imul(s ^ seedText.charCodeAt(i), 0x85ebca6b);
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function glitch(r: TextRaster, size: number, text: string): TextRaster {
+  const shift = Math.round(size * 0.18);
+  const d = Math.max(2, Math.round(size * CHROMA_SPLIT * 2));
+  const m = shift + d;
+  const base = grown(r, m, (g) => g.drawImage(r.canvas, m, m));
+  for (let v = 0; v < GLITCH_VARIANTS; v++) {
+    const rand = random(text, v + 1);
+    const torn = blank(base.w, base.h);
+    split(torn, r.canvas, m, m, d);
+    const g = blank(base.w, base.h);
+    for (let y = 0; y < base.h; ) {
+      const band = Math.max(2, Math.round(base.h * (0.06 + rand() * 0.18)));
+      const dx = rand() < 0.55 ? Math.round((rand() * 2 - 1) * shift) : 0;
+      g.drawImage(torn.canvas, 0, y, base.w, band, dx, y, base.w, band);
+      y += band;
+    }
+    base.variants.push(g.canvas);
+  }
+  return base;
 }
 
 const cache = new Map<string, TextRaster>();
@@ -393,14 +505,60 @@ export function animState(clip: TextClip, t: number): AnimState {
   };
 }
 
-export function drawText(ctx: CanvasRenderingContext2D, raster: TextRaster, state: AnimState, k: number): void {
+let scratchCanvas: HTMLCanvasElement | null = null;
+
+function scratch(w: number, h: number): CanvasRenderingContext2D {
+  scratchCanvas ??= document.createElement('canvas');
+  scratchCanvas.width = w;
+  scratchCanvas.height = h;
+  const g = scratchCanvas.getContext('2d');
+  if (!g) throw new Error('2d context unavailable');
+  return g;
+}
+
+/**
+ * Draws a text raster over what is already on ctx. Backdrop effects read the picture under the letters, so text
+ * must be drawn after the tracks below it. Every effect ends as (1 - a) * under + a * treated(under), the same
+ * blend the exporter builds with ffmpeg.
+ */
+export function drawText(ctx: CanvasRenderingContext2D, raster: TextRaster, state: AnimState, k: number, effect: TextEffect): void {
   if (state.alpha <= 0) return;
   const w = raster.w * state.scale;
   const h = raster.h * state.scale;
-  const cx = raster.x + raster.w / 2;
-  const cy = raster.y + raster.h / 2 + state.dy * k;
+  const x = raster.x + raster.w / 2 - w / 2;
+  const y = raster.y + raster.h / 2 + state.dy * k - h / 2;
+  const backdrop = backdropEffect(effect);
   ctx.save();
   ctx.globalAlpha = state.alpha;
-  ctx.drawImage(raster.canvas, cx - w / 2, cy - h / 2, w, h);
+  if (backdrop === 'invert') {
+    ctx.globalCompositeOperation = 'difference';
+    ctx.drawImage(raster.canvas, x, y, w, h);
+  } else if (backdrop === 'mono') {
+    // Only the letter shape matters: a gray source has no saturation, so 'saturation' leaves the luminosity.
+    const g = scratch(Math.ceil(w) + 1, Math.ceil(h) + 1);
+    g.drawImage(raster.canvas, 0, 0, w, h);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = '#808080';
+    g.fillRect(0, 0, g.canvas.width, g.canvas.height);
+    ctx.globalCompositeOperation = 'saturation';
+    ctx.drawImage(g.canvas, x, y);
+  } else if (backdrop === 'frost') {
+    const sigma = FROST_SIGMA * k;
+    const m = Math.ceil(sigma * 3);
+    const rx = Math.floor(x) - m;
+    const ry = Math.floor(y) - m;
+    const g = scratch(Math.ceil(w) + 2 * m + 2, Math.ceil(h) + 2 * m + 2);
+    // Drawing the whole frame offset lets the blur read real pixels past the region's edge.
+    g.filter = `blur(${sigma}px)`;
+    g.drawImage(ctx.canvas, -rx, -ry);
+    g.filter = 'none';
+    g.fillStyle = `rgba(255,255,255,${FROST_LIFT})`;
+    g.fillRect(0, 0, g.canvas.width, g.canvas.height);
+    g.globalCompositeOperation = 'destination-in';
+    g.drawImage(raster.canvas, x - rx, y - ry, w, h);
+    ctx.drawImage(g.canvas, rx, ry);
+  } else {
+    ctx.drawImage(raster.canvas, x, y, w, h);
+  }
   ctx.restore();
 }

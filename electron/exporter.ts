@@ -23,7 +23,12 @@ export function runExport(
   const layers = texts.map((t, i) => {
     const path = join(workDir, `text${i}.png`);
     writeFileSync(path, Buffer.from(t.pngBase64, 'base64'));
-    return { clipId: t.clipId, path, x: t.x, y: t.y, w: t.w, h: t.h };
+    const variants = t.variants.map((v, j) => {
+      const vp = join(workDir, `text${i}v${j}.png`);
+      writeFileSync(vp, Buffer.from(v, 'base64'));
+      return vp;
+    });
+    return { clipId: t.clipId, path, x: t.x, y: t.y, w: t.w, h: t.h, variants };
   });
   let plan;
   try {

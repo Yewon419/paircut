@@ -44,6 +44,9 @@ export function makeFixtures(target) {
   ff(['-f', 'lavfi', '-i', 'color=c=black@0.0:s=1080x1920:r=30:d=2,format=rgba', '-f', 'lavfi', '-i', 'color=c=0x00FF00:s=400x400:r=30:d=2,format=rgba',
     '-filter_complex', '[0][1]overlay=340:760:format=auto,format=yuva420p', '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p',
     '-auto-alt-ref', '0', '-b:v', '1M', f('motion.webm')]);
+  // A green box sliding right over red, for subject masks: it covers the frame center around t = 1 only.
+  ff(['-filter_complex', "color=c=red:s=540x960:d=2:r=30[bg];color=c=0x00C000:s=200x200:d=2:r=30[b];[bg][b]overlay=x='40+t*130':y=380",
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '2', f('box.mp4')]);
   return f;
 }
 
@@ -125,7 +128,7 @@ function textClip(id, start, anim) {
 /** The ffmpeg side of text: pop (scale + pad per frame), fade (alpha), rise (overlay y), hidden tracks. */
 async function checkTextLayers(f, base, dir) {
   const png = readFileSync(f('txt.png')).toString('base64');
-  const layer = (clipId, y) => ({ clipId, pngBase64: png, x: 340, y, w: 401, h: 121 });
+  const layer = (clipId, y) => ({ clipId, pngBase64: png, x: 340, y, w: 401, h: 121, variants: [] });
   const project = {
     ...base,
     tracks: [

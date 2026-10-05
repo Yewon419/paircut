@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentModel, AgentToolResult, ToolName } from './agentOps';
-import type { MediaAsset, Project } from './project';
+import type { MediaAsset, Matte, Project } from './project';
 
 export interface ExportOptions {
   outPath: string;
@@ -14,6 +14,14 @@ export interface TextImage {
   y: number;
   w: number;
   h: number;
+  /** Glitch frames as PNG base64, same size and place as the main image. */
+  variants: string[];
+}
+
+export interface MatteProgress {
+  assetId: string;
+  done: number;
+  total: number;
 }
 
 export interface TextFile {
@@ -39,6 +47,9 @@ export interface CutdeskApi {
   probeMedia(paths: string[]): Promise<MediaAsset[]>;
   /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */
   makeSolid(color: string, width: number, height: number): Promise<MediaAsset>;
+  /** Cuts subject masks for the asset's source seconds [from, to] with rembg (CPU, about 0.5 s a frame). */
+  makeMatte(asset: MediaAsset, from: number, to: number, fps: number): Promise<Matte>;
+  onMatteProgress(listener: (p: MatteProgress) => void): () => void;
   pathForFile(file: File): string;
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;

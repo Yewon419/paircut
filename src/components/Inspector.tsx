@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import type { ClipColor } from '../../shared/color';
 import { NEUTRAL_COLOR } from '../../shared/color';
-import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextSpan, TextStyle } from '../../shared/project';
+import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
   assetById,
+  behindSubjects,
   clipDuration,
   CROP_MAX,
   ddayOf,
@@ -11,6 +12,7 @@ import {
   effectiveDissolve,
   IDENTITY_TRANSFORM,
   isTextClip,
+  matteNeeds,
   NO_CROP,
   projectDuration,
   resolveTokens,
@@ -23,7 +25,8 @@ import {
 import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
 import { fontInstalled } from '../engine/text';
-import { NAVY, PRESETS } from '../presets';
+import { NAVY } from '../presets';
+import { allTemplates, useTemplates } from '../textTemplates';
 import {
   applyColorToAll,
   beginGesture,
@@ -80,6 +83,68 @@ const ANIMS: { id: TextAnim; label: string }[] = [
   { id: 'fade', label: '페이드' },
   { id: 'rise', label: '올라오기' },
 ];
+
+const TEXT_EFFECTS: { id: TextEffect; label: string }[] = [
+  { id: 'none', label: '없음' },
+  { id: 'invert', label: '반전' },
+  { id: 'mono', label: '흑백 창' },
+  { id: 'frost', label: '유리 창' },
+  { id: 'knockout', label: '뚫린 글자' },
+  { id: 'glow', label: '글로우' },
+  { id: 'chroma', label: '색수차' },
+  { id: 'glitch', label: '글리치' },
+  { id: 'behind', label: '피사체 뒤' },
+];
+
+/** Measured u2net speed on this machine's CPU (electron/matte.ts). */
+const MATTE_SECONDS_PER_FRAME = 0.5;
+
+function BehindControls({ project, clip }: { project: Project; clip: TextClip }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const needs = matteNeeds(project);
+  const frames = needs.reduce(
+    (n, m) => n + (assetById(project, m.assetId).kind === 'image' ? 1 : Math.round((m.to - m.from) * project.fps) + 1),
+    0,
+  );
+  const cut = async () => {
+    setError(null);
+    try {
+      for (const need of needs) {
+        const asset = assetById(useEditor.getState().project, need.assetId);
+        setBusy(`${asset.name} 준비 중`);
+        const off = window.api.onMatteProgress((p) => {
+          if (p.assetId === asset.id) setBusy(`${asset.name} ${p.done}/${p.total}`);
+        });
+        try {
+          const matte = await window.api.makeMatte(asset, need.from, need.to, project.fps);
+          commit((p) => ({ ...p, assets: p.assets.map((a) => (a.id === asset.id ? { ...a, matte } : a)) }));
+        } finally {
+          off();
+        }
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (behindSubjects(project, clip).length === 0) {
+    return <p className="hint">바로 아래 영상 트랙에 이 자막과 겹치는 클립이 없어요.</p>;
+  }
+  return (
+    <div className="behind-controls">
+      {needs.length === 0 ? (
+        <p className="hint" data-testid="matte-ready">피사체 마스크 준비됨</p>
+      ) : (
+        <button onClick={() => void cut()} disabled={busy !== null} data-testid="matte-make">
+          {busy ?? `피사체 분리 (${frames}프레임, 약 ${Math.ceil(frames * MATTE_SECONDS_PER_FRAME)}초)`}
+        </button>
+      )}
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
 
 export function Inspector() {
   const project = useEditor((s) => s.project);
@@ -180,6 +245,8 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   const resolved = resolveTokens(clip.text, project.vars);
   const lines = resolved.split('\n');
   const longest = Math.max(...lines.map((l) => l.length));
+  useTemplates((s) => s.user);
+  const templates = allTemplates();
   const [pcMode, setPcMode] = useState(false);
   const pc = pcMode || style.customFont !== '';
   const [selection, setSelection] = useState({ start: 0, end: 0 });
@@ -214,16 +281,16 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
           <select
             value={clip.preset}
             onChange={(e) => {
-              const p = PRESETS.find((x) => x.id === e.target.value);
+              const p = templates.find((x) => x.id === e.target.value);
               if (p) set((c) => ({ ...c, preset: p.id, style: { ...p.style }, x: p.x, y: p.y, anim: p.anim }));
             }}
           >
-            {PRESETS.map((p) => (
+            {templates.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.label}
               </option>
             ))}
-            {!PRESETS.some((p) => p.id === clip.preset) && <option value={clip.preset}>{clip.preset}</option>}
+            {!templates.some((p) => p.id === clip.preset) && <option value={clip.preset}>{clip.preset}</option>}
           </select>
         </label>
         <div className="row">
@@ -297,6 +364,22 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             />
           </label>
         </div>
+        <label>
+          <span>글자 효과</span>
+          <select
+            data-testid="text-effect"
+            value={style.effect}
+            onChange={(e) => setStyle({ effect: e.target.value as TextEffect })}
+            title="반전·흑백 창·유리 창은 글자 아래 화면을 바꿔 그려요. 뚫린 글자는 글자색 판에서 글자 모양을 뚫어요. 피사체 뒤는 바로 아래 영상 트랙의 사람·물체를 글자 위로 다시 얹어요"
+          >
+            {TEXT_EFFECTS.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {style.effect === 'behind' && <BehindControls project={project} clip={clip} />}
         <label className="check">
           <input
             type="checkbox"

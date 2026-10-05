@@ -80,6 +80,7 @@ function clipLine(p: Project, c: AnyClip): string {
     }
     if (c.style.tracking) extra.push(`tracking=${n(c.style.tracking)}`);
     if (c.style.shadow) extra.push(`shadow=${n(c.style.shadow)}`);
+    if (c.style.effect !== 'none') extra.push(`fx=${c.style.effect}`);
     if (c.anim !== 'none') extra.push(`anim=${c.anim}`);
     if (c.style.highlight) extra.push(`hl=${q(c.style.highlight)}`);
     if (c.rotation) extra.push(`rot=${n(c.rotation)}`);
@@ -292,6 +293,7 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
           tracking: op.tracking ?? c.style.tracking,
           shadow: op.shadow ?? c.style.shadow,
           highlight: op.highlight ?? c.style.highlight,
+          effect: op.effect ?? c.style.effect,
         },
       }));
       return;

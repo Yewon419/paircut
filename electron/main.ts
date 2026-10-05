@@ -5,12 +5,13 @@ import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
-import type { MediaAsset, Project } from '../shared/project';
+import type { MediaAsset, Matte, Project } from '../shared/project';
 import { normalizeProject } from '../shared/project';
 import { callRendererTool, callTool, registerAgent } from './agent';
 import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
+import { makeMatte } from './matte';
 import { importMedia, makeSolidImage } from './media';
 
 const isTest = process.env.CUTDESK_TEST === '1';
@@ -155,6 +156,19 @@ function registerIpc(): void {
 
   ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
   ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
+  ipcMain.handle('media:matte', async (_e, asset: MediaAsset, from: number, to: number, fps: number): Promise<Matte> => {
+    const root = join(app.getPath('userData'), 'mattes');
+    mkdirSync(root, { recursive: true });
+    const script = join(__dirname, '..', '..', 'tools', 'matte.py');
+    try {
+      return await makeMatte(asset, from, to, fps, root, script, (done, total) =>
+        win?.webContents.send('matte:progress', { assetId: asset.id, done, total }),
+      );
+    } catch (err) {
+      console.error(`[matte] ${asset.path} [${from}, ${to}] @${fps}: ${(err as Error).message}`);
+      throw err;
+    }
+  });
 
   ipcMain.handle('project:save', async (_e, project: Project, path: string | null) => {
     let target = path;
