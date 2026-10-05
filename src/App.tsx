@@ -10,7 +10,7 @@ import { textImagesFor } from './exportTexts';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { compositor, pause, seek, startPausedSync, togglePlay } from './engine/player';
-import { deleteSelected, loadProject, redo, splitAtPlayhead, undo, useEditor } from './store';
+import { copySelectedText, deleteSelected, loadProject, pasteText, redo, splitAtPlayhead, undo, useEditor } from './store';
 
 async function saveProject(saveAs: boolean): Promise<void> {
   const { project, filePath } = useEditor.getState();
@@ -108,6 +108,11 @@ export function App() {
       } else if (ctrl && e.code === 'KeyY') {
         e.preventDefault();
         redo();
+      } else if (ctrl && e.code === 'KeyC') {
+        copySelectedText();
+      } else if (ctrl && e.code === 'KeyV') {
+        e.preventDefault();
+        pasteText();
       } else if (ctrl && e.code === 'KeyS') {
         e.preventDefault();
         void saveProject(e.shiftKey);

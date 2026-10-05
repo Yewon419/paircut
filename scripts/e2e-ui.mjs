@@ -197,6 +197,22 @@ try {
   });
   check('inspector edits selected text', edited === '(바뀐 딴지)', edited);
 
+  const copiedId = await win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  await win.locator(`[data-clip="${copiedId}"]`).click({ position: { x: 4, y: 10 } });
+  await win.evaluate(() => window.__cutdesk.seek(4));
+  const beforePaste = await textCount();
+  await win.keyboard.press('Control+KeyC');
+  await win.keyboard.press('Control+KeyV');
+  const pasted = await win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    return s.project.tracks.flatMap((t) => t.clips).find((c) => c.id === s.selectedClipId);
+  });
+  check('Ctrl+C, Ctrl+V pastes the text clip at the playhead', (await textCount()) === beforePaste + 1 &&
+    pasted?.id !== copiedId && pasted?.text === '(바뀐 딴지)' && Math.abs(pasted.start - 4) < 0.001,
+    JSON.stringify({ count: await textCount(), id: pasted?.id, text: pasted?.text, start: pasted?.start }));
+  await win.keyboard.press('Control+KeyZ');
+  check('Ctrl+Z removes the pasted clip', (await textCount()) === beforePaste, `text clips ${await textCount()}`);
+
   // SRT export through the real main-process handler, with the save dialog answered.
   const srtPath = join(dir, 'captions.srt');
   await app.evaluate(({ dialog }, p) => {

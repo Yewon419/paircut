@@ -154,6 +154,8 @@ export function Timeline() {
   const startClipDrag = (e: React.PointerEvent, clip: AnyClip, mode: 'move' | 'trim-start' | 'trim-end') => {
     e.stopPropagation();
     e.preventDefault();
+    // preventDefault keeps focus where it was; an inspector field would then swallow Ctrl+C/V, S and Delete.
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     useEditor.setState({ selectedClipId: clip.id });
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);

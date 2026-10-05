@@ -370,6 +370,22 @@ export function addTextClip(clip: TextClip): void {
   set({ selectedClipId: clip.id });
 }
 
+let copiedText: TextClip | null = null;
+
+/** Remembers the selected text clip for pasteText; other clip kinds are not copied. */
+export function copySelectedText(): void {
+  const { project, selectedClipId } = get();
+  const found = selectedClipId ? findClip(project, selectedClipId) : null;
+  if (found && isTextClip(found.clip)) copiedText = structuredClone(found.clip);
+}
+
+/** A fresh copy of the last copied text clip at the playhead, placed like addTextClip. */
+export function pasteText(): void {
+  if (!copiedText) return;
+  const { project, playhead } = get();
+  addTextClip({ ...structuredClone(copiedText), id: uid('c'), start: frameSnap(playhead, project.fps) });
+}
+
 export function withTextClip(p: Project, clip: TextClip): Project {
   const room = p.tracks.find((t) => t.kind === 'text' && !overlaps(t, clip.start, clipEnd(clip), null));
   if (room) return withTrack(p, room.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
