@@ -902,6 +902,43 @@ try {
     check(`behind at ${t}s, ${what}: export`, close(made, want, 14), `${made} want ${want}`);
   }
 
+  // Subject to a new layer: the green box comes out as a see-through clip above; a blue picture slid between the two
+  // hides the red background but not the box.
+  const layerProject = fxProject('none', 'none');
+  layerProject.assets = [boxAsset];
+  layerProject.tracks[0].clips = [];
+  layerProject.tracks[1].clips = [{ ...MC, id: 'bg', assetId: boxAsset.id, start: 0, in: 0, out: 2 }];
+  await win.evaluate((p) => window.__cutdesk.load(p), layerProject);
+  await win.locator('[data-clip="bg"]').click();
+  await win.locator('[data-testid="subject-layer"]').click();
+  await win.waitForFunction(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video').length === 2, null, { timeout: 300000 });
+  const layered = await win.evaluate(() => window.__cutdesk.state().project);
+  const subj = layered.tracks[1].clips[0];
+  const subjAsset = layered.assets.find((a) => a.id === subj.assetId);
+  check('subject goes on a new track right above its clip', layered.tracks[2].clips[0].id === 'bg' &&
+    subjAsset.alpha === 'vp9' && subj.start === 0 && subj.in === 0, JSON.stringify({ alpha: subjAsset.alpha, name: subjAsset.name, dur: subjAsset.duration }));
+  const blue = await win.evaluate(() => window.api.makeSolid('#0000FF', 1080, 1920));
+  await win.evaluate(([p, b]) => {
+    const tracks = [...p.tracks];
+    tracks.splice(2, 0, { id: 'v-blue', kind: 'video', muted: false, hidden: false, clips: [{ ...p.tracks[2].clips[0], id: 'blue', assetId: b.id, in: 0, out: 2, speed: 1 }] });
+    window.__cutdesk.load({ ...p, assets: [...p.assets, b], tracks });
+  }, [layered, blue]);
+  const boxP = { x: 528, y: 948, s: 24 };
+  const sideP = { x: 880, y: 948, s: 24 };
+  const greenish = (c) => c[1] > 120 && c[0] < 40 && c[2] < 40;
+  const layerOut = join(dir, 'subject-layer.mp4');
+  await exportTo(layerOut);
+  for (const [t, p, what, ok] of [
+    [1, boxP, 'box stays over the picture between', greenish],
+    [1, sideP, 'picture between hides the background', (c) => close(c, [0, 0, 255], 14)],
+    [0.1, boxP, 'where the box has left, the picture between shows', (c) => close(c, [0, 0, 255], 14)],
+  ]) {
+    const shown = await settled(t, p);
+    const made = samplePixel(layerOut, t, p.x, p.y, 24);
+    check(`subject layer at ${t}s, ${what}: preview`, ok(shown), String(shown));
+    check(`subject layer at ${t}s, ${what}: export`, ok(made), String(made));
+  }
+
   // Text templates: save the selected text, add it back, delete it; built-ins hide and come back.
   const tplProject = fxProject('none', 'none');
   tplProject.tracks[0].clips = [{ ...fxClip('glow', 'pop'), rotation: 12, spans: [{ match: 'I', nth: 0, color: '#FFD166' }] }];

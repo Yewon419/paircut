@@ -39,6 +39,7 @@ import {
   updateMediaClip,
   updateTextClip,
   useEditor,
+  withSubjectLayer,
 } from '../store';
 
 const FONTS: { id: FontId; label: string }[] = [
@@ -690,6 +691,41 @@ function SolidColor({ project, clip, color }: { project: Project; clip: Clip; co
   );
 }
 
+/** Cuts the clip's subject into a see-through copy on a new track above it (rembg, then VP9 with alpha). */
+function SubjectLayer({ project, clip }: { project: Project; clip: Clip }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const asset = assetById(project, clip.assetId);
+  const frames = asset.kind === 'image' ? 1 : Math.round((clip.out - clip.in) * project.fps) + 1;
+  const cut = async () => {
+    setError(null);
+    setBusy('준비 중');
+    const off = window.api.onMatteProgress((p) => {
+      if (p.assetId === asset.id) setBusy(p.done === p.total ? '투명 영상 만드는 중' : `${p.done}/${p.total}`);
+    });
+    try {
+      const from = asset.kind === 'image' ? 0 : clip.in;
+      const to = asset.kind === 'image' ? 0 : Math.min(asset.duration, clip.out);
+      const subject = await window.api.makeSubject(asset, from, to, project.fps);
+      commit((p) => withSubjectLayer(p, clip.id, subject));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      off();
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="transform-controls">
+      <button onClick={() => void cut()} disabled={busy !== null} data-testid="subject-layer">
+        {busy ?? `피사체를 새 레이어로 (${frames}프레임, 약 ${Math.ceil(frames * MATTE_SECONDS_PER_FRAME)}초)`}
+      </button>
+      {error && <div className="error">{error}</div>}
+      <p className="hint">사람·물체만 남긴 투명 영상을 바로 위 새 트랙에 올려요. 두 트랙 사이에 다른 그림을 넣을 수 있어요.</p>
+    </div>
+  );
+}
+
 function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; visual: boolean }) {
   const asset = assetById(project, clip.assetId);
   const id = clip.id;
@@ -722,6 +758,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
         <dd>{formatSeconds(clipDuration(clip))}</dd>
       </dl>
       {asset.solid !== undefined && <SolidColor key={asset.id} project={project} clip={clip} color={asset.solid} />}
+      {visual && asset.solid === undefined && !asset.alpha && <SubjectLayer project={project} clip={clip} />}
       {asset.kind !== 'image' && (
         <div className="transform-controls">
           <label>

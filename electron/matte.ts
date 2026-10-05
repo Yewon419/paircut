@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { MediaAsset, Matte } from '../shared/project';
 import { FFMPEG } from './media';
@@ -85,4 +85,43 @@ export async function makeMatte(
   } finally {
     rmSync(frames, { recursive: true, force: true });
   }
+}
+
+/**
+ * The asset's source seconds [from, to] with everything but the subject see-through: a VP9 webm with alpha for
+ * video (frame n = source at from + n / fps, like the matte), a PNG for a still. Reused when made before.
+ */
+export async function makeSubjectFile(
+  asset: MediaAsset,
+  from: number,
+  to: number,
+  fps: number,
+  matteRoot: string,
+  outRoot: string,
+  script: string,
+  onProgress: (done: number, total: number) => void,
+): Promise<string> {
+  if (asset.alpha) throw new Error(`already see-through, nothing to cut: ${asset.path}`);
+  const st = statSync(asset.path);
+  const key = createHash('sha1')
+    .update(`${asset.path}|${st.size}|${st.mtimeMs}|${from.toFixed(4)}|${to.toFixed(4)}|${fps}|${MODEL}|subject`)
+    .digest('hex');
+  const out = join(outRoot, `${key}.${asset.kind === 'image' ? 'png' : 'webm'}`);
+  if (existsSync(out)) return out;
+  const matte = await makeMatte(asset, from, to, fps, matteRoot, script, onProgress);
+  const alpha = `[1:v]scale=${asset.width}:${asset.height}:flags=bicubic,format=rgba,alphaextract[a]`;
+  const tmp = `${out}.part${asset.kind === 'image' ? '.png' : '.webm'}`;
+  const args =
+    asset.kind === 'image'
+      ? ['-i', asset.path, '-i', `${matte.dir}/m00000.png`,
+          '-filter_complex', `[0:v]format=rgba[s];${alpha};[s][a]alphamerge[o]`, '-map', '[o]', '-frames:v', '1', tmp]
+      : ['-ss', from.toFixed(4), '-t', (to - from).toFixed(4), '-i', asset.path,
+          '-framerate', String(fps), '-start_number', '0', '-i', `${matte.dir}/m%05d.png`,
+          '-filter_complex', `[0:v]fps=${fps},format=rgba[s];${alpha};[s][a]alphamerge,format=yuva420p[o]`,
+          '-map', '[o]', '-an', '-t', (to - from).toFixed(4),
+          '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p', '-auto-alt-ref', '0', '-b:v', '0', '-crf', '30',
+          '-deadline', 'good', '-cpu-used', '4', '-row-mt', '1', tmp];
+  await runLogged(FFMPEG, ['-y', '-v', 'error', ...args], () => {});
+  renameSync(tmp, out);
+  return out;
 }

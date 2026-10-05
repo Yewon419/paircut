@@ -246,6 +246,22 @@ export function moveClipToNewTrack(base: Project, clipId: string, start: number,
   return moveClip({ ...base, tracks }, clipId, track.id, start);
 }
 
+/**
+ * Adds the cut-out subject of a clip on a new track right above it, at the same time, place, crop, speed and grade,
+ * so other pictures can go between the two.
+ */
+export function withSubjectLayer(base: Project, clipId: string, subject: MediaAsset): Project {
+  const found = findClip(base, clipId);
+  if (!found || !isMediaClip(found.clip)) throw new Error(`no media clip ${clipId}`);
+  const c = found.clip;
+  const still = subject.kind === 'image';
+  const clip: Clip = { ...c, id: uid('c'), assetId: subject.id, in: still ? c.in : 0, out: still ? c.out : c.out - c.in, dissolve: 0 };
+  const track: Track = { id: uid('v'), kind: 'video', muted: false, hidden: false, clips: [clip] };
+  const tracks = [...base.tracks];
+  tracks.splice(base.tracks.indexOf(found.track), 0, track);
+  return { ...base, assets: [...base.assets, subject], tracks };
+}
+
 export function updateClip(base: Project, clipId: string, update: (c: AnyClip) => AnyClip): Project {
   return {
     ...base,

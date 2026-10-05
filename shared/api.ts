@@ -50,6 +50,8 @@ export interface CutdeskApi {
   /** Cuts subject masks for the asset's source seconds [from, to] with rembg (CPU, about 0.5 s a frame). */
   makeMatte(asset: MediaAsset, from: number, to: number, fps: number): Promise<Matte>;
   onMatteProgress(listener: (p: MatteProgress) => void): () => void;
+  /** A new asset with only the subject of [from, to] left opaque (alpha webm, or PNG for a still). */
+  makeSubject(asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset>;
   pathForFile(file: File): string;
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;
