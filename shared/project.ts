@@ -64,6 +64,48 @@ export interface Clip {
   color: ClipColor;
   /** Cross dissolve from the clip just before this one on the same track, in seconds, centered on the cut. 0 = hard cut. */
   dissolve: number;
+  /** Position and size keyframes, sorted by time; when present they replace `transform`. */
+  keys?: TransformKey[];
+}
+
+/** How a keyframe moves on to the next one. */
+export type KeyEase = 'linear' | 'smooth';
+
+/** Transform at `t` timeline seconds after the clip start. */
+export interface TransformKey extends ClipTransform {
+  t: number;
+  ease: KeyEase;
+}
+
+export function hasKeys(clip: Clip): boolean {
+  return (clip.keys?.length ?? 0) > 0;
+}
+
+/** Eased progress between two keyframes, the same curve the export expression uses. */
+export function easeKey(ease: KeyEase, p: number): number {
+  return ease === 'smooth' ? p * p * (3 - 2 * p) : p;
+}
+
+/** Transform `local` timeline seconds after the clip start: held before the first key and after the last. */
+export function transformAt(clip: Clip, local: number): ClipTransform {
+  const keys = clip.keys;
+  if (!keys || keys.length === 0) return clip.transform;
+  const pick = (k: TransformKey): ClipTransform => ({ scale: k.scale, x: k.x, y: k.y });
+  if (local <= keys[0].t) return pick(keys[0]);
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i];
+    const b = keys[i + 1];
+    if (local >= b.t) continue;
+    const e = easeKey(a.ease, (local - a.t) / (b.t - a.t));
+    return { scale: a.scale + (b.scale - a.scale) * e, x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e };
+  }
+  return pick(keys[keys.length - 1]);
+}
+
+/** Keyframes moved by `dt` seconds within the clip (a trimmed or split start), so they stay on the same picture. */
+export function shiftKeys(clip: Clip, dt: number): Clip {
+  if (!clip.keys) return clip;
+  return { ...clip, keys: clip.keys.map((k) => ({ ...k, t: k.t + dt })) };
 }
 
 export const SPEED_MIN = 0.5;

@@ -57,6 +57,8 @@ export interface CutdeskApi {
   probeMedia(paths: string[]): Promise<MediaAsset[]>;
   /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */
   makeSolid(color: string, width: number, height: number): Promise<MediaAsset>;
+  /** A PNG of the frame shown at `seconds` into the asset, probed as an image asset (made once, then reused). */
+  makeStill(asset: MediaAsset, seconds: number): Promise<MediaAsset>;
   /** Cuts subject masks for the asset's source seconds [from, to] with rembg (CPU, about 0.5 s a frame). */
   onMatteProgress(listener: (p: MatteProgress) => void): () => void;
   /** A new asset with only the subject of [from, to] left opaque (alpha webm, or PNG for a still). */

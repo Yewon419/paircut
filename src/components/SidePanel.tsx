@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { Bot, Clapperboard, Folder, ListChecks, Type } from 'lucide-react';
 import type { Board } from '../conti';
 import { draftFromRows, parseBoard } from '../conti';
 import type { TextPreset } from '../presets';
@@ -16,12 +18,12 @@ import { checkRules } from '../rules';
 
 type Tab = 'media' | 'text' | 'conti' | 'check' | 'claude';
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'media', label: '미디어' },
-  { id: 'text', label: '텍스트' },
-  { id: 'conti', label: '콘티' },
-  { id: 'check', label: '점검' },
-  { id: 'claude', label: 'Claude' },
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: 'media', label: '미디어', icon: Folder },
+  { id: 'text', label: '텍스트', icon: Type },
+  { id: 'conti', label: '콘티', icon: Clapperboard },
+  { id: 'check', label: '점검', icon: ListChecks },
+  { id: 'claude', label: 'Claude', icon: Bot },
 ];
 
 export const DEFAULT_BOARD_PATH = 'C:\\Users\\windg\\Desktop\\PROJECT\\윈드가든인스타\\board\\board.json';
@@ -35,17 +37,26 @@ export function SidePanel() {
     <div className="side">
       <div className="tabs">
         {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? 'tab on' : 'tab'} onClick={() => setTab(t.id)} data-tab={t.id}>
-            {t.label}
-            {t.id === 'check' && <span className={issues.length > 0 ? 'count bad' : 'count'}>{issues.length}</span>}
+          <button
+            key={t.id}
+            className={tab === t.id ? 'tab on' : 'tab'}
+            onClick={() => setTab(t.id)}
+            data-tab={t.id}
+            title={t.label}
+            aria-label={t.label}
+          >
+            <t.icon />
+            {t.id === 'check' && issues.length > 0 && <span className="count bad">{issues.length}</span>}
           </button>
         ))}
       </div>
-      {tab === 'media' && <MediaBin />}
-      {tab === 'text' && <TextTab />}
-      {tab === 'conti' && <ContiTab />}
-      {tab === 'check' && <CheckTab issues={issues} />}
-      {tab === 'claude' && <AgentPanel />}
+      <div className="side-body">
+        {tab === 'media' && <MediaBin />}
+        {tab === 'text' && <TextTab />}
+        {tab === 'conti' && <ContiTab />}
+        {tab === 'check' && <CheckTab issues={issues} />}
+        {tab === 'claude' && <AgentPanel />}
+      </div>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   GLITCH_EVERY,
   GLITCH_STEP,
   hasCrop,
+  hasKeys,
   isIntroAnim,
   isMediaClip,
   isTextClip,
@@ -27,7 +28,7 @@ import {
   RISE_PX,
   visualSpan,
 } from './project';
-import type { BackdropEffect, BlendMode, Clip, Project, Track } from './project';
+import type { BackdropEffect, BlendMode, Clip, Project, Track, TransformKey } from './project';
 import { colorKey, cubeFile, isNeutral } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
@@ -86,6 +87,23 @@ const FFMPEG_BLEND: Record<BlendMode, string> = {
 
 function num(n: number): string {
   return n.toFixed(4).replace(/\.?0+$/, '') || '0';
+}
+
+/**
+ * A keyframed transform value as an ffmpeg expression of `u`, seconds into the clip: the same holds, segments and
+ * easing as transformAt().
+ */
+function keyExpr(keys: TransformKey[], prop: 'scale' | 'x' | 'y', u: string): string {
+  let expr = num(keys[keys.length - 1][prop]);
+  for (let i = keys.length - 2; i >= 0; i--) {
+    const a = keys[i];
+    const b = keys[i + 1];
+    if (b.t - a.t <= 0) continue;
+    const p = `clip((${u}-(${num(a.t)}))/${num(b.t - a.t)},0,1)`;
+    const e = a.ease === 'smooth' ? `(${p})*(${p})*(3-2*(${p}))` : p;
+    expr = `if(lt(${u},${num(b.t)}),${num(a[prop])}+(${num(b[prop] - a[prop])})*${e},${expr})`;
+  }
+  return expr;
 }
 
 export function outputSize(project: Project, height: number): { width: number; height: number } {
@@ -315,7 +333,34 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
           hold = `tpad=start_mode=clone:start_duration=${num(holdStart)}:stop_mode=clone:stop_duration=${num(holdEnd)},`;
         }
       }
-      if (!track.hidden) {
+      if (!track.hidden && clip.keys && hasKeys(clip)) {
+        // Keyframed: cropped and graded at source size, then scaled every frame; overlay places each frame by its
+        // own time. Same geometry as placeVisual + cropBox, without their pixel rounding.
+        const keys = clip.keys;
+        const label = `v${idx}`;
+        const cover = Math.max(W / asset.width, H / asset.height);
+        const c = clip.crop;
+        const keepW = 1 - c.l - c.r;
+        const keepH = 1 - c.t - c.b;
+        const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
+        const fade = span.fadeIn > 0 ? `fade=t=in:st=0:d=${num(span.fadeIn)}:alpha=1,` : '';
+        const even = (e: string) => `trunc((${e})/2)*2`;
+        const crop = hasCrop(c)
+          ? `crop=w='${even(`iw*${num(keepW)}`)}':h='${even(`ih*${num(keepH)}`)}':x='${even(`iw*${num(c.l)}`)}':y='${even(`ih*${num(c.t)}`)}',`
+          : '';
+        const sIn = keyExpr(keys, 'scale', `(t-${num(pre)})`);
+        const size = (px: number) => `max(2,${even(`${num(px)}*${sIn}`)})`;
+        filters.push(
+          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip)}` +
+            `scale=w='${size(asset.width * cover * keepW)}':h='${size(asset.height * cover * keepH)}':eval=frame:flags=bicubic,` +
+            `setsar=1,format=yuva420p,${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
+        );
+        const u = `(t-${num(clip.start)})`;
+        const s = keyExpr(keys, 'scale', u);
+        const x = `${num(W / 2)}-${num(asset.width * cover)}*${s}*${num(0.5 - c.l)}+${keyExpr(keys, 'x', u)}*${W}`;
+        const y = `${num(H / 2)}-${num(asset.height * cover)}*${s}*${num(0.5 - c.t)}+${keyExpr(keys, 'y', u)}*${H}`;
+        overlay(label, x, y, span.from, span.to);
+      } else if (!track.hidden) {
         const r = placeVisual(asset.width, asset.height, W, H, clip.transform);
         const label = `v${idx}`;
         const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;

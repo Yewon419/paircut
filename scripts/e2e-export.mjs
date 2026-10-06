@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
-const { MEDIA_CLIP_DEFAULTS, normalizeProject } = require('../dist-electron/shared/project.js');
+const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
 const { BITTEUL_COLOR, gradePixel } = require('../dist-electron/shared/color.js');
 
 /** Stripes of the swatch fixture, top to bottom, 480px each. */
@@ -220,6 +220,47 @@ async function checkColor(base, swatch, dir) {
   check('saturation -100% gives gray', Math.max(...gray) - Math.min(...gray) <= 4, gray.join(','));
 }
 
+/** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */
+function redSpan(file, t, y) {
+  const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
+    '-vf', `crop=1080:2:0:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
+  let lo = -1;
+  let hi = -1;
+  for (let x = 0; x < 1080; x++) {
+    const [r, g, b] = [buf[x * 3], buf[x * 3 + 1], buf[x * 3 + 2]];
+    if (r > 150 && g < 90 && b < 90) {
+      if (lo === -1) lo = x;
+      hi = x;
+    }
+  }
+  return lo === -1 ? null : [lo, hi + 1];
+}
+
+/** Position and size keyframes: a cropped red square slides right and grows, eased, then holds. */
+async function checkKeyframes(base, pic, dir) {
+  const keys = [
+    { t: 0, scale: 0.2, x: -0.2, y: 0, ease: 'smooth' },
+    { t: 2, scale: 0.4, x: 0.2, y: 0, ease: 'linear' },
+  ];
+  const clip = { ...MEDIA_CLIP_DEFAULTS, id: 'k1', assetId: pic.id, start: 0, in: 0, out: 2.5, transform: { scale: 1, x: 0, y: 0 },
+    crop: { l: 0.25, t: 0, r: 0, b: 0 }, keys };
+  const project = { ...base, tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [clip] }] };
+  const out = join(dir, 'keys.mp4');
+  const result = await runExport(project, 1920, out, [], () => {}).done;
+  check('keyframe export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  // 800x800 cover-fits 1080x1920 at 2.4x; the crop keeps the right three quarters.
+  for (const t of [0, 1, 2.3]) {
+    const tr = transformAt(clip, t);
+    const w = 800 * 2.4 * tr.scale;
+    const left = (1080 - w) / 2 + tr.x * 1080 + 0.25 * w;
+    const want = [Math.max(0, left), Math.min(1080, left + 0.75 * w)];
+    const got = redSpan(out, t, 960);
+    const off = got ? Math.max(Math.abs(got[0] - want[0]), Math.abs(got[1] - want[1])) : Infinity;
+    check(`keyframed square at ${t}s`, off <= 4, `got ${got?.join('-')} want ${want.map(Math.round).join('-')}`);
+  }
+}
+
 let failures = 0;
 function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  (${detail})` : ''}`);
@@ -297,6 +338,7 @@ async function main() {
   await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
   await checkColor(project, assets.swatch, dir);
   await checkDissolve(f, project, dir);
+  await checkKeyframes(project, assets.pic, dir);
 
   if (failures > 0) {
     console.error(`${failures} check(s) failed`);

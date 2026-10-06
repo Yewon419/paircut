@@ -63,8 +63,11 @@ export function checkRules(project: Project): RuleIssue[] {
     const d = clipDuration(clip);
     if (d < RULES.minCut - EPS) add('2-2-1', `컷 ${d.toFixed(2)}초. 컷당 ${RULES.minCut}초 이상`, clip.start, clip.id);
     const asset = assetById(project, clip.assetId);
-    const r = placeVisual(asset.width, asset.height, W, H, clip.transform);
-    if (r.x > 0 || r.y > 0 || r.x + r.w < W || r.y + r.h < H) {
+    const boxed = (clip.keys?.length ? clip.keys : [clip.transform]).some((tr) => {
+      const r = placeVisual(asset.width, asset.height, W, H, tr);
+      return r.x > 0 || r.y > 0 || r.x + r.w < W || r.y + r.h < H;
+    });
+    if (boxed) {
       add('2-5-1', '메인 화면이 프레임을 다 채우지 않아요(레터박스)', clip.start, clip.id);
     }
   }

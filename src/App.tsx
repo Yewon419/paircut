@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { Download, FilePlus, FolderOpen, Save } from 'lucide-react';
 import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
 import { startAgentBridge } from './components/AgentPanel';
@@ -10,7 +11,20 @@ import { textImagesFor } from './exportTexts';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { compositor, pause, seek, startPausedSync, togglePlay } from './engine/player';
-import { copySelectedText, deleteSelected, loadProject, pasteText, redo, splitAtPlayhead, undo, useEditor } from './store';
+import {
+  copySelectedText,
+  deleteSelected,
+  duplicateSelected,
+  freezeFrame,
+  loadProject,
+  pasteText,
+  redo,
+  splitAtPlayhead,
+  toggleMarker,
+  trimAtPlayhead,
+  undo,
+  useEditor,
+} from './store';
 
 async function saveProject(saveAs: boolean): Promise<void> {
   const { project, filePath } = useEditor.getState();
@@ -31,6 +45,19 @@ function storedTimelineHeight(): number {
   return Number.isFinite(n) && n > 0 ? clampTimeline(n) : TIMELINE_DEFAULT;
 }
 
+const COLUMN_KEYS = { left: 'cutdesk.leftWidth', right: 'cutdesk.rightWidth' } as const;
+const COLUMN_DEFAULT = 300;
+const COLUMN_MIN = 220;
+
+function clampColumn(w: number): number {
+  return Math.round(Math.max(COLUMN_MIN, Math.min(window.innerWidth * 0.4, w)));
+}
+
+function storedColumn(side: keyof typeof COLUMN_KEYS): number {
+  const n = Number(localStorage.getItem(COLUMN_KEYS[side]));
+  return Number.isFinite(n) && n > 0 ? clampColumn(n) : COLUMN_DEFAULT;
+}
+
 function confirmDiscard(): boolean {
   return !useEditor.getState().dirty || window.confirm('저장하지 않은 변경이 있어요. 버릴까요?');
 }
@@ -42,6 +69,35 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [big, setBig] = useState(false);
   const [timelineHeight, setTimelineHeight] = useState(storedTimelineHeight);
+  const [leftWidth, setLeftWidth] = useState(() => storedColumn('left'));
+  const [rightWidth, setRightWidth] = useState(() => storedColumn('right'));
+
+  const dragColumn = (side: keyof typeof COLUMN_KEYS) => (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const w0 = side === 'left' ? leftWidth : rightWidth;
+    const set = side === 'left' ? setLeftWidth : setRightWidth;
+    let w = w0;
+    const move = (ev: PointerEvent) => {
+      const dx = ev.clientX - x0;
+      w = clampColumn(side === 'left' ? w0 + dx : w0 - dx);
+      set(w);
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      localStorage.setItem(COLUMN_KEYS[side], String(w));
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
+
+  const resetColumn = (side: keyof typeof COLUMN_KEYS) => () => {
+    (side === 'left' ? setLeftWidth : setRightWidth)(COLUMN_DEFAULT);
+    localStorage.setItem(COLUMN_KEYS[side], String(COLUMN_DEFAULT));
+  };
 
   const dragSplitter = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -126,8 +182,19 @@ export function App() {
       } else if (ctrl && e.code === 'KeyS') {
         e.preventDefault();
         void saveProject(e.shiftKey);
+      } else if (ctrl && e.code === 'KeyD') {
+        e.preventDefault();
+        duplicateSelected();
       } else if (!ctrl && e.code === 'KeyS') {
         splitAtPlayhead();
+      } else if (!ctrl && e.code === 'KeyQ') {
+        trimAtPlayhead('right');
+      } else if (!ctrl && e.code === 'KeyW') {
+        trimAtPlayhead('left');
+      } else if (!ctrl && e.code === 'KeyM') {
+        toggleMarker();
+      } else if (!ctrl && e.code === 'KeyF') {
+        freezeFrame().catch((err: unknown) => setNotice(`정지 화면을 만들지 못했어요: ${(err as Error).message}`));
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
         deleteSelected();
       } else if (e.code === 'ArrowLeft') {
@@ -167,21 +234,41 @@ export function App() {
 
   const title = filePath ? filePath.split(/[\\/]/).pop() : '새 프로젝트';
 
+  const layout = {
+    '--tl-h': `${timelineHeight}px`,
+    '--left-w': `${leftWidth}px`,
+    '--right-w': `${rightWidth}px`,
+  } as CSSProperties;
+
   return (
-    <div className={big ? 'app big' : 'app'} style={{ '--tl-h': `${timelineHeight}px` } as CSSProperties}>
+    <div className={big ? 'app big' : 'app'} style={layout}>
       <header className="topbar">
-        <div className="brand">cutdesk</div>
-        <nav className="file-actions">
-          <button onClick={newProject}>새로 만들기</button>
-          <button onClick={() => void openProject()}>열기</button>
-          <button onClick={() => void saveProject(false)}>저장</button>
-          <button onClick={() => void saveProject(true)}>다른 이름으로</button>
-        </nav>
-        <div className="doc-title">
-          {title}
-          {dirty ? ' ·' : ''}
+        <div className="brand" title="cutdesk">
+          c
         </div>
+        <div className="doc-title" title={filePath ?? undefined}>
+          {title}
+          {dirty && <span className="dirty"> · 저장 안 됨</span>}
+        </div>
+        <nav className="file-actions">
+          <button className="ghost" onClick={newProject} title="새 프로젝트">
+            <FilePlus />
+            새로 만들기
+          </button>
+          <button className="ghost" onClick={() => void openProject()} title="프로젝트 열기">
+            <FolderOpen />
+            열기
+          </button>
+          <button className="ghost" onClick={() => void saveProject(false)} title="저장 (Ctrl+S)">
+            <Save />
+            저장
+          </button>
+          <button className="ghost" onClick={() => void saveProject(true)} title="다른 이름으로 저장 (Ctrl+Shift+S)">
+            다른 이름으로
+          </button>
+        </nav>
         <button className="primary" onClick={() => setExportOpen(true)}>
+          <Download />
           내보내기
         </button>
       </header>
@@ -192,7 +279,9 @@ export function App() {
       )}
       <main className="workspace">
         <SidePanel />
+        <div className="col-splitter" onPointerDown={dragColumn('left')} onDoubleClick={resetColumn('left')} title="끌어서 너비 조절, 두 번 누르면 원래대로" />
         <Preview big={big} onToggleBig={() => setBig(!big)} />
+        <div className="col-splitter" onPointerDown={dragColumn('right')} onDoubleClick={resetColumn('right')} title="끌어서 너비 조절, 두 번 누르면 원래대로" />
         <Inspector />
       </main>
       <div className="tl-splitter" onPointerDown={dragSplitter} onDoubleClick={resetSplitter} title="끌어서 타임라인 높이 조절, 두 번 누르면 원래대로" />

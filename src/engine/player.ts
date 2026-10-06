@@ -15,6 +15,7 @@ import {
   isMediaClip,
   isTextClip,
   placeVisual,
+  transformAt,
   projectDuration,
   introFrames,
   isIntroAnim,
@@ -222,11 +223,11 @@ class Compositor {
   }
 
   /** Visual rect of a clip in canvas pixels, used by the preview for selection handles. */
-  rectFor(project: Project, clip: Clip): Rect | null {
+  rectFor(project: Project, clip: Clip, t: number): Rect | null {
     if (!this.canvas) return null;
     const asset = assetById(project, clip.assetId);
     if (asset.kind === 'audio') return null;
-    return placeVisual(asset.width, asset.height, this.canvas.width, this.canvas.height, clip.transform);
+    return placeVisual(asset.width, asset.height, this.canvas.width, this.canvas.height, transformAt(clip, t - clip.start));
   }
 
   textRect(project: Project, clip: TextClip): Rect | null {
@@ -339,7 +340,7 @@ class Compositor {
       const span = visualSpan(track, clip);
       if (t < span.from || t >= span.to) continue;
       ctx.globalAlpha = visualAlpha(span, t);
-      this.drawClip(ctx, project, clip);
+      this.drawClip(ctx, project, clip, t);
       ctx.globalAlpha = 1;
     }
   }
@@ -359,14 +360,14 @@ class Compositor {
     }
   }
 
-  private drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip): void {
+  private drawClip(ctx: CanvasRenderingContext2D, project: Project, clip: Clip, t: number): void {
     const entry = this.entries.get(clip.id);
     if (!entry) return;
     const el = entry.el;
     const ready =
       el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 : el instanceof HTMLVideoElement && el.readyState >= 2;
     if (!ready) return;
-    const r = this.rectFor(project, clip);
+    const r = this.rectFor(project, clip, t);
     if (!r) return;
     let src: CanvasImageSource = el as CanvasImageSource;
     let srcW = el instanceof HTMLImageElement ? el.naturalWidth : (el as HTMLVideoElement).videoWidth;

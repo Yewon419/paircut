@@ -1,5 +1,5 @@
 import type { AnyClip, Project, Rect } from '../shared/project';
-import { assetById, clipEnd, cropBox, isMediaClip, isTextClip, placeVisual } from '../shared/project';
+import { assetById, clipEnd, cropBox, isMediaClip, isTextClip, placeVisual, transformAt } from '../shared/project';
 import { compositor } from './engine/player';
 import { RULES } from './rules';
 
@@ -41,7 +41,7 @@ function toBox(r: Rect, w: number, h: number): Box {
  * What the layer shows on screen: a picture after its crop, or the drawn text block. Null for sound.
  * Pictures are measured at the export size, so an edge put on the frame edge leaves no rounding gap there.
  */
-export function layerBox(project: Project, clip: AnyClip): Box | null {
+export function layerBox(project: Project, clip: AnyClip, t: number): Box | null {
   if (isTextClip(clip)) {
     const { w, h } = previewSize(project);
     const r = compositor.textRect(project, clip);
@@ -52,7 +52,7 @@ export function layerBox(project: Project, clip: AnyClip): Box | null {
   if (asset.kind === 'audio') return null;
   const w = project.width;
   const h = project.height;
-  const placed = placeVisual(asset.width, asset.height, w, h, clip.transform);
+  const placed = placeVisual(asset.width, asset.height, w, h, transformAt(clip, t - clip.start));
   const kept = cropBox(placed, clip.crop);
   return toBox({ x: placed.x + kept.x, y: placed.y + kept.y, w: kept.w, h: kept.h }, w, h);
 }
@@ -65,7 +65,7 @@ export function snapTargets(project: Project, t: number, movingClipId: string): 
     if (track.kind === 'audio' || track.hidden) continue;
     for (const clip of track.clips) {
       if (clip.id === movingClipId || t < clip.start || t >= clipEnd(clip)) continue;
-      const box = layerBox(project, clip);
+      const box = layerBox(project, clip, t);
       if (!box) continue;
       xs.push(box.l, (box.l + box.r) / 2, box.r);
       ys.push(box.t, (box.t + box.b) / 2, box.b);

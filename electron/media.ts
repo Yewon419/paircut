@@ -160,6 +160,21 @@ export async function makeSolidImage(color: string, width: number, height: numbe
   return out;
 }
 
+/**
+ * One frame of a video as a PNG, `seconds` into the source. Alpha webm is decoded with libvpx so the still keeps
+ * its transparency.
+ */
+export async function makeStillImage(path: string, seconds: number, alpha: 'vp8' | 'vp9' | undefined, dir: string): Promise<string> {
+  if (!(Number.isFinite(seconds) && seconds >= 0)) throw new Error(`still time must be >= 0 seconds, got ${seconds}`);
+  const ms = Math.round(seconds * 1000);
+  const out = join(dir, `${cacheKey(path, `still${ms}`)}.png`);
+  if (existsSync(out)) return out;
+  const decoder = alpha ? ['-c:v', alpha === 'vp9' ? 'libvpx-vp9' : 'libvpx'] : [];
+  await runTool(FFMPEG, ['-y', '-v', 'error', '-ss', (ms / 1000).toFixed(3), ...decoder, '-i', path, '-frames:v', '1', out]);
+  if (!existsSync(out)) throw new Error(`ffmpeg wrote no frame at ${seconds}s of ${path}`);
+  return out;
+}
+
 export async function importMedia(path: string, cacheDir: string): Promise<MediaAsset> {
   const base = await probe(path);
   let thumbPath: string | null = null;

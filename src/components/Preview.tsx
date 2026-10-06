@@ -1,20 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
+import { Maximize, Minimize, Pause, Play, ScanLine, SkipBack, SkipForward } from 'lucide-react';
 import type { Project } from '../../shared/project';
-import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
+import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration, transformAt } from '../../shared/project';
 import { layerBox, previewSize, snapMove, snapTargets } from '../align';
-import { compositor, togglePlay } from '../engine/player';
+import { compositor, pause, seek, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
 import { RULES } from '../rules';
-import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor } from '../store';
+import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor, withTransformAt } from '../store';
 
 /** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
 const SNAP_PX = 6;
+
+/** Preview zoom choices: 0 fits the frame in the panel, the rest are fractions of the project's pixel size. */
+const ZOOMS: { value: number; label: string }[] = [
+  { value: 0, label: '맞춤' },
+  { value: 0.25, label: '25%' },
+  { value: 0.5, label: '50%' },
+  { value: 1, label: '100%' },
+  { value: 2, label: '200%' },
+];
 
 export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const wheelTimer = useRef<number | null>(null);
   const [guides, setGuides] = useState(true);
+  const [zoom, setZoom] = useState(0);
   const [snapLines, setSnapLines] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
@@ -33,7 +45,7 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
   const text = live && isTextClip(live) ? live : null;
   const asset = media ? assetById(project, media.assetId) : null;
   const rect = media && asset
-    ? placeVisual(asset.width, asset.height, cw, ch, media.transform)
+    ? placeVisual(asset.width, asset.height, cw, ch, transformAt(media, playhead - media.start))
     : text
       ? compositor.textRect(project, text)
       : null;
@@ -52,7 +64,7 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     const y0 = e.clientY;
     const { project: p0, playhead: t0 } = useEditor.getState();
     const start = findClip(p0, clipId);
-    const box = start ? layerBox(p0, start.clip) : null;
+    const box = start ? layerBox(p0, start.clip, t0) : null;
     const targets = snapTargets(p0, t0, clipId);
     beginGesture();
     const move = (ev: PointerEvent) => {
@@ -76,12 +88,13 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (media) {
-      const origin = media.transform;
+      const local = playhead - media.start;
+      const origin = transformAt(media, local);
       const id = media.id;
       dragWith(e, id, (dx, dy) => {
         const x = origin.x + dx;
         const y = origin.y + dy;
-        return (base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, x, y } }));
+        return (base) => updateMediaClip(base, id, (c) => withTransformAt(c, local, { x, y }, base.fps));
       });
     } else if (text) {
       const ox = text.x;
@@ -103,8 +116,9 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     const factor = Math.pow(1.0015, -e.deltaY);
     const current = findClip(useEditor.getState().project, id)?.clip;
     if (current && isMediaClip(current)) {
-      const scale = Math.max(0.1, Math.min(8, current.transform.scale * factor));
-      updateGesture((base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, scale } })));
+      const local = useEditor.getState().playhead - current.start;
+      const scale = Math.max(0.1, Math.min(8, transformAt(current, local).scale * factor));
+      updateGesture((base) => updateMediaClip(base, id, (c) => withTransformAt(c, local, { scale }, base.fps)));
     } else if (current && isTextClip(current)) {
       const size = Math.max(12, Math.min(300, Math.round(current.style.size * factor)));
       updateGesture((base) => updateTextClip(base, id, (c) => ({ ...c, style: { ...c.style, size } })));
@@ -115,10 +129,20 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     }, 300);
   };
 
+  const jump = (t: number) => {
+    pause();
+    seek(t);
+  };
+
+  const stageStyle: CSSProperties =
+    zoom > 0
+      ? { aspectRatio: `${project.width} / ${project.height}`, height: `${project.height * zoom}px` }
+      : { aspectRatio: `${project.width} / ${project.height}` };
+
   return (
     <section className="panel preview">
-      <div className="stage-wrap">
-        <div className="stage" ref={stageRef} style={{ aspectRatio: `${project.width} / ${project.height}` }} onWheel={onWheel}>
+      <div className={zoom > 0 ? 'stage-wrap zoomed' : 'stage-wrap'}>
+        <div className="stage" ref={stageRef} style={stageStyle} onWheel={onWheel}>
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
           {guides && (
             <div className="safe-zone" data-testid="safe-zone">
@@ -151,18 +175,49 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
         </div>
       </div>
       <div className="transport">
-        <button className="play" onClick={togglePlay} title="재생/정지 (Space)">
-          {playing ? '❚❚' : '▶'}
-        </button>
-        <button className={guides ? 'toggle on' : 'toggle'} onClick={() => setGuides(!guides)} title="위 14%, 아래 35%, 좌우 6%">
-          안전 영역
-        </button>
-        <button className={big ? 'toggle on' : 'toggle'} onClick={onToggleBig} title="타임라인과 양옆 패널을 숨기고 미리보기를 키움 (Esc로 복귀)" data-testid="preview-big">
-          크게 보기
-        </button>
-        <span className="timecode">
-          {formatTime(playhead, project.fps)} <span className="dim">/ {formatTime(projectDuration(project), project.fps)}</span>
-        </span>
+        <div className="transport-left">
+          <span className="timecode">
+            {formatTime(playhead, project.fps)} <span className="dim">/ {formatTime(projectDuration(project), project.fps)}</span>
+          </span>
+        </div>
+        <div className="transport-center">
+          <button className="icon" onClick={() => jump(0)} title="처음으로 (Home)" aria-label="처음으로">
+            <SkipBack />
+          </button>
+          <button className="icon play" onClick={togglePlay} title="재생/정지 (Space)" aria-label={playing ? '정지' : '재생'}>
+            {playing ? <Pause /> : <Play />}
+          </button>
+          <button className="icon" onClick={() => jump(Number.POSITIVE_INFINITY)} title="끝으로 (End)" aria-label="끝으로">
+            <SkipForward />
+          </button>
+        </div>
+        <div className="transport-right">
+          <select value={zoom} onChange={(e) => setZoom(Number(e.target.value))} title="미리보기 배율" data-testid="preview-zoom">
+            {ZOOMS.map((z) => (
+              <option key={z.value} value={z.value}>
+                {z.label}
+              </option>
+            ))}
+          </select>
+          <span className="sep" />
+          <button
+            className={guides ? 'icon on' : 'icon'}
+            onClick={() => setGuides(!guides)}
+            title="안전 영역: 위 14%, 아래 35%, 좌우 6%"
+            aria-label="안전 영역"
+          >
+            <ScanLine />
+          </button>
+          <button
+            className={big ? 'icon on' : 'icon'}
+            onClick={onToggleBig}
+            title={big ? '원래대로 (Esc)' : '크게 보기: 타임라인과 양옆 패널을 숨김 (Esc로 복귀)'}
+            aria-label="크게 보기"
+            data-testid="preview-big"
+          >
+            {big ? <Minimize /> : <Maximize />}
+          </button>
+        </div>
       </div>
     </section>
   );

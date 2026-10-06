@@ -114,6 +114,7 @@ function clipLine(p: Project, c: AnyClip): string {
   if (c.fadeOut > 0) extra.push(`fadeOut=${n(c.fadeOut)}`);
   const tr = c.transform;
   if (tr.scale !== 1 || tr.x !== 0 || tr.y !== 0) extra.push(`scale=${n(tr.scale)} xy=${n(tr.x)},${n(tr.y)}`);
+  if (c.keys?.length) extra.push(`keys=${c.keys.map((k) => `${n(k.t)}:${n(k.scale)}@${n(k.x)},${n(k.y)}`).join('/')} (keyframes override scale/xy)`);
   if (hasCrop(c.crop)) extra.push(`crop=${n(c.crop.l)},${n(c.crop.t)},${n(c.crop.r)},${n(c.crop.b)}`);
   if (!isNeutral(c.color)) extra.push(`color(${colorText(c.color)})`);
   return `${head} ${extra.join(' ')}`;

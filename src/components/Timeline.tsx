@@ -1,5 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AnyClip, BlendMode, Project, Track } from '../../shared/project';
+import {
+  ArrowLeftToLine,
+  ArrowRightToLine,
+  Bookmark,
+  Copy,
+  Magnet,
+  Redo2,
+  Scissors,
+  Snowflake,
+  Trash2,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { AnyClip, BlendMode, Project, Track, TrackKind } from '../../shared/project';
 import {
   assetById,
   BLEND_MODES,
@@ -13,18 +28,21 @@ import {
   isTextClip,
   projectDuration,
   resolveTokens,
+  shiftKeys,
 } from '../../shared/project';
-import { compositor, seek } from '../engine/player';
+import { compositor, pause, seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
   beginGesture,
   commit,
   deleteSelected,
   deleteTrack,
+  duplicateSelected,
   duplicateTrack,
   endGesture,
   findClip,
   fitStart,
+  freezeFrame,
   frameSnap,
   layerDropIndex,
   mergeDownBlocker,
@@ -40,7 +58,9 @@ import {
   renameTrack,
   splitAtPlayhead,
   tidyTracks,
+  toggleMarker,
   toggleTrack,
+  trimAtPlayhead,
   stackNeighbour,
   undo,
   updateClip,
@@ -50,8 +70,9 @@ import {
 } from '../store';
 import { ASSET_MIME } from './MediaBin';
 
-const RULER_H = 28;
-const TRACK_H = 56;
+const RULER_H = 24;
+/** Row height per layer kind, after OpenCut: pictures get room for their frames, text is a slim bar. */
+const TRACK_H: Record<TrackKind, number> = { video: 60, text: 36, audio: 48 };
 /** Layer card thumbnail, a 9:16 frame at twice its CSS size. */
 const THUMB_W = 54;
 const THUMB_H = 96;
@@ -128,6 +149,8 @@ export function Timeline() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [dropRow, setDropRow] = useState<string | null>(null);
   const [viewWidth, setViewWidth] = useState(1000);
+  const [freezing, setFreezing] = useState(false);
+  const [freezeError, setFreezeError] = useState<string | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -271,9 +294,10 @@ export function Timeline() {
         const prevEnd = Math.max(0, ...found.track.clips.filter((c) => c.id !== clip.id && c.start < clip.start).map(clipEnd));
         dt = Math.max(dt, prevEnd - clip.start);
         dt = Math.min(dt, clipDuration(clip) - minLen);
-        const next: AnyClip = stretchy
+        const moved: AnyClip = stretchy
           ? { ...clip, start: clip.start + dt, out: clip.out - dt }
           : { ...clip, start: clip.start + dt, in: clip.in + dt * rate };
+        const next = isMediaClip(moved) ? shiftKeys(moved, -dt) : moved;
         if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
         updateGesture((b) => updateClip(b, clip.id, () => next));
         return;
@@ -320,6 +344,16 @@ export function Timeline() {
     else placeAsset(asset, null, start, row.type === 'new-video' ? 0 : project.tracks.length);
   };
 
+  const setZoom = (z: number) => useEditor.setState({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z)) });
+
+  const runFreeze = () => {
+    setFreezeError(null);
+    setFreezing(true);
+    freezeFrame()
+      .catch((err: unknown) => setFreezeError((err as Error).message))
+      .finally(() => setFreezing(false));
+  };
+
   const step = tickStep(zoom);
   const ticks: number[] = [];
   for (let t = 0; t * zoom <= contentWidth; t += step / 5) ticks.push(Math.round(t * 1000) / 1000);
@@ -327,26 +361,39 @@ export function Timeline() {
   return (
     <section className="timeline">
       <div className="tl-toolbar">
-        <button onClick={splitAtPlayhead} title="분할 (S)">
-          분할
-        </button>
-        <button onClick={deleteSelected} disabled={!selectedClipId} title="삭제 (Delete)">
-          삭제
-        </button>
+        <ToolButton icon={Scissors} label="분할 (S)" onClick={splitAtPlayhead} testId="tl-split" />
+        <ToolButton icon={ArrowLeftToLine} label="재생 헤드 앞 잘라내기 (Q)" onClick={() => trimAtPlayhead('right')} testId="tl-trim-before" />
+        <ToolButton icon={ArrowRightToLine} label="재생 헤드 뒤 잘라내기 (W)" onClick={() => trimAtPlayhead('left')} testId="tl-trim-after" />
+        <ToolButton icon={Copy} label="클립 복제 (Ctrl+D)" onClick={duplicateSelected} disabled={!selectedClipId} testId="tl-duplicate" />
+        <ToolButton
+          icon={Snowflake}
+          label={freezing ? '정지 화면 만드는 중…' : '정지 화면: 재생 헤드의 프레임을 1초 위 레이어로 (F)'}
+          onClick={runFreeze}
+          disabled={!selectedClipId || freezing}
+          testId="tl-freeze"
+        />
+        <ToolButton icon={Trash2} label="삭제 (Delete)" onClick={deleteSelected} disabled={!selectedClipId} testId="tl-delete" />
         <span className="sep" />
-        <button onClick={undo} disabled={!canUndo} title="실행 취소 (Ctrl+Z)">
-          실행 취소
-        </button>
-        <button onClick={redo} disabled={!canRedo} title="다시 실행 (Ctrl+Shift+Z)">
-          다시 실행
-        </button>
+        <ToolButton icon={Bookmark} label="북마크 넣기/빼기 (M)" onClick={toggleMarker} testId="tl-bookmark" />
         <span className="sep" />
-        <button className={snap ? 'toggle on' : 'toggle'} onClick={() => useEditor.setState({ snap: !snap })}>
-          자석 {snap ? '켬' : '끔'}
-        </button>
+        <ToolButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={undo} disabled={!canUndo} testId="tl-undo" />
+        <ToolButton icon={Redo2} label="다시 실행 (Ctrl+Shift+Z)" onClick={redo} disabled={!canRedo} testId="tl-redo" />
+        {freezeError && (
+          <span className="tl-error" onClick={() => setFreezeError(null)}>
+            {freezeError}
+          </span>
+        )}
         <div className="grow" />
-        <label className="zoom">
-          <span>확대</span>
+        <ToolButton
+          icon={Magnet}
+          label={snap ? '자석 켬 (끄려면 누르기)' : '자석 끔 (켜려면 누르기)'}
+          onClick={() => useEditor.setState({ snap: !snap })}
+          on={snap}
+          testId="tl-snap"
+        />
+        <span className="sep" />
+        <ToolButton icon={ZoomOut} label="축소" onClick={() => setZoom(zoom / 1.25)} testId="tl-zoom-out" />
+        <label className="zoom" title="확대 (Ctrl+휠)">
           <input
             type="range"
             min={MIN_ZOOM}
@@ -355,10 +402,11 @@ export function Timeline() {
             onChange={(e) => useEditor.setState({ zoom: Number(e.target.value) })}
           />
         </label>
+        <ToolButton icon={ZoomIn} label="확대" onClick={() => setZoom(zoom * 1.25)} testId="tl-zoom-in" />
       </div>
       <div className="tl-body">
         <div className="tl-heads">
-          <div style={{ height: RULER_H }} />
+          <div className="tl-heads-ruler" style={{ height: RULER_H }} />
           {rows.map((row) =>
             row.type === 'track' ? (
               <LayerCard
@@ -400,8 +448,18 @@ export function Timeline() {
                 );
               })}
               {project.markers.map((m) => (
-                <div key={`${m.t}-${m.label}`} className="tl-marker" style={{ left: m.t * zoom }} title={m.label}>
-                  <span>{m.label}</span>
+                <div key={`${m.t}-${m.label}`} className="tl-marker" style={{ left: m.t * zoom }} title={`${m.label}: 누르면 이동`}>
+                  <span
+                    data-marker={m.label}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      useEditor.setState({ selectedClipId: null });
+                      pause();
+                      seek(m.t);
+                    }}
+                  >
+                    {m.label}
+                  </span>
                 </div>
               ))}
             </div>
@@ -427,7 +485,7 @@ export function Timeline() {
                   key={key}
                   data-row={key}
                   className={`tl-track kind-${row.track.kind}${dropRow === key ? ' drop' : ''}${row.track.locked ? ' locked' : ''}`}
-                  style={{ height: TRACK_H }}
+                  style={{ height: TRACK_H[row.track.kind] }}
                   onDragOver={(e) => onDragOverRow(e, key)}
                   onDragLeave={() => setDropRow(null)}
                   onDrop={(e) => onDropRow(e, row)}
@@ -452,6 +510,23 @@ export function Timeline() {
         </div>
       </div>
     </section>
+  );
+}
+
+interface ToolButtonProps {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  on?: boolean;
+  testId: string;
+}
+
+function ToolButton({ icon: Icon, label, onClick, disabled = false, on = false, testId }: ToolButtonProps) {
+  return (
+    <button className={on ? 'icon on' : 'icon'} onClick={onClick} disabled={disabled} title={label} aria-label={label} data-testid={testId}>
+      <Icon />
+    </button>
   );
 }
 
@@ -569,9 +644,9 @@ function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProp
   return (
     <div
       ref={cardRef}
-      className={`tl-head layer-card${track.clipped && track.kind !== 'audio' ? ' clipped' : ''}${shown ? '' : ' off'}${menuAt ? ' open' : ''}${dragging ? ' dragging' : ''}${dropLine ? ` drop-${dropLine}` : ''}`}
+      className={`tl-head layer-card${track.kind === 'text' ? ' short' : ''}${track.clipped && track.kind !== 'audio' ? ' clipped' : ''}${shown ? '' : ' off'}${menuAt ? ' open' : ''}${dragging ? ' dragging' : ''}${dropLine ? ` drop-${dropLine}` : ''}`}
       data-head={track.id}
-      style={{ height: TRACK_H }}
+      style={{ height: TRACK_H[track.kind] }}
       onPointerDown={onDown}
     >
       {audio ? <div className="layer-thumb layer-thumb-audio">♪</div> : <LayerThumb trackId={track.id} />}
@@ -761,6 +836,10 @@ function ClipView({ project, clip, zoom, selected, dim, dissolve, onDown }: Clip
       title={label}
     >
       {dissolve > 0 && <div className="tl-dissolve" style={{ width: (dissolve / 2) * zoom }} data-dissolve-mark={dissolve} />}
+      {isMediaClip(clip) &&
+        clip.keys?.map((k) =>
+          k.t >= 0 && k.t <= clipDuration(clip) ? <div key={k.t} className="tl-key" style={{ left: k.t * zoom }} data-key={k.t} /> : null,
+        )}
       <div className="tl-clip-label">
         {label} · {clipDuration(clip).toFixed(1)}초
       </div>

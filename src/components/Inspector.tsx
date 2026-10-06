@@ -1,7 +1,8 @@
 import { useState } from 'react';
+import { ChevronLeft, ChevronRight, Diamond, MousePointerClick } from 'lucide-react';
 import type { ClipColor } from '../../shared/color';
 import { NEUTRAL_COLOR } from '../../shared/color';
-import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
+import type { Clip, ClipCrop, ClipTransform, FontId, KeyEase, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
   assetById,
   clipDuration,
@@ -17,6 +18,7 @@ import {
   SPEED_MAX,
   spanIndex,
   SPEED_MIN,
+  transformAt,
   validCustomFont,
   VOLUME_MAX,
 } from '../../shared/project';
@@ -30,17 +32,24 @@ import { allTemplates, useTemplates } from '../textTemplates';
 import {
   applyColorToAll,
   beginGesture,
+  clearKeys,
   commit,
   endGesture,
   findClip,
+  frameSnap,
+  keyIndexAt,
   setClipSpeed,
+  setKeyEase,
   setVars,
+  toggleKeyAtPlayhead,
   updateGesture,
   updateMediaClip,
   updateTextClip,
   useEditor,
   withSubjectLayer,
+  withTransformAt,
 } from '../store';
+import { pause, seek } from '../engine/player';
 
 const FONTS: { id: FontId; label: string }[] = [
   { id: 'black', label: 'Black' },
@@ -72,13 +81,18 @@ const ALIGNS: { to: AlignTo; label: string }[] = [
 /** Puts the layer against a frame edge or on a center line, by what it shows (a picture after its crop). */
 function AlignButtons({ project, clip }: { project: Project; clip: Clip | TextClip }) {
   const align = (to: AlignTo) => {
-    const box = layerBox(project, clip);
+    const t = useEditor.getState().playhead;
+    const box = layerBox(project, clip, t);
     if (!box) return;
     const { dx, dy } = alignShift(box, to);
     commit((p) =>
       isTextClip(clip)
         ? updateTextClip(p, clip.id, (c) => ({ ...c, x: c.x + dx, y: c.y + dy }))
-        : updateMediaClip(p, clip.id, (c) => ({ ...c, transform: { ...c.transform, x: c.transform.x + dx, y: c.transform.y + dy } })),
+        : updateMediaClip(p, clip.id, (c) => {
+            const local = t - c.start;
+            const now = transformAt(c, local);
+            return withTransformAt(c, local, { x: now.x + dx, y: now.y + dy }, p.fps);
+          }),
     );
   };
   return (
@@ -153,6 +167,13 @@ function ProjectPanel({ project }: { project: Project }) {
     <aside className="panel inspector">
       <div className="panel-head">
         <span>프로젝트</span>
+      </div>
+      <div className="empty-state compact">
+        <div className="empty-icon">
+          <MousePointerClick />
+        </div>
+        <strong>고른 클립이 없어요</strong>
+        <span className="dim">타임라인에서 클립을 누르면 여기서 다듬어요.</span>
       </div>
       <dl className="props">
         <dt>크기</dt>
@@ -719,12 +740,14 @@ function SubjectLayer({ project, clip }: { project: Project; clip: Clip }) {
 function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; visual: boolean }) {
   const asset = assetById(project, clip.assetId);
   const id = clip.id;
-  const t = clip.transform;
+  const playhead = useEditor((s) => s.playhead);
+  const local = playhead - clip.start;
+  const t = transformAt(clip, local);
 
   const setTransformLive = (patch: Partial<ClipTransform>) =>
-    updateGesture((base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, ...patch } })));
+    updateGesture((base) => updateMediaClip(base, id, (c) => withTransformAt(c, local, patch, base.fps)));
   const setTransform = (patch: Partial<ClipTransform>) =>
-    commit((p) => updateMediaClip(p, id, (c) => ({ ...c, transform: { ...c.transform, ...patch } })));
+    commit((p) => updateMediaClip(p, id, (c) => withTransformAt(c, local, patch, p.fps)));
   const hasAudio = asset.kind === 'audio' || (asset.kind === 'video' && asset.hasAudio);
   const dur = clipDuration(clip);
   const setFade = (key: 'fadeIn' | 'fadeOut', value: number) =>
@@ -751,6 +774,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
       {visual && asset.solid === undefined && !asset.alpha && <SubjectLayer project={project} clip={clip} />}
       {asset.kind !== 'image' && (
         <div className="transform-controls">
+          <div className="section-title">속도</div>
           <label>
             <span>속도 {clip.speed.toFixed(2)}x</span>
             <input
@@ -783,6 +807,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
       {visual && <DissolveControls project={project} clip={clip} />}
       {hasAudio && (
         <div className="transform-controls">
+          <div className="section-title">소리</div>
           <label>
             <span>소리 {Math.round(clip.volume * 100)}%</span>
             <input
@@ -827,8 +852,10 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
           </div>
         </div>
       )}
+      {visual && <KeyControls project={project} clip={clip} local={local} />}
       {visual && (
         <div className="transform-controls">
+          <div className="section-title">위치·크기</div>
           <label>
             <span>확대 {Math.round(t.scale * 100)}%</span>
             <input
@@ -870,6 +897,72 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
       {visual && <CropControls clip={clip} />}
       {visual && <ColorControls clip={clip} />}
     </aside>
+  );
+}
+
+const EASES: { id: KeyEase; label: string }[] = [
+  { id: 'smooth', label: '부드럽게' },
+  { id: 'linear', label: '일정하게' },
+];
+
+/**
+ * Position and size keyframes: a diamond adds or removes one at the playhead, the arrows jump between them. With
+ * keyframes on, a change in the preview or below lands on the keyframe at the playhead (made when missing).
+ */
+function KeyControls({ project, clip, local }: { project: Project; clip: Clip; local: number }) {
+  const keys = clip.keys ?? [];
+  const at = keyIndexAt(clip, frameSnap(local, project.fps), project.fps);
+  const go = (k: number) => {
+    pause();
+    seek(clip.start + k);
+  };
+  const prev = [...keys].reverse().find((k) => k.t < local - 0.5 / project.fps);
+  const next = keys.find((k) => k.t > local + 0.5 / project.fps);
+  const inside = local >= 0 && local <= clipDuration(clip);
+  return (
+    <div className="transform-controls">
+      <div className="section-title">
+        <span>키프레임</span>
+        <span className="dim">{keys.length > 0 ? `${keys.length}개` : '없음'}</span>
+      </div>
+      <div className="key-row">
+        <button className="icon" disabled={!prev} onClick={() => prev && go(prev.t)} title="이전 키프레임" data-testid="key-prev">
+          <ChevronLeft />
+        </button>
+        <button
+          className={at >= 0 ? 'icon key on' : 'icon key'}
+          disabled={!inside}
+          onClick={() => toggleKeyAtPlayhead(clip.id)}
+          title={at >= 0 ? '이 키프레임 빼기' : '재생 헤드에 키프레임 넣기'}
+          data-testid="key-toggle"
+        >
+          <Diamond />
+        </button>
+        <button className="icon" disabled={!next} onClick={() => next && go(next.t)} title="다음 키프레임" data-testid="key-next">
+          <ChevronRight />
+        </button>
+        {at >= 0 && at < keys.length - 1 && (
+          <select value={keys[at].ease} onChange={(e) => setKeyEase(clip.id, at, e.target.value as KeyEase)} title="다음 키프레임까지 움직임" data-testid="key-ease">
+            {EASES.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.label}
+              </option>
+            ))}
+          </select>
+        )}
+        <div className="grow" />
+        {keys.length > 0 && (
+          <button className="ghost" onClick={() => clearKeys(clip.id)} data-testid="key-clear">
+            모두 지우기
+          </button>
+        )}
+      </div>
+      <p className="hint">
+        {keys.length > 0
+          ? '재생 헤드 위치에서 바꾼 위치·확대가 그 시점 키프레임이 돼요.'
+          : '키프레임을 두 개 이상 넣고 위치·확대를 다르게 하면 그 사이를 움직여요.'}
+      </p>
+    </div>
   );
 }
 

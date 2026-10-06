@@ -695,6 +695,11 @@ try {
   await win.locator('.stage').click({ position: { x: 5, y: 5 } });
   await win.keyboard.press('Escape');
   check('Escape leaves the big preview', await win.locator('.timeline').isVisible());
+  await win.locator('[data-testid="preview-zoom"]').selectOption('0.5');
+  const halfHeight = await stageHeight();
+  check('50% preview zoom draws the frame at half its pixel size', Math.abs(halfHeight - 960) <= 2, String(halfHeight));
+  await win.locator('[data-testid="preview-zoom"]').selectOption('0');
+  check('fit goes back to the panel size', Math.abs((await stageHeight()) - stage0) <= 2);
 
   // Solid color backgrounds: made as a frame-size PNG, so preview and export treat them like any picture.
   await win.evaluate((p) => window.__cutdesk.load(p), project);
@@ -1378,6 +1383,49 @@ try {
   await win.locator('[data-clip="fc"]').click();
   check('picking the block under the playhead leaves it where it is', Math.abs((await playheadNow()) - 6.5) < 1e-9,
     String(await playheadNow()));
+
+  // OpenCut-style tools: bookmarks, duplicate, trim before the playhead, position keyframes.
+  const markers = () => win.evaluate(() => window.__cutdesk.state().project.markers.map((m) => m.t));
+  await win.evaluate(() => window.__cutdesk.seek(2));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('m');
+  check('M puts a bookmark at the playhead', JSON.stringify(await markers()) === '[2]', JSON.stringify(await markers()));
+  await win.keyboard.press('m');
+  check('M on a bookmark takes it away', (await markers()).length === 0, JSON.stringify(await markers()));
+
+  await win.locator('[data-clip="fc"]').click();
+  await win.keyboard.press('Control+d');
+  fit = await fitClips();
+  const copyId = await win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  check('Ctrl+D puts a copy right after the clip and picks it',
+    copyId !== 'fc' && fit[copyId] && Math.abs(fit[copyId].start - fit.fc.end) < 1e-9, JSON.stringify(fit));
+
+  await win.evaluate(() => window.__cutdesk.seek(6.5));
+  await win.locator('[data-clip="fc"]').click();
+  await win.locator('[data-testid="tl-trim-before"]').click();
+  fit = await fitClips();
+  check('trimming before the playhead keeps the clip end and starts it there',
+    Math.abs(fit.fc.start - 6.5) < 1e-9 && Math.abs(fit.fc.end - 7) < 1e-9, JSON.stringify(fit.fc));
+
+  const keysOf = (id) => win.evaluate((cid) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === cid).keys ?? [], id);
+  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.locator('[data-clip="fa"]').click();
+  await win.locator('[data-testid="key-toggle"]').click();
+  let keys = await keysOf('fa');
+  check('the first keyframe also pins the start', keys.length === 2 && keys[0].t === 0 && Math.abs(keys[1].t - 0.5) < 1e-9, JSON.stringify(keys));
+  await win.evaluate(() => window.__cutdesk.seek(1.2));
+  const boxBefore = await win.locator('.transform-box').boundingBox();
+  await win.locator('[data-align="left"]').click();
+  keys = await keysOf('fa');
+  check('moving the picture with keyframes on adds a keyframe there', keys.length === 3 && Math.abs(keys[2].t - 1.2) < 1e-9, JSON.stringify(keys));
+  await win.evaluate(() => window.__cutdesk.seek(0.25));
+  await win.waitForTimeout(100);
+  const boxEarly = await win.locator('.transform-box').boundingBox();
+  check('before the moved keyframe the picture stays where it was', Math.abs(boxEarly.x - boxBefore.x) < 2,
+    `${boxEarly.x} vs ${boxBefore.x}`);
+  check('the clip shows its keyframes', (await win.locator('[data-clip="fa"] .tl-key').count()) === 3);
+  await win.locator('[data-testid="key-clear"]').click();
+  check('clearing keyframes leaves a plain transform', (await keysOf('fa')).length === 0);
 
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);

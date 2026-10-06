@@ -10,6 +10,7 @@ const api: CutdeskApi = {
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),
   makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
+  makeStill: (asset, seconds) => ipcRenderer.invoke('media:still', asset, seconds),
   makeSubject: (asset, from, to, fps) => ipcRenderer.invoke('media:subject', asset, from, to, fps),
   bakeLayers: (project, name) => ipcRenderer.invoke('media:bake', project, name),
   onMatteProgress: (listener) => {

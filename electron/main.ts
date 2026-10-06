@@ -13,7 +13,7 @@ import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runBake, runExport } from './exporter';
 import { makeSubjectFile } from './matte';
-import { importMedia, makeSolidImage } from './media';
+import { importMedia, makeSolidImage, makeStillImage } from './media';
 
 const isTest = process.env.CUTDESK_TEST === '1';
 
@@ -119,6 +119,15 @@ async function makeSolid(color: string, width: number, height: number): Promise<
   return { ...asset, name: `단색 ${hex}`, solid: hex };
 }
 
+/** A held frame of a clip's source, kept under userData beside the solids. */
+async function makeStill(asset: MediaAsset, seconds: number): Promise<MediaAsset> {
+  const dir = join(app.getPath('userData'), 'stills');
+  mkdirSync(dir, { recursive: true });
+  const path = await makeStillImage(asset.path, seconds, asset.alpha, dir);
+  const still = await importMedia(path, cacheDir());
+  return { ...still, name: `${asset.name} 정지 ${seconds.toFixed(2)}초` };
+}
+
 /** Local bridge dispatch: file probing runs here, everything else in the editor window. */
 async function bridgeTool(name: ToolName, input: unknown): Promise<AgentToolResult> {
   if (name === 'probe_media') {
@@ -157,6 +166,7 @@ function registerIpc(): void {
 
   ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
   ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
+  ipcMain.handle('media:still', (_e, asset: MediaAsset, seconds: number): Promise<MediaAsset> => makeStill(asset, seconds));
   ipcMain.handle('media:subject', async (_e, asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset> => {
     const matteRoot = join(app.getPath('userData'), 'mattes');
     const outRoot = join(app.getPath('userData'), 'subjects');

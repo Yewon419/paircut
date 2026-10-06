@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { ClipColor } from '../shared/color';
-import type { AnyClip, Clip, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
+import type { AnyClip, Clip, ClipTransform, KeyEase, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
 import {
+  clipDuration,
   clipEnd,
   emptyProject,
   IDENTITY_TRANSFORM,
@@ -10,7 +11,9 @@ import {
   MEDIA_CLIP_DEFAULTS,
   normalizeProject,
   projectDuration,
+  shiftKeys,
   sourceTime,
+  transformAt,
 } from '../shared/project';
 
 const HISTORY_LIMIT = 200;
@@ -337,17 +340,7 @@ export function updateTextClip(base: Project, clipId: string, update: (c: TextCl
 }
 
 export function splitAtPlayhead(): void {
-  const { project, playhead, selectedClipId } = get();
-  const t = frameSnap(playhead, project.fps);
-  const minLen = 1 / project.fps;
-  const inside = (c: AnyClip) => t > c.start + minLen / 2 && t < clipEnd(c) - minLen / 2;
-  const selected = selectedClipId ? findClip(project, selectedClipId) : null;
-  const targets = new Set<string>();
-  if (selected && inside(selected.clip)) {
-    if (!selected.track.locked) targets.add(selected.clip.id);
-  } else {
-    for (const track of project.tracks) if (!track.locked) for (const c of track.clips) if (inside(c)) targets.add(c.id);
-  }
+  const { t, targets } = clipsUnderPlayhead();
   if (targets.size === 0) return;
   commit((p) => splitClips(p, t, targets));
 }
@@ -369,11 +362,189 @@ export function splitClips(p: Project, t: number, targets: Set<string>): Project
         const cut = sourceTime(c, t);
         return [
           { ...c, out: cut, fadeOut: 0 },
-          { ...c, id: uid('c'), start: t, in: cut, fadeIn: 0, dissolve: 0 },
+          shiftKeys({ ...c, id: uid('c'), start: t, in: cut, fadeIn: 0, dissolve: 0 }, c.start - t),
         ];
       }),
     })),
   };
+}
+
+/** Clips cut by a playhead edit: the selected one when the playhead is inside it, else every unlocked clip there. */
+function clipsUnderPlayhead(): { t: number; targets: Set<string> } {
+  const { project, playhead, selectedClipId } = get();
+  const t = frameSnap(playhead, project.fps);
+  const minLen = 1 / project.fps;
+  const inside = (c: AnyClip) => t > c.start + minLen / 2 && t < clipEnd(c) - minLen / 2;
+  const selected = selectedClipId ? findClip(project, selectedClipId) : null;
+  const targets = new Set<string>();
+  if (selected && inside(selected.clip)) {
+    if (!selected.track.locked) targets.add(selected.clip.id);
+  } else {
+    for (const track of project.tracks) if (!track.locked) for (const c of track.clips) if (inside(c)) targets.add(c.id);
+  }
+  return { t, targets };
+}
+
+/** Drops the part of the clips before the playhead (keep: 'right') or after it (keep: 'left'); nothing moves. */
+export function trimAtPlayhead(keep: 'left' | 'right'): void {
+  const { t, targets } = clipsUnderPlayhead();
+  if (targets.size === 0) return;
+  commit((p) => trimClips(p, t, targets, keep));
+}
+
+export function trimClips(p: Project, t: number, targets: Set<string>, keep: 'left' | 'right'): Project {
+  return {
+    ...p,
+    tracks: p.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((c) => {
+        if (!targets.has(c.id)) return c;
+        if (keep === 'left') {
+          if (isTextClip(c)) return { ...c, out: c.in + (t - c.start) };
+          return { ...c, out: sourceTime(c, t), fadeOut: 0 };
+        }
+        if (isTextClip(c)) return { ...c, start: t, out: c.out - (t - c.start) };
+        return shiftKeys({ ...c, start: t, in: sourceTime(c, t), fadeIn: 0, dissolve: 0 }, c.start - t);
+      }),
+    })),
+  };
+}
+
+/**
+ * Copies the selected clip right after itself on the same layer when there is room, else onto a new layer just
+ * above at the same time. The copy becomes the selection.
+ */
+export function duplicateSelected(): void {
+  const { project, selectedClipId } = get();
+  const found = selectedClipId ? findClip(project, selectedClipId) : null;
+  if (!found) return;
+  const copy: AnyClip = { ...found.clip, id: uid('c'), start: clipEnd(found.clip) };
+  if (isMediaClip(copy)) copy.dissolve = 0;
+  commit((p) => withDuplicate(p, found.track.id, copy));
+  set({ selectedClipId: copy.id });
+}
+
+export function withDuplicate(p: Project, trackId: string, copy: AnyClip): Project {
+  const track = p.tracks.find((t) => t.id === trackId);
+  if (!track) throw new Error(`no track ${trackId}`);
+  if (!track.locked && !overlaps(track, copy.start, clipEnd(copy), null)) {
+    return withTrack(p, trackId, (t) => ({ ...t, clips: sortClips([...t.clips, copy]) }));
+  }
+  const length = clipDuration(copy);
+  const above: AnyClip = { ...copy, start: copy.start - length };
+  const added: Track = { id: uid(track.kind[0]), kind: track.kind, muted: false, hidden: false, clips: [above] };
+  const tracks = [...p.tracks];
+  tracks.splice(p.tracks.indexOf(track), 0, added);
+  return { ...p, tracks };
+}
+
+/** Adds a bookmark at the playhead, or removes the one already there (within half a frame). */
+export function toggleMarker(): void {
+  const { project, playhead } = get();
+  const t = frameSnap(playhead, project.fps);
+  const near = project.markers.find((m) => Math.abs(m.t - t) < 0.5 / project.fps);
+  if (near) {
+    commit((p) => ({ ...p, markers: p.markers.filter((m) => m !== near) }));
+    return;
+  }
+  const label = String(project.markers.length + 1);
+  commit((p) => ({ ...p, markers: [...p.markers, { t, label }].sort((a, b) => a.t - b.t) }));
+}
+
+/**
+ * Holds the picture of the selected media clip at the playhead: a still of that frame, one second long, on a new
+ * layer right above, placed, cropped and graded like the clip.
+ */
+export async function freezeFrame(): Promise<void> {
+  const { project, playhead, selectedClipId } = get();
+  const found = selectedClipId ? findClip(project, selectedClipId) : null;
+  if (!found || !isMediaClip(found.clip) || found.track.kind !== 'video') throw new Error('영상 레이어의 클립을 고르세요.');
+  const clip = found.clip;
+  const t = frameSnap(playhead, project.fps);
+  if (t < clip.start || t >= clipEnd(clip)) throw new Error('재생 헤드가 고른 클립 위에 있어야 해요.');
+  const asset = project.assets.find((a) => a.id === clip.assetId);
+  if (!asset) throw new Error(`asset not found: ${clip.assetId}`);
+  const still = asset.kind === 'image' ? asset : await window.api.makeStill(asset, Math.min(asset.duration, sourceTime(clip, t)));
+  const held: Clip = { ...clip, id: uid('c'), assetId: still.id, start: t, in: 0, out: 1, speed: 1, dissolve: 0, fadeIn: 0, fadeOut: 0 };
+  commit((p) => {
+    const at = p.tracks.findIndex((tr) => tr.id === found.track.id);
+    if (at === -1) return p;
+    const track: Track = { id: uid('v'), kind: 'video', muted: false, hidden: false, clips: [held] };
+    const tracks = [...p.tracks];
+    tracks.splice(at, 0, track);
+    const assets = p.assets.some((a) => a.id === still.id) ? p.assets : [...p.assets, still];
+    return { ...p, assets, tracks };
+  });
+  set({ selectedClipId: held.id });
+}
+
+/** Index of the keyframe within half a frame of `local`, or -1. */
+export function keyIndexAt(clip: Clip, local: number, fps: number): number {
+  return clip.keys?.findIndex((k) => Math.abs(k.t - local) < 0.5 / fps) ?? -1;
+}
+
+/**
+ * Changes the clip's place or size as seen at `local` seconds into it: the plain transform when it has no keyframes,
+ * else the keyframe there, added when there is none yet.
+ */
+export function withTransformAt(c: Clip, local: number, patch: Partial<ClipTransform>, fps: number): Clip {
+  if (!c.keys || c.keys.length === 0) return { ...c, transform: { ...c.transform, ...patch } };
+  const at = keyIndexAt(c, local, fps);
+  if (at >= 0) return { ...c, keys: c.keys.map((k, i) => (i === at ? { ...k, ...patch } : k)) };
+  const t = frameSnap(local, fps);
+  const added = { ...transformAt(c, t), ...patch, t, ease: 'smooth' as KeyEase };
+  return { ...c, keys: [...c.keys, added].sort((a, b) => a.t - b.t) };
+}
+
+/**
+ * Puts a keyframe at the playhead holding what the clip shows there, or takes away the one already there. The first
+ * keyframe also keeps the current place as a second one at the clip start, so adding a key never moves the picture.
+ * Removing the last keyframe leaves the clip where that key had it.
+ */
+export function toggleKeyAtPlayhead(clipId: string): void {
+  const { project, playhead } = get();
+  const found = findClip(project, clipId);
+  if (!found || !isMediaClip(found.clip) || found.track.locked) return;
+  const c = found.clip;
+  const fps = project.fps;
+  const local = frameSnap(playhead - c.start, fps);
+  if (local < 0 || local > clipDuration(c)) return;
+  const at = keyIndexAt(c, local, fps);
+  commit((p) =>
+    updateMediaClip(p, clipId, (clip) => {
+      const keys = clip.keys ?? [];
+      if (at >= 0) {
+        const rest = keys.filter((_, i) => i !== at);
+        if (rest.length > 0) return { ...clip, keys: rest };
+        return withoutKeys(clip, transformAt(clip, local));
+      }
+      const here = { ...transformAt(clip, local), t: local, ease: 'smooth' as KeyEase };
+      const seed = keys.length === 0 && local > 0 ? [{ ...clip.transform, t: 0, ease: 'smooth' as KeyEase }] : [];
+      return { ...clip, keys: [...seed, ...keys, here].sort((a, b) => a.t - b.t) };
+    }),
+  );
+}
+
+function withoutKeys(c: Clip, transform: ClipTransform): Clip {
+  const plain = { ...c, transform };
+  delete plain.keys;
+  return plain;
+}
+
+export function setKeyEase(clipId: string, index: number, ease: KeyEase): void {
+  commit((p) => updateMediaClip(p, clipId, (c) => ({ ...c, keys: c.keys?.map((k, i) => (i === index ? { ...k, ease } : k)) })));
+}
+
+export function clearKeys(clipId: string): void {
+  const { project, playhead } = get();
+  const found = findClip(project, clipId);
+  if (!found || !isMediaClip(found.clip) || !found.clip.keys) return;
+  const local = playhead - found.clip.start;
+  commit((p) =>
+    updateMediaClip(p, clipId, (c) => {
+      return withoutKeys(c, transformAt(c, local));
+    }),
+  );
 }
 
 export function deleteSelected(): void {
