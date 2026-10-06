@@ -93,18 +93,22 @@
 
 :root {
   color-scheme: dark;
-  --bg: #141416;
-  --panel: #1d1d20;
-  --panel-2: #26262a;
-  --line: #313136;
-  --text: #e8e8ea;
-  --dim: #8d8d95;
+  /* Bitteul palette at night: navy ground, light sky for marks, cerulean for fills. */
+  --bg: #0a1622;
+  --panel: #0f2030;
+  --panel-2: #16304a;
+  --line: #1f3a55;
+  --line-strong: #2f5678;
+  --text: #eaf3f9;
+  --dim: #87a3bb;
   --accent: #2b86c5;
+  --accent-strong: #2779b3;
+  --sky: #bfe0f5;
   --accent-soft: rgba(43, 134, 197, 0.22);
-  --danger: #e06c6c;
-  --video: #2a4c63;
-  --image: #3d4a32;
-  --audio: #23473f;
+  --danger: #e88a8a;
+  --video: #255d88;
+  --image: #3a5a78;
+  --audio: #1d5562;
   font-family: 'Pretendard', 'Segoe UI', 'Malgun Gothic', sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -129,13 +133,14 @@ button {
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 5px 10px;
   cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
 }
 
 button:hover:not(:disabled) {
-  border-color: #4a4a52;
+  border-color: var(--line-strong);
 }
 
 button:disabled {
@@ -144,15 +149,15 @@ button:disabled {
 }
 
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: #fff;
   font-weight: 600;
 }
 
 button.toggle.on {
   border-color: var(--accent);
-  color: #cfe6f6;
+  color: var(--sky);
 }
 
 button.icon {
@@ -169,8 +174,49 @@ input[type='number'] {
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: 6px;
   padding: 4px 6px;
+}
+
+input[type='text'],
+input[type='date'],
+select {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 6px;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 2px solid var(--panel);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--line-strong);
 }
 
 input[type='range'] {
@@ -201,6 +247,7 @@ input[type='range'] {
 .brand {
   font-weight: 700;
   letter-spacing: -0.01em;
+  color: var(--sky);
 }
 
 .file-actions {
@@ -240,8 +287,9 @@ input[type='range'] {
 
 .notice {
   padding: 6px 12px;
-  background: #3a2d1b;
-  color: #f0d7a8;
+  background: var(--panel-2);
+  color: var(--sky);
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 
@@ -300,7 +348,7 @@ input[type='range'] {
   align-items: center;
   gap: 8px;
   padding: 6px;
-  border-radius: 4px;
+  border-radius: 6px;
   cursor: grab;
 }
 
@@ -491,7 +539,7 @@ input[type='range'] {
 }
 
 .tl-heads {
-  width: 120px;
+  width: 168px;
   flex: none;
   border-right: 1px solid var(--line);
 }
@@ -517,6 +565,69 @@ input[type='range'] {
 .tl-head-btns button {
   padding: 1px 6px;
   font-size: 11px;
+  white-space: nowrap;
+}
+
+.tl-head-btns .tl-menu-btn {
+  width: 22px;
+  height: 20px;
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.tl-head-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.tl-head-input {
+  width: 100%;
+  font-weight: 600;
+  padding: 1px 4px;
+}
+
+.tl-track.locked {
+  background-image: repeating-linear-gradient(135deg, transparent 0 10px, rgba(191, 224, 245, 0.05) 10px 20px);
+}
+
+.tl-track.locked .tl-clip {
+  cursor: default;
+}
+
+.tl-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(5, 12, 20, 0.5);
+}
+
+.tl-menu button {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 6px 10px;
+}
+
+.tl-menu button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.tl-menu button.danger {
+  color: var(--danger);
+}
+
+.tl-menu-note {
+  padding: 0 10px 6px;
+  font-size: 11px;
+  color: var(--dim);
 }
 
 .tl-scroll {
@@ -543,12 +654,12 @@ input[type='range'] {
   bottom: 0;
   width: 1px;
   height: 5px;
-  background: #4a4a52;
+  background: var(--line-strong);
 }
 
 .tick.major {
   height: 10px;
-  background: #6a6a74;
+  background: var(--dim);
 }
 
 .tick span {
@@ -584,10 +695,10 @@ input[type='range'] {
   position: absolute;
   top: 4px;
   bottom: 4px;
-  border-radius: 4px;
+  border-radius: 5px;
   overflow: hidden;
   cursor: grab;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(191, 224, 245, 0.16);
 }
 
 .tl-clip.kind-video {
@@ -603,7 +714,7 @@ input[type='range'] {
 }
 
 .tl-clip.selected {
-  border: 2px solid #fff;
+  border: 2px solid var(--sky);
 }
 
 .tl-clip.dim {
@@ -651,7 +762,7 @@ input[type='range'] {
 }
 
 .tl-clip.selected .handle {
-  background: rgba(255, 255, 255, 0.85);
+  background: rgba(191, 224, 245, 0.85);
 }
 
 .tl-playhead {
@@ -664,10 +775,31 @@ input[type='range'] {
   pointer-events: none;
 }
 
+/* Only the part over the ruler takes the pointer, so clip edges under the line stay trimmable. */
+.tl-playhead-grip {
+  position: absolute;
+  top: 0;
+  left: -7px;
+  width: 16px;
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+
+.tl-playhead-grip::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  background: var(--sky);
+  clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(5, 12, 20, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -679,7 +811,7 @@ input[type='range'] {
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 10px;
   padding: 18px 20px;
 }
 
@@ -818,15 +950,29 @@ input[type='range'] {
   border-style: dashed;
 }
 
+/* Text clips in light sky so they stand apart from the blue media clips; their labels go navy. */
 .tl-clip.kind-text {
-  background: #5a4a1f;
+  background: var(--sky);
+}
+
+.tl-clip.kind-text .tl-clip-label {
+  color: #13293d;
+  text-shadow: none;
+}
+
+.tl-clip.kind-text.selected {
+  border-color: var(--accent-strong);
+}
+
+.tl-clip.kind-text.selected .handle {
+  background: rgba(39, 121, 179, 0.85);
 }
 
 .tl-marker {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-left: 1px solid #ffd166;
+  border-left: 1px solid var(--sky);
   pointer-events: none;
 }
 
@@ -835,7 +981,7 @@ input[type='range'] {
   bottom: 1px;
   left: 3px;
   font-size: 10px;
-  color: #ffd166;
+  color: var(--sky);
   white-space: nowrap;
 }
 
@@ -869,8 +1015,8 @@ input[type='range'] {
 }
 
 .tabs .tab.on {
-  color: var(--text);
-  border-bottom-color: var(--accent);
+  color: var(--sky);
+  border-bottom-color: var(--sky);
 }
 
 .preset-list {
@@ -944,7 +1090,7 @@ input[type='range'] {
 
 .button-row button.on {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--sky);
 }
 
 .board-path {

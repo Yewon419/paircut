@@ -1015,6 +1015,122 @@ try {
   check('built-in templates come back', (await win.locator('[data-preset="aside"]').count()) === 1 &&
     (await win.locator('[data-testid="template-restore"]').count()) === 0);
 
+  // Layer actions from the track head: merge, order, duplicate, delete, rename, lock.
+  const layerStyle = { ...outlined(60, 'bold'), strokeWidth: 0 };
+  const layerTrack = (id, clips) => ({ id, kind: 'text', muted: false, hidden: false, clips });
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    tracks: [
+      layerTrack('t-a', [{ ...text('la', 0, 2, 'A', layerStyle, 0.5, 0.3, 'none'), rotation: 0, spans: [] }]),
+      layerTrack('t-b', [{ ...text('lb', 3, 2, 'B', layerStyle, 0.5, 0.5, 'none'), rotation: 0, spans: [] }]),
+      layerTrack('t-c', [{ ...text('lc', 1, 3, 'C', layerStyle, 0.5, 0.7, 'none'), rotation: 0, spans: [] }]),
+      ...base.tracks.filter((t) => t.kind !== 'text'),
+    ],
+  });
+  const textTracks = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text')
+    .map((t) => ({ id: t.id, name: t.name, locked: t.locked, clips: t.clips.map((c) => ({ id: c.id, start: c.start })) })));
+  const menu = async (trackId, item) => {
+    if ((await win.locator(`[data-menu="${trackId}"]`).count()) === 0) await win.locator(`[data-head="${trackId}"] .tl-menu-btn`).click();
+    return win.locator(`[data-menu="${trackId}"]`).getByRole('button', { name: item, exact: true });
+  };
+  await (await menu('t-a', '아래 레이어와 병합')).click();
+  let tt = await textTracks();
+  check('merge moves the clips into the layer below', tt.length === 2 && tt[0].id === 't-b' &&
+    tt[0].clips.map((c) => c.id).join() === 'la,lb', JSON.stringify(tt));
+  const blocked = await menu('t-b', '아래 레이어와 병합');
+  check('merge is refused when clips would overlap', await blocked.isDisabled() &&
+    (await win.locator('[data-menu="t-b"] .tl-menu-note').textContent()).includes('겹쳐요'));
+  await (await menu('t-b', '뒤로 (아래로)')).click();
+  tt = await textTracks();
+  check('a layer moves back behind the next one', tt.map((t) => t.id).join() === 't-c,t-b', JSON.stringify(tt.map((t) => t.id)));
+  await (await menu('t-b', '복제')).click();
+  tt = await textTracks();
+  const dup = tt[1];
+  check('duplicate puts a copy with new clip ids right above', tt.length === 3 && tt[2].id === 't-b' && dup.clips.length === 2 &&
+    dup.clips.every((c, i) => c.id !== tt[2].clips[i].id && c.start === tt[2].clips[i].start), JSON.stringify(tt));
+  await (await menu(dup.id, '삭제')).click();
+  check('delete removes the layer', (await textTracks()).length === 2);
+  await win.keyboard.press('Control+KeyZ');
+  check('undo brings a deleted layer back', (await textTracks()).length === 3);
+  await win.keyboard.press('Control+KeyZ');
+  await win.locator('[data-head="t-b"] .tl-head-name').dblclick();
+  await win.locator('[data-head="t-b"] .tl-head-input').fill('자막');
+  await win.keyboard.press('Enter');
+  check('double-click renames a layer', (await textTracks()).find((t) => t.id === 't-b')?.name === '자막' &&
+    (await win.locator('[data-head="t-b"] .tl-head-name').textContent()) === '자막');
+  await win.locator('[data-head="t-b"] .lock').click();
+  const lockedBox = await win.locator('[data-clip="lb"]').boundingBox();
+  await win.mouse.move(lockedBox.x + lockedBox.width / 2, lockedBox.y + lockedBox.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(lockedBox.x + lockedBox.width / 2 + 120, lockedBox.y + lockedBox.height / 2, { steps: 5 });
+  await win.mouse.up();
+  await win.keyboard.press('Delete');
+  await win.evaluate(() => window.__cutdesk.seek(4));
+  await win.keyboard.press('KeyS');
+  const lockedTrack = (await textTracks()).find((t) => t.id === 't-b');
+  check('a locked layer keeps its clips: no drag, delete or split', lockedTrack.locked === true &&
+    lockedTrack.clips.map((c) => `${c.id}@${c.start}`).join() === 'la@0,lb@3', JSON.stringify(lockedTrack));
+  check('a locked layer cannot be deleted or merged', await (await menu('t-b', '삭제')).isDisabled());
+  await win.locator('[data-head="t-b"] .tl-menu-btn').click();
+  check('the layer menu closes again', (await win.locator('[data-menu="t-b"]').count()) === 0);
+
+  // Clips butt exactly against a neighbour whose end is off the frame grid, when moved and when trimmed.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [pic],
+    tracks: [
+      { id: 't-1', kind: 'text', muted: false, hidden: false, clips: [] },
+      { id: 'v-fit', kind: 'video', muted: false, hidden: false, clips: [
+        { ...MC, id: 'fa', assetId: pic.id, start: 0, in: 0, out: 1.408 },
+        { ...MC, id: 'fb', assetId: pic.id, start: 3, in: 0, out: 1 },
+        { ...MC, id: 'fc', assetId: pic.id, start: 6, in: 0, out: 1 },
+      ] },
+      { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] },
+    ],
+  });
+  const fitClips = () => win.evaluate(() => Object.fromEntries(window.__cutdesk.state().project.tracks
+    .find((t) => t.id === 'v-fit').clips.map((c) => [c.id, { start: c.start, end: c.start + (c.out - c.in) / c.speed }])));
+  const pxPerSec = await win.evaluate(() => window.__cutdesk.state().zoom);
+  const drag = async (sel, fromX, dx) => {
+    const box = await win.locator(sel).boundingBox();
+    const y = box.y + box.height / 2;
+    await win.mouse.move(fromX(box), y);
+    await win.mouse.down();
+    await win.mouse.move(fromX(box) + dx, y, { steps: 8 });
+    await win.mouse.up();
+  };
+  await drag('[data-clip="fb"]', (b) => b.x + b.width / 2, -(3 - 1.408) * pxPerSec - 6);
+  let fit = await fitClips();
+  check('a moved clip butts against an off-grid end', Math.abs(fit.fb.start - fit.fa.end) < 1e-9, JSON.stringify(fit));
+  await drag('[data-clip="fb"] .handle.right', (b) => b.x + b.width - 3, (6 - fit.fb.end) * pxPerSec + 30);
+  fit = await fitClips();
+  check('a trimmed end stops exactly at the next clip', Math.abs(fit.fb.end - fit.fc.start) < 1e-9, JSON.stringify(fit));
+
+  // Playhead: empty-space clicks and the grip move it, the magnet catches clip edges, picking a block jumps to it.
+  const playheadNow = () => win.evaluate(() => window.__cutdesk.state().playhead);
+  const ruler = await win.locator('.tl-ruler').boundingBox();
+  const xAt = (t) => ruler.x + t * pxPerSec;
+  const trackBox = await win.locator('[data-row="t-1"]').boundingBox();
+  await win.mouse.click(xAt(3.3), trackBox.y + trackBox.height / 2);
+  check('clicking empty track space moves the playhead and drops the selection',
+    Math.abs((await playheadNow()) - 3.3) < 0.05 && (await win.evaluate(() => window.__cutdesk.state().selectedClipId)) === null,
+    String(await playheadNow()));
+  const grip = await win.locator('.tl-playhead-grip').boundingBox();
+  await win.mouse.move(grip.x + grip.width / 2, grip.y + 8);
+  await win.mouse.down();
+  await win.mouse.move(xAt(4.2), grip.y + 8, { steps: 6 });
+  await win.mouse.up();
+  check('the playhead grip drags the playhead', Math.abs((await playheadNow()) - 4.2) < 0.05, String(await playheadNow()));
+  await win.mouse.click(xAt(1.408) + 4, ruler.y + ruler.height / 2);
+  check('the magnet puts the playhead exactly on a clip edge', Math.abs((await playheadNow()) - 1.408) < 1e-9, String(await playheadNow()));
+  await win.locator('[data-clip="fc"]').click();
+  check('picking a block the playhead is not over jumps to its start', Math.abs((await playheadNow()) - 6) < 1e-9,
+    String(await playheadNow()));
+  await win.evaluate(() => window.__cutdesk.seek(6.5));
+  await win.locator('[data-clip="fc"]').click();
+  check('picking the block under the playhead leaves it where it is', Math.abs((await playheadNow()) - 6.5) < 1e-9,
+    String(await playheadNow()));
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

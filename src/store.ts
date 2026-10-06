@@ -196,7 +196,7 @@ export function withAsset(p: Project, asset: MediaAsset, trackId: string | null,
   const clip = makeClip(asset, Math.max(0, frameSnap(start, p.fps)));
   const kind = trackKindFor(asset);
   const target = trackId ? p.tracks.find((t) => t.id === trackId) : undefined;
-  if (target && target.kind === kind) {
+  if (target && target.kind === kind && !target.locked) {
     if (overlaps(target, clip.start, clipEnd(clip), null)) {
       const end = target.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
       clip.start = end;
@@ -223,9 +223,9 @@ function clampTrackInsert(p: Project, kind: TrackKind, index: number): number {
 
 export function moveClip(base: Project, clipId: string, toTrackId: string, start: number): Project | null {
   const found = findClip(base, clipId);
-  if (!found) return null;
+  if (!found || found.track.locked) return null;
   const target = base.tracks.find((t) => t.id === toTrackId);
-  if (!target || target.kind !== found.track.kind) return null;
+  if (!target || target.kind !== found.track.kind || target.locked) return null;
   const moved = { ...found.clip, start: Math.max(0, start) };
   if (overlaps(target, moved.start, clipEnd(moved), clipId)) return null;
   const tracks = base.tracks.map((t) => {
@@ -234,6 +234,21 @@ export function moveClip(base: Project, clipId: string, toTrackId: string, start
     return clips === t.clips ? t : { ...t, clips };
   });
   return { ...base, tracks };
+}
+
+/**
+ * The start nearest to `start` where a clip of `length` fits on the track: where asked, or butted exactly against a
+ * neighbour no further than one clip length away. Neighbour edges are often off the frame grid (trimmed or sped-up
+ * media), so rounding to frames alone would leave a gap or a sliver of overlap.
+ */
+export function fitStart(track: Track, clipId: string, start: number, length: number): number | null {
+  const wanted = Math.max(0, start);
+  const others = track.clips.filter((c) => c.id !== clipId);
+  const fits = [wanted, ...others.flatMap((c) => [clipEnd(c), c.start - length])].filter(
+    (s) => s >= 0 && Math.abs(s - wanted) <= length && !overlaps(track, s, s + length, clipId),
+  );
+  if (fits.length === 0) return null;
+  return fits.reduce((best, s) => (Math.abs(s - wanted) < Math.abs(best - wanted) ? s : best));
 }
 
 export function moveClipToNewTrack(base: Project, clipId: string, start: number, index: number): Project | null {
@@ -319,8 +334,11 @@ export function splitAtPlayhead(): void {
   const inside = (c: AnyClip) => t > c.start + minLen / 2 && t < clipEnd(c) - minLen / 2;
   const selected = selectedClipId ? findClip(project, selectedClipId) : null;
   const targets = new Set<string>();
-  if (selected && inside(selected.clip)) targets.add(selected.clip.id);
-  else for (const track of project.tracks) for (const c of track.clips) if (inside(c)) targets.add(c.id);
+  if (selected && inside(selected.clip)) {
+    if (!selected.track.locked) targets.add(selected.clip.id);
+  } else {
+    for (const track of project.tracks) if (!track.locked) for (const c of track.clips) if (inside(c)) targets.add(c.id);
+  }
   if (targets.size === 0) return;
   commit((p) => splitClips(p, t, targets));
 }
@@ -350,14 +368,97 @@ export function splitClips(p: Project, t: number, targets: Set<string>): Project
 }
 
 export function deleteSelected(): void {
-  const { selectedClipId } = get();
-  if (!selectedClipId) return;
+  const { project, selectedClipId } = get();
+  if (!selectedClipId || findClip(project, selectedClipId)?.track.locked) return;
   commit((p) => tidyTracks({ ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.id !== selectedClipId) })) }));
   set({ selectedClipId: null });
 }
 
-export function toggleTrack(trackId: string, key: 'muted' | 'hidden'): void {
+export function toggleTrack(trackId: string, key: 'muted' | 'hidden' | 'locked'): void {
   commit((p) => withTrack(p, trackId, (t) => ({ ...t, [key]: !t[key] })));
+}
+
+export function renameTrack(trackId: string, name: string): void {
+  const trimmed = name.trim();
+  commit((p) =>
+    withTrack(p, trackId, (t) => {
+      const rest = { ...t };
+      delete rest.name;
+      return trimmed ? { ...rest, name: trimmed } : rest;
+    }),
+  );
+}
+
+/** The neighbour a track can swap with or merge into: the next track of the same kind above (-1) or below (1). */
+export function trackNeighbour(p: Project, trackId: string, dir: -1 | 1): Track | null {
+  const i = p.tracks.findIndex((t) => t.id === trackId);
+  const other = i === -1 ? undefined : p.tracks[i + dir];
+  return other && other.kind === p.tracks[i].kind ? other : null;
+}
+
+/** Swaps a track with its same-kind neighbour, so its clips draw in front of (up) or behind (down) that one. */
+export function moveTrack(trackId: string, dir: -1 | 1): void {
+  commit((p) => {
+    const other = trackNeighbour(p, trackId, dir);
+    if (!other) return p;
+    const i = p.tracks.findIndex((t) => t.id === trackId);
+    const tracks = [...p.tracks];
+    [tracks[i], tracks[i + dir]] = [tracks[i + dir], tracks[i]];
+    return { ...p, tracks };
+  });
+}
+
+/** Why a track cannot merge into the one below it, or null when it can. */
+export function mergeDownBlocker(p: Project, trackId: string): string | null {
+  const track = p.tracks.find((t) => t.id === trackId);
+  const below = trackNeighbour(p, trackId, 1);
+  if (!track || !below) return '아래에 같은 종류 레이어가 없어요';
+  if (track.locked || below.locked) return '잠긴 레이어는 병합할 수 없어요';
+  const clash = track.clips.find((c) => overlaps(below, c.start, clipEnd(c), null));
+  return clash ? `${clash.start.toFixed(1)}초에서 클립이 겹쳐요` : null;
+}
+
+/** Moves every clip into the same-kind track below; that track keeps its own name and switches. */
+export function mergeTrackDown(trackId: string): void {
+  if (mergeDownBlocker(get().project, trackId)) return;
+  commit((p) => {
+    const track = p.tracks.find((t) => t.id === trackId);
+    const below = trackNeighbour(p, trackId, 1);
+    if (!track || !below) return p;
+    const merged = { ...below, clips: sortClips([...below.clips, ...track.clips]) };
+    return { ...p, tracks: p.tracks.filter((t) => t.id !== trackId).map((t) => (t.id === below.id ? merged : t)) };
+  });
+}
+
+/** A copy of the track with fresh clip ids, right above it. */
+export function duplicateTrack(trackId: string): void {
+  commit((p) => {
+    const i = p.tracks.findIndex((t) => t.id === trackId);
+    if (i === -1) return p;
+    const src = p.tracks[i];
+    const copy: Track = {
+      ...structuredClone(src),
+      id: uid(src.kind[0]),
+      locked: false,
+      clips: src.clips.map((c) => ({ ...structuredClone(c), id: uid('c') })),
+    };
+    if (src.name) copy.name = `${src.name} 복사`;
+    const tracks = [...p.tracks];
+    tracks.splice(i, 0, copy);
+    return { ...p, tracks };
+  });
+}
+
+/** Removes the track and its clips; the last track of a kind is emptied instead, so there is always one to drop on. */
+export function deleteTrack(trackId: string): void {
+  const { project, selectedClipId } = get();
+  const track = project.tracks.find((t) => t.id === trackId);
+  if (!track || track.locked) return;
+  const only = project.tracks.filter((t) => t.kind === track.kind).length === 1;
+  commit((p) =>
+    only ? withTrack(p, trackId, (t) => ({ ...t, clips: [] })) : { ...p, tracks: p.tracks.filter((t) => t.id !== trackId) },
+  );
+  if (selectedClipId && track.clips.some((c) => c.id === selectedClipId)) set({ selectedClipId: null });
 }
 
 function newTextTrack(clips: AnyClip[]): Track {
@@ -387,7 +488,7 @@ export function pasteText(): void {
 }
 
 export function withTextClip(p: Project, clip: TextClip): Project {
-  const room = p.tracks.find((t) => t.kind === 'text' && !overlaps(t, clip.start, clipEnd(clip), null));
+  const room = p.tracks.find((t) => t.kind === 'text' && !t.locked && !overlaps(t, clip.start, clipEnd(clip), null));
   if (room) return withTrack(p, room.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
   return { ...p, tracks: [newTextTrack([clip]), ...p.tracks] };
 }

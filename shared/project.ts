@@ -233,6 +233,10 @@ export interface Track {
   kind: TrackKind;
   muted: boolean;
   hidden: boolean;
+  /** Shown instead of the default "텍스트 1" style label; absent or empty = default. */
+  name?: string;
+  /** Locked tracks keep their clips where they are: no drag, trim, split, delete or drop. */
+  locked?: boolean;
   clips: AnyClip[];
 }
 

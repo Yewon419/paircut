@@ -15,17 +15,25 @@ import { formatTime } from '../format';
 import {
   beginGesture,
   deleteSelected,
+  deleteTrack,
+  duplicateTrack,
   endGesture,
   findClip,
+  fitStart,
   frameSnap,
+  mergeDownBlocker,
+  mergeTrackDown,
   moveClip,
   moveClipToNewTrack,
+  moveTrack,
   overlaps,
   placeAsset,
   redo,
+  renameTrack,
   splitAtPlayhead,
   tidyTracks,
   toggleTrack,
+  trackNeighbour,
   undo,
   updateClip,
   updateGesture,
@@ -90,6 +98,7 @@ function tickStep(zoom: number): number {
 }
 
 function trackLabel(project: Project, track: Track): string {
+  if (track.name) return track.name;
   const same = project.tracks.filter((t) => t.kind === track.kind);
   const idx = same.indexOf(track);
   if (track.kind === 'video') return idx === same.length - 1 ? '메인' : `영상 ${same.length - 1 - idx}`;
@@ -138,11 +147,27 @@ export function Timeline() {
     return Math.max(0, (clientX - box.left + el.scrollLeft) / zoom);
   };
 
-  const onRulerDown = (e: React.PointerEvent) => {
+  /** Playhead time under the pointer: on the frame grid, or on a clip edge or marker the magnet is close to. */
+  const scrubTime = (clientX: number): number => {
+    const { project: p, zoom: z, snap: snapOn } = useEditor.getState();
+    const t = timeAt(clientX);
+    if (snapOn) {
+      const edges = [0, ...p.markers.map((m) => m.t), ...p.tracks.flatMap((tr) => tr.clips.flatMap((c) => [c.start, clipEnd(c)]))];
+      const near = edges.reduce((best, x) => (Math.abs(x - t) < Math.abs(best - t) ? x : best), Number.POSITIVE_INFINITY);
+      if (Math.abs(near - t) * z <= SNAP_PX) return near;
+    }
+    return frameSnap(t, p.fps);
+  };
+
+  /** Ruler, playhead handle or empty timeline: drops the selection and moves the playhead with the pointer. */
+  const onScrubDown = (e: React.PointerEvent) => {
     const el = e.currentTarget as HTMLElement;
+    // The horizontal scrollbar is part of this element; pressing it scrolls, it does not seek.
+    if (e.button !== 0 || e.clientY > el.getBoundingClientRect().top + el.clientHeight) return;
+    useEditor.setState({ selectedClipId: null });
     el.setPointerCapture(e.pointerId);
-    seek(frameSnap(timeAt(e.clientX), project.fps));
-    const move = (ev: PointerEvent) => seek(frameSnap(timeAt(ev.clientX), useEditor.getState().project.fps));
+    seek(scrubTime(e.clientX));
+    const move = (ev: PointerEvent) => seek(scrubTime(ev.clientX));
     const up = () => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
@@ -157,6 +182,10 @@ export function Timeline() {
     // preventDefault keeps focus where it was; an inspector field would then swallow Ctrl+C/V, S and Delete.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     useEditor.setState({ selectedClipId: clip.id });
+    // Selecting a block the playhead is not over brings the playhead to its first frame.
+    const { playhead } = useEditor.getState();
+    if (playhead < clip.start || playhead >= clipEnd(clip)) seek(clip.start);
+    if (findClip(useEditor.getState().project, clip.id)?.track.locked) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
     const x0 = e.clientX;
@@ -186,7 +215,12 @@ export function Timeline() {
           if (row === 'new-audio' && found.track.kind === 'audio')
             return moveClipToNewTrack(b, clip.id, start, b.tracks.length);
           const target = row && b.tracks.some((t) => t.id === row) ? row : found.track.id;
-          return moveClip(b, clip.id, target, start) ?? moveClip(b, clip.id, found.track.id, start);
+          const fitted = (trackId: string): Project | null => {
+            const track = b.tracks.find((t) => t.id === trackId);
+            const at = track ? fitStart(track, clip.id, start, clipDuration(clip)) : null;
+            return at === null ? null : moveClip(b, clip.id, trackId, at);
+          };
+          return fitted(target) ?? fitted(found.track.id);
         });
         return;
       }
@@ -195,6 +229,9 @@ export function Timeline() {
         dt = frameSnap(dt, fps);
         dt = Math.max(dt, -clip.start);
         if (!stretchy) dt = Math.max(dt, -clip.in / rate);
+        // Stops exactly at the clip before, wherever its end falls between frames.
+        const prevEnd = Math.max(0, ...found.track.clips.filter((c) => c.id !== clip.id && c.start < clip.start).map(clipEnd));
+        dt = Math.max(dt, prevEnd - clip.start);
         dt = Math.min(dt, clipDuration(clip) - minLen);
         const next: AnyClip = stretchy
           ? { ...clip, start: clip.start + dt, out: clip.out - dt }
@@ -207,6 +244,11 @@ export function Timeline() {
       dt = frameSnap(dt, fps);
       let out = Math.max(clip.in + minLen * rate, clip.out + dt * rate);
       if (asset && asset.kind !== 'image') out = Math.min(out, asset.duration);
+      const nextStart = Math.min(
+        Number.POSITIVE_INFINITY,
+        ...found.track.clips.filter((c) => c.id !== clip.id && c.start > clip.start).map((c) => c.start),
+      );
+      out = Math.min(out, clip.in + (nextStart - clip.start) * rate);
       const next: AnyClip = { ...clip, out };
       if (overlaps(found.track, next.start, clipEnd(next), clip.id)) return;
       updateGesture((b) => updateClip(b, clip.id, () => next));
@@ -223,6 +265,7 @@ export function Timeline() {
 
   const onDragOverRow = (e: React.DragEvent, key: string) => {
     if (!e.dataTransfer.types.includes(ASSET_MIME)) return;
+    if (project.tracks.some((t) => t.id === key && t.locked)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
     if (dropRow !== key) setDropRow(key);
@@ -280,8 +323,8 @@ export function Timeline() {
           <div style={{ height: RULER_H }} />
           {rows.map((row) =>
             row.type === 'track' ? (
-              <div key={rowKey(row)} className="tl-head" style={{ height: TRACK_H }}>
-                <span className="tl-head-name">{trackLabel(project, row.track)}</span>
+              <div key={rowKey(row)} className="tl-head" data-head={row.track.id} style={{ height: TRACK_H }}>
+                <TrackName project={project} track={row.track} />
                 <div className="tl-head-btns">
                   {row.track.kind !== 'audio' && (
                     <button
@@ -301,6 +344,14 @@ export function Timeline() {
                       {row.track.muted ? '음소거' : '소리'}
                     </button>
                   )}
+                  <button
+                    className={row.track.locked ? 'toggle on lock' : 'toggle lock'}
+                    onClick={() => toggleTrack(row.track.id, 'locked')}
+                    title="잠그면 클립을 옮기거나 자르거나 지울 수 없어요"
+                  >
+                    {row.track.locked ? '잠김' : '잠금'}
+                  </button>
+                  <TrackMenu project={project} track={row.track} />
                 </div>
               </div>
             ) : (
@@ -321,10 +372,10 @@ export function Timeline() {
             const px = e.clientX - el.getBoundingClientRect().left;
             requestAnimationFrame(() => (el.scrollLeft = anchor * next - px));
           }}
-          onPointerDown={() => useEditor.setState({ selectedClipId: null })}
+          onPointerDown={onScrubDown}
         >
           <div className="tl-content" style={{ width: contentWidth }}>
-            <div className="tl-ruler" style={{ height: RULER_H }} onPointerDown={onRulerDown}>
+            <div className="tl-ruler" style={{ height: RULER_H }}>
               {ticks.map((t, i) => {
                 const major = i % 5 === 0;
                 return (
@@ -360,7 +411,7 @@ export function Timeline() {
                 <div
                   key={key}
                   data-row={key}
-                  className={`tl-track kind-${row.track.kind}${dropRow === key ? ' drop' : ''}`}
+                  className={`tl-track kind-${row.track.kind}${dropRow === key ? ' drop' : ''}${row.track.locked ? ' locked' : ''}`}
                   style={{ height: TRACK_H }}
                   onDragOver={(e) => onDragOverRow(e, key)}
                   onDragLeave={() => setDropRow(null)}
@@ -386,6 +437,94 @@ export function Timeline() {
         </div>
       </div>
     </section>
+  );
+}
+
+/** The track's label; double-click to rename, an empty name goes back to the default label. */
+function TrackName({ project, track }: { project: Project; track: Track }) {
+  const [editing, setEditing] = useState(false);
+  const label = trackLabel(project, track);
+  if (!editing) {
+    return (
+      <span className="tl-head-name" title="두 번 눌러 이름 바꾸기" onDoubleClick={() => setEditing(true)}>
+        {label}
+      </span>
+    );
+  }
+  return (
+    <input
+      className="tl-head-input"
+      autoFocus
+      defaultValue={track.name ?? ''}
+      placeholder={label}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') setEditing(false);
+      }}
+      onBlur={(e) => {
+        if ((e.currentTarget.value.trim() || undefined) !== track.name) renameTrack(track.id, e.currentTarget.value);
+        setEditing(false);
+      }}
+    />
+  );
+}
+
+const MENU_H = 230;
+
+/** Layer actions: order, merge, duplicate, delete. Opens below its button (above near the window's bottom). */
+function TrackMenu({ project, track }: { project: Project; track: Track }) {
+  const [at, setAt] = useState<React.CSSProperties | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!at) return;
+    // Its own button is left to onClick, which toggles; closing here too would reopen it.
+    const close = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!menuRef.current?.contains(target) && !btnRef.current?.contains(target)) setAt(null);
+    };
+    window.addEventListener('pointerdown', close, true);
+    return () => window.removeEventListener('pointerdown', close, true);
+  }, [at]);
+  const blocker = mergeDownBlocker(project, track.id);
+  const run = (action: () => void) => () => {
+    action();
+    setAt(null);
+  };
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="icon tl-menu-btn"
+        title="레이어 메뉴"
+        onClick={(e) => {
+          const box = e.currentTarget.getBoundingClientRect();
+          const up = box.bottom + 4 + MENU_H > window.innerHeight;
+          setAt(at ? null : up ? { left: box.left, bottom: window.innerHeight - box.top + 4 } : { left: box.left, top: box.bottom + 4 });
+        }}
+      >
+        ⋯
+      </button>
+      {at && (
+        <div className="tl-menu" ref={menuRef} style={at} data-menu={track.id}>
+          <button disabled={!trackNeighbour(project, track.id, -1)} onClick={run(() => moveTrack(track.id, -1))}>
+            앞으로 (위로)
+          </button>
+          <button disabled={!trackNeighbour(project, track.id, 1)} onClick={run(() => moveTrack(track.id, 1))}>
+            뒤로 (아래로)
+          </button>
+          <button disabled={blocker !== null} title={blocker ?? ''} onClick={run(() => mergeTrackDown(track.id))}>
+            아래 레이어와 병합
+          </button>
+          {blocker && <div className="tl-menu-note">{blocker}</div>}
+          <button onClick={run(() => duplicateTrack(track.id))}>복제</button>
+          <button className="danger" disabled={track.locked} onClick={run(() => deleteTrack(track.id))}>
+            삭제
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -445,5 +584,9 @@ function ClipView({ project, clip, zoom, selected, dim, dissolve, onDown }: Clip
 
 function Playhead({ zoom }: { zoom: number }) {
   const playhead = useEditor((s) => s.playhead);
-  return <div className="tl-playhead" style={{ left: playhead * zoom }} />;
+  return (
+    <div className="tl-playhead" style={{ left: playhead * zoom }}>
+      <div className="tl-playhead-grip" style={{ height: RULER_H }} title="끌어서 시간 이동" />
+    </div>
+  );
 }
