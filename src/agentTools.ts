@@ -5,7 +5,23 @@ import type { ClipColor } from '../shared/color';
 import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
 import type { TextSpan } from '../shared/project';
-import { assetById, clipDuration, clipEnd, CROP_MAX, hasCrop, isMediaClip, isTextClip, normalizeProject, projectDuration, resolveTokens, spanIndex, validCustomFont } from '../shared/project';
+import {
+  assetById,
+  canClip,
+  clipDuration,
+  clipEnd,
+  CROP_MAX,
+  hasCrop,
+  isMediaClip,
+  isTextClip,
+  layerBlend,
+  layerOpacity,
+  normalizeProject,
+  projectDuration,
+  resolveTokens,
+  spanIndex,
+  validCustomFont,
+} from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
 import { draftFromRows, parseBoard } from './conti';
@@ -120,7 +136,15 @@ export function stateText(): string {
   ];
   const mains = new Set(['video', 'audio', 'text'].map((k) => p.tracks.filter((t) => t.kind === k).at(-1)?.id));
   for (const t of p.tracks) {
-    const flags = [t.kind, mains.has(t.id) ? 'main' : '', t.muted ? 'muted' : '', t.hidden ? 'hidden' : ''].filter(Boolean);
+    const flags = [
+      t.kind,
+      mains.has(t.id) ? 'main' : '',
+      t.muted ? 'muted' : '',
+      t.hidden ? 'hidden' : '',
+      layerBlend(t) !== 'normal' ? layerBlend(t) : '',
+      layerOpacity(t) < 1 ? `opacity=${n(layerOpacity(t))}` : '',
+      t.clipped ? 'clipped' : '',
+    ].filter(Boolean);
     lines.push(`  ${t.id} [${flags.join(' ')}]`);
     for (const c of t.clips) lines.push(`    ${clipLine(p, c)}`);
   }
@@ -371,8 +395,26 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       return;
     }
     case 'track': {
-      if (!p.tracks.some((t) => t.id === op.track)) throw new OpError(`no track ${op.track}`);
-      d.p = withTrack(p, op.track, (t) => ({ ...t, muted: op.muted ?? t.muted, hidden: op.hidden ?? t.hidden }));
+      const track = p.tracks.find((t) => t.id === op.track);
+      if (!track) throw new OpError(`no track ${op.track}`);
+      const look = op.opacity !== undefined || op.blend !== undefined || op.clipped !== undefined;
+      if (look && track.kind === 'audio') throw new OpError('opacity, blend and clipped are for picture layers, not audio');
+      if (op.clipped && !canClip(p, op.track)) throw new OpError(`${op.track} is the bottom picture layer; there is nothing under it to clip to`);
+      d.p = withTrack(p, op.track, (t) => {
+        const next = { ...t, muted: op.muted ?? t.muted, hidden: op.hidden ?? t.hidden };
+        const opacity = op.opacity ?? next.opacity ?? 1;
+        const blend = op.blend ?? next.blend ?? 'normal';
+        const clipped = op.clipped ?? next.clipped ?? false;
+        delete next.opacity;
+        delete next.blend;
+        delete next.clipped;
+        return {
+          ...next,
+          ...(opacity < 1 ? { opacity } : {}),
+          ...(blend !== 'normal' ? { blend } : {}),
+          ...(clipped ? { clipped } : {}),
+        };
+      });
       return;
     }
     case 'vars': {

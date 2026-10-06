@@ -27,6 +27,8 @@ export interface EditorState {
   playing: boolean;
   zoom: number;
   snap: boolean;
+  /** A video layer being merged down while its overlap with the layer below bakes, or why that merge failed. */
+  layerJob: { trackId: string; error: string | null } | null;
 }
 
 export const useEditor = create<EditorState>(() => ({
@@ -41,6 +43,7 @@ export const useEditor = create<EditorState>(() => ({
   playing: false,
   zoom: 80,
   snap: true,
+  layerJob: null,
 }));
 
 const get = useEditor.getState;
@@ -456,20 +459,117 @@ export function mergeDownBlocker(p: Project, trackId: string): string | null {
     return '불투명도나 혼합 모드가 달라서 병합하면 모양이 바뀌어요';
   }
   if (Boolean(track.clipped) !== Boolean(below.clipped)) return '클리핑 마스크가 달라서 병합하면 모양이 바뀌어요';
+  // Video overlaps are baked into one clip when merged; text has nothing to bake them with.
+  if (track.kind === 'video') return null;
   const clash = track.clips.find((c) => overlaps(below, c.start, clipEnd(c), null));
   return clash ? `${clash.start.toFixed(1)}초에서 클립이 겹쳐요` : null;
 }
 
-/** Moves every clip into the same-kind track below; that track keeps its own name and switches. */
-export function mergeTrackDown(trackId: string): void {
-  if (mergeDownBlocker(get().project, trackId)) return;
-  commit((p) => {
-    const track = p.tracks.find((t) => t.id === trackId);
-    const below = trackNeighbour(p, trackId, 1);
-    if (!track || !below) return p;
-    const merged = { ...below, clips: sortClips([...below.clips, ...track.clips]) };
-    return { ...p, tracks: p.tracks.filter((t) => t.id !== trackId).map((t) => (t.id === below.id ? merged : t)) };
-  });
+interface TimeRange {
+  from: number;
+  to: number;
+}
+
+/** Where clips of the two tracks are on screen at the same time, joined where those stretches touch. */
+export function sharedRanges(a: Track, b: Track): TimeRange[] {
+  const raw: TimeRange[] = [];
+  for (const x of a.clips) {
+    for (const y of b.clips) {
+      const from = Math.max(x.start, y.start);
+      const to = Math.min(clipEnd(x), clipEnd(y));
+      if (to - from > 1e-6) raw.push({ from, to });
+    }
+  }
+  raw.sort((r, s) => r.from - s.from);
+  const joined: TimeRange[] = [];
+  for (const r of raw) {
+    const last = joined.at(-1);
+    if (last && r.from <= last.to + 1e-6) last.to = Math.max(last.to, r.to);
+    else joined.push({ ...r });
+  }
+  return joined;
+}
+
+function inRanges(c: AnyClip, ranges: TimeRange[]): TimeRange | undefined {
+  const mid = (c.start + clipEnd(c)) / 2;
+  return ranges.find((r) => mid > r.from && mid < r.to);
+}
+
+/** Both tracks' clips cut at every edge of the ranges, so each clip is wholly inside one range or outside them all. */
+function cutAtRanges(p: Project, ids: string[], ranges: TimeRange[]): Project {
+  let out = p;
+  for (const t of ranges.flatMap((r) => [r.from, r.to])) {
+    const targets = new Set(
+      out.tracks
+        .filter((tr) => ids.includes(tr.id))
+        .flatMap((tr) => tr.clips.filter((c) => c.start < t - 1e-6 && clipEnd(c) > t + 1e-6).map((c) => c.id)),
+    );
+    if (targets.size > 0) out = splitClips(out, t, targets);
+  }
+  return out;
+}
+
+/** The two layers' clips inside one range, moved to start at 0, as a project of their own to bake. */
+function bakeSource(p: Project, upperId: string, lowerId: string, range: TimeRange): Project {
+  const part = (id: string): Track => {
+    const t = p.tracks.find((tr) => tr.id === id) as Track;
+    return {
+      id: t.id,
+      kind: t.kind,
+      muted: t.muted,
+      hidden: t.hidden,
+      clips: t.clips.filter((c) => inRanges(c, [range])).map((c) => ({ ...c, start: c.start - range.from })),
+    };
+  };
+  const tracks = [part(upperId), part(lowerId)];
+  const used = new Set(tracks.flatMap((t) => t.clips.filter(isMediaClip).map((c) => c.assetId)));
+  return { ...p, tracks, markers: [], assets: p.assets.filter((a) => used.has(a.id)) };
+}
+
+/**
+ * Moves every clip into the same-kind track below; that track keeps its own name and switches. Where video clips of
+ * the two overlap, that stretch is baked into one see-through clip that looks the same (sound included), so the
+ * merged track still plays one clip at a time.
+ */
+export async function mergeTrackDown(trackId: string): Promise<void> {
+  const p = get().project;
+  if (mergeDownBlocker(p, trackId) || (get().layerJob && get().layerJob?.error === null)) return;
+  const track = p.tracks.find((t) => t.id === trackId);
+  const below = trackNeighbour(p, trackId, 1);
+  if (!track || !below) return;
+  const ranges = track.kind === 'video' ? sharedRanges(track, below) : [];
+  if (ranges.length === 0) {
+    set({ layerJob: null });
+    commit((q) => ({
+      ...q,
+      tracks: q.tracks.filter((t) => t.id !== trackId).map((t) => (t.id === below.id ? { ...below, clips: sortClips([...below.clips, ...track.clips]) } : t)),
+    }));
+    return;
+  }
+  set({ layerJob: { trackId, error: null } });
+  try {
+    const cut = cutAtRanges(p, [trackId, below.id], ranges);
+    const baked: MediaAsset[] = [];
+    for (const r of ranges) {
+      baked.push(await window.api.bakeLayers(bakeSource(cut, trackId, below.id, r), `병합 ${r.from.toFixed(1)}-${r.to.toFixed(1)}초`));
+    }
+    if (get().project !== p) throw new Error('병합하는 동안 편집이 바뀌어서 적용하지 않았어요. 다시 병합해 주세요');
+    const upper = cut.tracks.find((t) => t.id === trackId) as Track;
+    const lower = cut.tracks.find((t) => t.id === below.id) as Track;
+    const kept = [...lower.clips, ...upper.clips].filter((c) => !inRanges(c, ranges));
+    const bakedClips = ranges.map((r, i) => ({ ...makeClip(baked[i], r.from), out: r.to - r.from }));
+    const merged = { ...lower, clips: sortClips([...kept, ...bakedClips]) };
+    commit(() => ({
+      ...cut,
+      assets: [...cut.assets, ...baked],
+      tracks: cut.tracks.filter((t) => t.id !== trackId).map((t) => (t.id === below.id ? merged : t)),
+    }));
+    set({ layerJob: null });
+  } catch (err) {
+    const message = (err as Error).message;
+    console.error(`[merge] ${trackId} into ${below.id}: ${message}`);
+    set({ layerJob: { trackId, error: message } });
+  }
 }
 
 /** A copy of the track with fresh clip ids, right above it. */

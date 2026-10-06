@@ -694,6 +694,10 @@ input[type='range'] {
   color: var(--sky);
 }
 
+.layer-notes.failed {
+  color: var(--danger);
+}
+
 .layer-look {
   display: flex;
   flex-direction: column;

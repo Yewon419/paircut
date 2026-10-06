@@ -65,6 +65,8 @@ export interface ExportPlan {
   width: number;
   height: number;
   fps: number;
+  /** Whether any clip is heard; a baked layer leaves its sound out when none is. */
+  audible: boolean;
 }
 
 /**
@@ -96,6 +98,18 @@ export function outputSize(project: Project, height: number): { width: number; h
  * video tracks are stacked with tracks[0] on top, clips are cover-fitted via placeVisual.
  */
 export function buildExportPlan(project: Project, height: number, textLayers: TextLayer[]): ExportPlan {
+  return buildPlan(project, height, textLayers, 'black');
+}
+
+/**
+ * The picture layers of a small project laid on a clear frame and kept see-through, for baking layers into one
+ * clip: what shows through them stays transparent instead of black. Looks are left to the layer the result goes on.
+ */
+export function buildBakePlan(project: Project): ExportPlan {
+  return buildPlan(project, project.height, [], 'clear');
+}
+
+function buildPlan(project: Project, height: number, textLayers: TextLayer[], ground: 'black' | 'clear'): ExportPlan {
   const duration = projectDuration(project);
   if (duration <= 0) throw new Error('timeline is empty');
   const { width: W, height: H } = outputSize(project, height);
@@ -118,11 +132,16 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
     return `format=rgba,lut3d=file=${lut.name}:interp=trilinear,`;
   };
 
-  filters.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${num(duration)}[bg0]`);
+  filters.push(
+    ground === 'black'
+      ? `color=c=black:s=${W}x${H}:r=${fps}:d=${num(duration)}[bg0]`
+      : `color=c=black@0:s=${W}x${H}:r=${fps}:d=${num(duration)},format=rgba[bg0]`,
+  );
   let base = 'bg0';
   let overlayCount = 0;
-  /** ':format=auto' while a layer is laid on its own clear canvas, so the overlays keep its alpha. */
-  let overlayFormat = '';
+  /** ':format=auto' while overlays go onto a clear canvas (a layer of its own, or a bake), so they keep its alpha. */
+  const groundFormat = ground === 'clear' ? ':format=auto' : '';
+  let overlayFormat = groundFormat;
 
   const layers = new Map(textLayers.map((l) => [l.clipId, l]));
   /** `when` narrows the clip range further (an ffmpeg expression in t); glitch frames use it to take turns. */
@@ -339,7 +358,7 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
       layTrack(track);
       base = clipInto(group, base, track);
     }
-    overlayFormat = '';
+    overlayFormat = groundFormat;
     base = mixOver(under, base, bottom);
   }
 
@@ -353,9 +372,10 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
     }
   }
 
-  filters.push(`[${base}]format=yuv420p[vout]`);
+  filters.push(`[${base}]format=${ground === 'black' ? 'yuv420p' : 'yuva420p'}[vout]`);
   if (audioLabels.length === 0) {
-    filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${num(duration)}[aout]`);
+    // A bake with no sound maps no audio, so it gets no silent track either.
+    if (ground === 'black') filters.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${num(duration)}[aout]`);
   } else {
     filters.push(
       `${audioLabels.map((l) => `[${l}]`).join('')}amix=inputs=${audioLabels.length}:normalize=0:` +
@@ -363,7 +383,54 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
     );
   }
 
-  return { inputArgs, luts: [...luts.values()], filterGraph: filters.join(';\n'), duration, width: W, height: H, fps };
+  return {
+    inputArgs,
+    luts: [...luts.values()],
+    filterGraph: filters.join(';\n'),
+    duration,
+    width: W,
+    height: H,
+    fps,
+    audible: audioLabels.length > 0,
+  };
+}
+
+/** A baked layer: VP9 with alpha in a webm (the format cutdesk reads as see-through), Opus sound when there is any. */
+export function bakeArgs(plan: ExportPlan, filterScriptPath: string, outPath: string): string[] {
+  return [
+    '-y',
+    '-hide_banner',
+    '-nostats',
+    '-v',
+    'error',
+    ...plan.inputArgs,
+    '-/filter_complex',
+    filterScriptPath,
+    '-map',
+    '[vout]',
+    ...(plan.audible ? ['-map', '[aout]', '-c:a', 'libopus', '-b:a', '192k'] : []),
+    '-c:v',
+    'libvpx-vp9',
+    '-pix_fmt',
+    'yuva420p',
+    '-auto-alt-ref',
+    '0',
+    '-b:v',
+    '0',
+    '-crf',
+    '18',
+    '-deadline',
+    'good',
+    '-cpu-used',
+    '4',
+    '-row-mt',
+    '1',
+    '-r',
+    String(plan.fps),
+    '-t',
+    num(plan.duration),
+    outPath,
+  ];
 }
 
 /**

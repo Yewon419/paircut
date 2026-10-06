@@ -29,6 +29,7 @@ import {
   layerDropIndex,
   mergeDownBlocker,
   mergeTrackDown,
+  sharedRanges,
   moveClip,
   moveClipToNewTrack,
   moveTrack,
@@ -529,7 +530,9 @@ function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProp
   const shown = audio ? !track.muted : !track.hidden;
   const blend = layerBlend(track);
   const opacity = layerOpacity(track);
+  const job = useEditor((s) => (s.layerJob?.trackId === track.id ? s.layerJob : null));
   const notes = [
+    job ? (job.error === null ? '병합 중…' : '병합 실패') : '',
     KIND_LABEL[track.kind],
     blend !== 'normal' ? (BLEND_MODES.find((m) => m.id === blend)?.label ?? '') : '',
     opacity < 1 ? `${Math.round(opacity * 100)}%` : '',
@@ -574,7 +577,9 @@ function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProp
       {audio ? <div className="layer-thumb layer-thumb-audio">♪</div> : <LayerThumb trackId={track.id} />}
       <div className="layer-info">
         <TrackName project={project} track={track} editing={editing} setEditing={setEditing} />
-        <span className="layer-notes">{notes.join(' · ')}</span>
+        <span className={job?.error ? 'layer-notes failed' : 'layer-notes'} title={job?.error ?? undefined}>
+          {notes.join(' · ')}
+        </span>
       </div>
       <input
         type="checkbox"
@@ -620,6 +625,9 @@ function LayerMenu({ project, track, at, card, close, rename }: LayerMenuProps) 
     return () => window.removeEventListener('pointerdown', away, true);
   }, [card, close]);
   const blocker = mergeDownBlocker(project, track.id);
+  const busy = useEditor((s) => s.layerJob !== null && s.layerJob.error === null);
+  const below = project.tracks[project.tracks.findIndex((t) => t.id === track.id) + 1];
+  const overlapping = track.kind === 'video' && below?.kind === 'video' && sharedRanges(track, below).length > 0;
   const run = (action: () => void) => () => {
     action();
     close();
@@ -695,10 +703,11 @@ function LayerMenu({ project, track, at, card, close, rename }: LayerMenuProps) 
       <button disabled={!stackNeighbour(project, track.id, 1)} onClick={run(() => moveTrack(track.id, 1))}>
         뒤로 (아래로)
       </button>
-      <button disabled={blocker !== null} title={blocker ?? ''} onClick={run(() => mergeTrackDown(track.id))}>
+      <button disabled={blocker !== null || busy} title={blocker ?? ''} onClick={run(() => void mergeTrackDown(track.id))}>
         아래 레이어와 병합
       </button>
       {blocker && <div className="tl-menu-note">{blocker}</div>}
+      {!blocker && overlapping && <div className="tl-menu-note">겹치는 구간은 영상 하나로 구워서 합쳐요</div>}
       <button onClick={run(() => duplicateTrack(track.id))}>복제</button>
       <button className="danger" disabled={track.locked} onClick={run(() => deleteTrack(track.id))}>
         삭제

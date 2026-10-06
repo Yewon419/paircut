@@ -116,7 +116,21 @@ export const EditOp = z.discriminatedUnion('op', [
     values: color.optional(),
   }),
   z.object({ op: z.literal('save_color_preset'), name: z.string().min(1), clip: id }),
-  z.object({ op: z.literal('track'), track: z.string(), muted: z.boolean().optional(), hidden: z.boolean().optional() }),
+  z.object({
+    op: z.literal('track'),
+    track: z.string(),
+    muted: z.boolean().optional(),
+    hidden: z.boolean().optional(),
+    opacity: z.number().min(0).max(1).optional().describe('picture layers: how see-through the whole layer is, 1 = solid'),
+    blend: z
+      .enum(['normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'add', 'difference'])
+      .optional()
+      .describe('picture layers: how the layer mixes with the layers under it'),
+    clipped: z
+      .boolean()
+      .optional()
+      .describe('picture layers: clipping mask, the layer shows only where the picture layer under it is opaque'),
+  }),
   z.object({
     op: z.literal('vars'),
     uploadDate: z.string().optional().describe('YYYY-MM-DD'),

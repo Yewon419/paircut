@@ -61,6 +61,8 @@ export interface CutdeskApi {
   onMatteProgress(listener: (p: MatteProgress) => void): () => void;
   /** A new asset with only the subject of [from, to] left opaque (alpha webm, or PNG for a still). */
   makeSubject(asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset>;
+  /** Bakes the picture layers of a small project into one see-through clip (VP9 alpha webm), named `name`. */
+  bakeLayers(project: Project, name: string): Promise<MediaAsset>;
   pathForFile(file: File): string;
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;

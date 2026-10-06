@@ -3,13 +3,40 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExportEvent, TextImage } from '../shared/api';
-import { buildExportPlan, ffmpegArgs } from '../shared/exportGraph';
+import { bakeArgs, buildBakePlan, buildExportPlan, ffmpegArgs } from '../shared/exportGraph';
 import type { Project } from '../shared/project';
 import { FFMPEG } from './media';
 
 export interface RunningExport {
   cancel(): void;
   done: Promise<ExportEvent>;
+}
+
+/** Bakes the picture layers of a small project into one see-through webm at outPath. */
+export async function runBake(project: Project, outPath: string): Promise<void> {
+  const workDir = mkdtempSync(join(tmpdir(), 'cutdesk-bake-'));
+  try {
+    const plan = buildBakePlan(project);
+    for (const lut of plan.luts) writeFileSync(join(workDir, lut.name), lut.content, 'utf8');
+    const scriptPath = join(workDir, 'graph.txt');
+    writeFileSync(scriptPath, plan.filterGraph, 'utf8');
+    const args = bakeArgs(plan, scriptPath, outPath);
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(FFMPEG, args, { windowsHide: true, cwd: workDir });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (chunk: string) => {
+        stderr = (stderr + chunk).slice(-4000);
+      });
+      child.on('error', (err) => reject(new Error(`ffmpeg could not start (${FFMPEG}): ${err.message}`, { cause: err })));
+      child.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exited with ${code}\nfilter graph:\n${plan.filterGraph}\n\nstderr:\n${stderr}`));
+      });
+    });
+  } finally {
+    rmSync(workDir, { recursive: true, force: true });
+  }
 }
 
 export function runExport(

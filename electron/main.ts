@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
@@ -10,7 +11,7 @@ import { normalizeProject } from '../shared/project';
 import { callRendererTool, callTool, registerAgent } from './agent';
 import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
-import { runExport } from './exporter';
+import { runBake, runExport } from './exporter';
 import { makeSubjectFile } from './matte';
 import { importMedia, makeSolidImage } from './media';
 
@@ -170,6 +171,25 @@ function registerIpc(): void {
       return { ...made, name: `피사체 ${asset.name}` };
     } catch (err) {
       console.error(`[subject] ${asset.path} [${from}, ${to}] @${fps}: ${(err as Error).message}`);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('media:bake', async (_e, project: Project, name: string): Promise<MediaAsset> => {
+    const outRoot = join(app.getPath('userData'), 'merged');
+    mkdirSync(outRoot, { recursive: true });
+    const key = createHash('sha1').update(JSON.stringify({ ...project, name: '' })).digest('hex');
+    const out = join(outRoot, `${key}.webm`);
+    try {
+      if (!existsSync(out)) {
+        const tmp = `${out}.part.webm`;
+        await runBake(project, tmp);
+        renameSync(tmp, out);
+      }
+      const made = await importMedia(out, cacheDir());
+      return { ...made, name };
+    } catch (err) {
+      console.error(`[bake] ${name}: ${(err as Error).message}`);
       throw err;
     }
   });

@@ -444,6 +444,26 @@ try {
   check('one undo reverts the whole batch', byId(agentUndone, 'c1').speed === 1 && byId(agentUndone, 'c2').start === 3 &&
     byId(agentUndone, 'c2').color.look === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
 
+  const lookEdit = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 0.5, blend: 'multiply' }] });
+  const lookTrack = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main'));
+  const lookState = await tool('get_state');
+  check('track sets layer opacity and blend mode, and get_state shows them', !lookEdit.isError && lookTrack.opacity === 0.5 &&
+    lookTrack.blend === 'multiply' && /v-main \[video main multiply opacity=0\.5\]/.test(lookState.text), lookEdit.text);
+  const backToNormal = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 1, blend: 'normal' }] });
+  const plainTrack = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main'));
+  check('track back to full opacity and normal drops the fields', !backToNormal.isError && !('opacity' in plainTrack) && !('blend' in plainTrack));
+  const clipBottom = await tool('edit', { ops: [{ op: 'track', track: 'v-main', clipped: true }] });
+  check('the bottom picture layer cannot be clipped', clipBottom.isError && clipBottom.text.includes('nothing under it'), clipBottom.text);
+  const audioLook = await tool('edit', { ops: [{ op: 'track', track: 'a-1', opacity: 0.5 }] });
+  check('audio tracks take no layer look', audioLook.isError && audioLook.text.includes('not audio'), audioLook.text);
+  const aboveMain = await win.evaluate(() => {
+    const ts = window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'audio');
+    return ts[ts.findIndex((t) => t.id === 'v-main') - 1]?.id;
+  });
+  const clipAbove = await tool('edit', { ops: [{ op: 'track', track: aboveMain, clipped: true }] });
+  check('a layer above another can be clipped', !clipAbove.isError &&
+    (await win.evaluate((tid) => window.__cutdesk.state().project.tracks.find((t) => t.id === tid).clipped, aboveMain)) === true, clipAbove.text);
+
   await win.evaluate(() => window.__cutdesk.load({ ...window.__cutdesk.state().project, tracks: window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'text') }));
   const conti2 = await tool('edit', { ops: [{ op: 'import_conti', post: 'p001' }] });
   check('import_conti reads the board (read only)', !conti2.isError && (await snap()).texts.join() === '11,4', `${conti2.text.slice(0, 60)} ${(await snap()).texts.join()}`);
@@ -1253,6 +1273,54 @@ try {
   }
   await win.evaluate((p) => window.__cutdesk.load(p), clipProject({ clipped: true }, { hidden: true }));
   check('hiding the base hides its clipping masks', close(await settled(1, clipInP), [0, 0, 0], 6));
+
+  // Merging video layers whose clips overlap: the overlap is baked into one see-through clip that looks the same.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid, redSolid],
+    tracks: [
+      { id: 'v-up', kind: 'video', muted: false, hidden: false,
+        clips: [{ ...MC, id: 'mu', assetId: blueSolid.id, start: 1, in: 0, out: 2, transform: { scale: 0.5, x: 0, y: 0 } }] },
+      { id: 'v-dn', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'md', assetId: redSolid.id, start: 0, in: 0, out: 2 }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  const centerP = { x: 540, y: 960, s: 8 };
+  const cornerP = { x: 100, y: 300, s: 8 };
+  check('overlapping video layers can be merged', !(await (await menu('v-up', '아래 레이어와 병합')).isDisabled()) &&
+    (await win.locator('[data-menu="v-up"] .tl-menu-note').textContent()).includes('구워서'));
+  await (await menu('v-up', '아래 레이어와 병합')).click();
+  await win.waitForFunction(() => {
+    const s = window.__cutdesk.state();
+    return s.layerJob === null && !s.project.tracks.some((t) => t.id === 'v-up');
+  }, null, { timeout: 120000 }).catch(() => {});
+  const mergedState = await win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    const t = s.project.tracks.find((tr) => tr.id === 'v-dn');
+    return { job: s.layerJob, ids: s.project.tracks.map((tr) => tr.id), clips: t.clips.map((c) => `${c.start}-${c.start + (c.out - c.in) / c.speed}`),
+      baked: s.project.assets.find((a) => a.name.startsWith('병합')) };
+  });
+  check('the merge leaves one layer: red, baked overlap, blue', mergedState.job === null && !mergedState.ids.includes('v-up') &&
+    mergedState.clips.join() === '0-1,1-2,2-3' && mergedState.baked?.alpha === 'vp9', JSON.stringify(mergedState));
+  const mergedLooks = [
+    { t: 1.5, at: centerP, want: [0, 0, 255] },
+    { t: 1.5, at: cornerP, want: [255, 0, 0] },
+    { t: 2.5, at: cornerP, want: [0, 0, 0] },
+    { t: 0.5, at: centerP, want: [255, 0, 0] },
+  ];
+  const mergedShown = [];
+  for (const m of mergedLooks) mergedShown.push(await settled(m.t, m.at));
+  check('the merged layer looks the same: preview', mergedLooks.every((m, i) => close(mergedShown[i], m.want, 12)), mergedShown.join(' / '));
+  {
+    const out = join(dir, 'merged-overlap.mp4');
+    await exportTo(out);
+    const made = mergedLooks.map((m) => samplePixel(out, m.t, m.at.x, m.at.y, 8));
+    check('the merged layer looks the same: export', mergedLooks.every((m, i) => close(made[i], m.want, 14)), made.join(' / '));
+  }
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+KeyZ');
+  const unmerged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => `${t.id}:${t.clips.length}`));
+  check('undo takes a baked merge back', unmerged.slice(0, 2).join() === 'v-up:1,v-dn:1', unmerged.join());
 
   // Clips butt exactly against a neighbour whose end is off the frame grid, when moved and when trimmed.
   await win.evaluate((p) => window.__cutdesk.load(p), {
