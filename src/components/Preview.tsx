@@ -1,25 +1,26 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Project } from '../../shared/project';
 import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration } from '../../shared/project';
+import { layerBox, previewSize, snapMove, snapTargets } from '../align';
 import { compositor, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
 import { RULES } from '../rules';
 import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor } from '../store';
 
-const PREVIEW_SCALE = 0.5;
-const CENTER_SNAP = 0.012;
+/** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
+const SNAP_PX = 6;
 
 export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const wheelTimer = useRef<number | null>(null);
   const [guides, setGuides] = useState(true);
+  const [snapLines, setSnapLines] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const project = useEditor((s) => s.project);
   const playhead = useEditor((s) => s.playhead);
   const playing = useEditor((s) => s.playing);
   const selectedClipId = useEditor((s) => s.selectedClipId);
-  const cw = Math.round(project.width * PREVIEW_SCALE);
-  const ch = Math.round(project.height * PREVIEW_SCALE);
+  const { w: cw, h: ch } = previewSize(project);
 
   useEffect(() => {
     compositor.attach(canvasRef.current);
@@ -37,21 +38,36 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
       ? compositor.textRect(project, text)
       : null;
 
-  const dragWith = (e: React.PointerEvent, apply: (dx: number, dy: number, snap: boolean) => (base: Project) => Project | null) => {
+  /**
+   * Drags the selected layer. With the magnet on, its edges and center stick to the frame, the safe-zone lines and
+   * the other layers on screen, and the line it stuck to is drawn.
+   */
+  const dragWith = (e: React.PointerEvent, clipId: string, apply: (dx: number, dy: number) => (base: Project) => Project | null) => {
     if (!stageRef.current) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
-    const box = stageRef.current.getBoundingClientRect();
+    const stage = stageRef.current.getBoundingClientRect();
     const x0 = e.clientX;
     const y0 = e.clientY;
+    const { project: p0, playhead: t0 } = useEditor.getState();
+    const start = findClip(p0, clipId);
+    const box = start ? layerBox(p0, start.clip) : null;
+    const targets = snapTargets(p0, t0, clipId);
     beginGesture();
     const move = (ev: PointerEvent) => {
-      updateGesture(apply((ev.clientX - x0) / box.width, (ev.clientY - y0) / box.height, useEditor.getState().snap));
+      const dx = (ev.clientX - x0) / stage.width;
+      const dy = (ev.clientY - y0) / stage.height;
+      const s = box && useEditor.getState().snap && !ev.altKey
+        ? snapMove(box, dx, dy, targets, SNAP_PX / stage.width, SNAP_PX / stage.height)
+        : { dx, dy, gx: null, gy: null };
+      setSnapLines({ x: s.gx, y: s.gy });
+      updateGesture(apply(s.dx, s.dy));
     };
     const up = () => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
+      setSnapLines({ x: null, y: null });
       endGesture();
     };
     el.addEventListener('pointermove', move);
@@ -62,22 +78,18 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     if (media) {
       const origin = media.transform;
       const id = media.id;
-      dragWith(e, (dx, dy, snap) => {
-        let x = origin.x + dx;
-        let y = origin.y + dy;
-        if (snap && Math.abs(x) < CENTER_SNAP) x = 0;
-        if (snap && Math.abs(y) < CENTER_SNAP) y = 0;
+      dragWith(e, id, (dx, dy) => {
+        const x = origin.x + dx;
+        const y = origin.y + dy;
         return (base) => updateMediaClip(base, id, (c) => ({ ...c, transform: { ...c.transform, x, y } }));
       });
     } else if (text) {
       const ox = text.x;
       const oy = text.y;
       const id = text.id;
-      const centered = text.style.align === 'center';
-      dragWith(e, (dx, dy, snap) => {
-        let x = ox + dx;
+      dragWith(e, id, (dx, dy) => {
+        const x = ox + dx;
         const y = oy + dy;
-        if (snap && centered && Math.abs(x - 0.5) < CENTER_SNAP) x = 0.5;
         return (base) => updateTextClip(base, id, (c) => ({ ...c, x, y }));
       });
     }
@@ -134,6 +146,8 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
               onPointerDown={onPointerDown}
             />
           )}
+          {snapLines.x !== null && <div className="snap-line v" style={{ left: `${snapLines.x * 100}%` }} data-testid="snap-x" />}
+          {snapLines.y !== null && <div className="snap-line h" style={{ top: `${snapLines.y * 100}%` }} data-testid="snap-y" />}
         </div>
       </div>
       <div className="transport">

@@ -918,33 +918,15 @@ try {
   await win.evaluate((p) => window.__cutdesk.load(p), oldStyle);
   check('a project saved before effects opens with none', (await clipOf('fx')).style.effect === 'none');
 
-  // Behind the subject: masks cut by rembg from a green box sliding over red; the box covers the letter at 1s, not at 0.1s.
+  // The dropped 'behind' effect: older files open with no effect and without their subject masks.
   const boxAsset = await importMedia(f('box.mp4'), join(dir, 'cache'));
   const behindProject = fxProject('behind', 'none');
-  behindProject.assets = [boxAsset];
+  behindProject.assets = [{ ...boxAsset, matte: { dir: join(dir, 'old-masks'), from: 0, to: 2, fps: 30, count: 61 } }];
   behindProject.tracks[1].clips = [{ ...MC, id: 'bg', assetId: boxAsset.id, start: 0, in: 0, out: 2 }];
   await win.evaluate((p) => window.__cutdesk.load(p), behindProject);
-  await win.locator('[data-clip="fx"]').click();
-  check('behind asks for subject masks first', (await win.locator('[data-testid="matte-make"]').count()) === 1);
-  const earlyErr = await win.evaluate((outPath) => window.api
-    .startExport(window.__cutdesk.state().project, { outPath, height: 1920 }, window.__cutdesk.texts(1920))
-    .then(() => 'started', (e) => e.message), join(dir, 'behind-early.mp4'));
-  check('export refuses behind text without masks', earlyErr.includes('subject masks are missing'), earlyErr);
-  const started = Date.now();
-  await win.locator('[data-testid="matte-make"]').click();
-  await win.locator('[data-testid="matte-ready"]').waitFor({ timeout: 300000 });
-  const matte = (await win.evaluate(() => window.__cutdesk.state().project.assets[0].matte));
-  check('rembg cuts a mask per frame', matte?.count >= 60, `${JSON.stringify(matte && { count: matte.count, from: matte.from, to: matte.to })} in ${Math.round((Date.now() - started) / 1000)}s`);
-  for (const [t, want, what] of [[1, [0, 192, 0], 'box in front of the letter'], [0.1, [255, 255, 255], 'letter where the box is not']]) {
-    const shown = await settled(t, inP);
-    const out = join(dir, `behind-${t}.mp4`);
-    await exportTo(out);
-    const made = samplePixel(out, t, inP.x, inP.y, 24);
-    // The preview's own decode of the box (beside the letter) is the reference: the subject must look like the footage.
-    const ref = t === 1 ? await readCanvas(besideP) : want;
-    check(`behind at ${t}s, ${what}: preview`, close(shown, ref, 12), `${shown} want ${ref}`);
-    check(`behind at ${t}s, ${what}: export`, close(made, want, 14), `${made} want ${want}`);
-  }
+  const opened = await win.evaluate(() => window.__cutdesk.state().project);
+  check('a file with a behind text opens with no effect and no masks', opened.tracks[0].clips[0].style.effect === 'none' &&
+    !('matte' in opened.assets[0]), JSON.stringify({ effect: opened.tracks[0].clips[0].style.effect, keys: Object.keys(opened.assets[0]) }));
 
   // Subject to a new layer: the green box comes out as a see-through clip above; a blue picture slid between the two
   // hides the red background but not the box.
@@ -1030,7 +1012,7 @@ try {
   const textTracks = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text')
     .map((t) => ({ id: t.id, name: t.name, locked: t.locked, clips: t.clips.map((c) => ({ id: c.id, start: c.start })) })));
   const menu = async (trackId, item) => {
-    if ((await win.locator(`[data-menu="${trackId}"]`).count()) === 0) await win.locator(`[data-head="${trackId}"] .tl-menu-btn`).click();
+    if ((await win.locator(`[data-menu="${trackId}"]`).count()) === 0) await win.locator(`[data-head="${trackId}"] .layer-thumb`).click();
     return win.locator(`[data-menu="${trackId}"]`).getByRole('button', { name: item, exact: true });
   };
   await (await menu('t-a', '아래 레이어와 병합')).click();
@@ -1058,7 +1040,8 @@ try {
   await win.keyboard.press('Enter');
   check('double-click renames a layer', (await textTracks()).find((t) => t.id === 't-b')?.name === '자막' &&
     (await win.locator('[data-head="t-b"] .tl-head-name').textContent()) === '자막');
-  await win.locator('[data-head="t-b"] .lock').click();
+  await (await menu('t-b', '잠금')).click();
+  check('a locked layer says so on its card', (await win.locator('[data-head="t-b"] .layer-notes').textContent()).includes('잠김'));
   const lockedBox = await win.locator('[data-clip="lb"]').boundingBox();
   await win.mouse.move(lockedBox.x + lockedBox.width / 2, lockedBox.y + lockedBox.height / 2);
   await win.mouse.down();
@@ -1071,8 +1054,205 @@ try {
   check('a locked layer keeps its clips: no drag, delete or split', lockedTrack.locked === true &&
     lockedTrack.clips.map((c) => `${c.id}@${c.start}`).join() === 'la@0,lb@3', JSON.stringify(lockedTrack));
   check('a locked layer cannot be deleted or merged', await (await menu('t-b', '삭제')).isDisabled());
-  await win.locator('[data-head="t-b"] .tl-menu-btn').click();
+  await win.locator('[data-head="t-b"] .layer-thumb').click();
   check('the layer menu closes again', (await win.locator('[data-menu="t-b"]').count()) === 0);
+
+  // A picture layer moves in front of a text layer: a blue picture over a white plate, red at the bottom.
+  const [blueSolid, redSolid] = await win.evaluate(async () =>
+    [await window.api.makeSolid('#0000FF', 1080, 1920), await window.api.makeSolid('#FF0000', 1080, 1920)]);
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid, redSolid],
+    tracks: [
+      layerTrack('t-x', [{ ...text('lx', 0, 2, 'X', { ...layerStyle, background: '#FFFFFF' }, 0.5, 0.5, 'none'), rotation: 0, spans: [] }]),
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vb', assetId: blueSolid.id, start: 0, in: 0, out: 2 }] },
+      { id: 'v-bg', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vr', assetId: redSolid.id, start: 0, in: 0, out: 2 }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  const plateP = { x: 540, y: 960, s: 8 };
+  check('a text layer draws over the pictures below', close(await settled(1, plateP), [255, 255, 255], 12));
+  check('audio layers do not swap with pictures', await (await menu('v-bg', '뒤로 (아래로)')).isDisabled());
+  await win.locator('[data-head="v-bg"] .layer-thumb').click();
+  await (await menu('v-top', '앞으로 (위로)')).click();
+  const stack = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  check('a picture layer moves in front of a text layer', stack.slice(0, 3).join() === 'v-top,t-x,v-bg', stack.join());
+  check('the picture in front covers the text: preview', close(await settled(1, plateP), [0, 0, 255], 12));
+  {
+    const out = join(dir, 'picture-over-text.mp4');
+    await exportTo(out);
+    const made = samplePixel(out, 1, plateP.x, plateP.y, 8);
+    check('the picture in front covers the text: export', close(made, [0, 0, 255], 14), String(made));
+  }
+
+  // Layer cards: a thumbnail of the layer alone, drag to restack, the check hides the layer.
+  const thumbPixel = (trackId) => win.evaluate((id) => {
+    const c = document.querySelector(`[data-head="${id}"] canvas.layer-thumb`);
+    return c ? [...c.getContext('2d').getImageData(c.width / 2, c.height / 2, 1, 1).data] : null;
+  }, trackId);
+  await settled(1, plateP);
+  const redThumb = await thumbPixel('v-bg');
+  check('a layer card shows the layer alone', redThumb && close(redThumb.slice(0, 3), [255, 0, 0], 12) && redThumb[3] === 255,
+    String(redThumb));
+  const textThumb = await thumbPixel('t-x');
+  check('a text card is see-through outside the letters', textThumb === null || textThumb[3] < 255 || close(textThumb.slice(0, 3), [255, 255, 255], 12),
+    String(textThumb));
+  const from = await win.locator('[data-head="v-bg"] .layer-thumb').boundingBox();
+  const top = await win.locator('[data-head="v-top"]').boundingBox();
+  await win.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(from.x + from.width / 2, top.y + 4, { steps: 8 });
+  check('a dragged card shows where it will land', (await win.locator('[data-head="v-top"].drop-before').count()) === 1);
+  await win.mouse.up();
+  const dragged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  check('dragging a card to the top restacks the layer', dragged.slice(0, 3).join() === 'v-bg,v-top,t-x', dragged.join());
+  check('the dragged layer is in front: preview', close(await settled(1, plateP), [255, 0, 0], 12));
+  check('a drag does not open the layer menu', (await win.locator('[data-menu="v-bg"]').count()) === 0);
+  const audioHead = await win.locator('.tl-heads [data-head^="a-"]').last().boundingBox();
+  const topNow = await win.locator('[data-head="v-bg"] .layer-thumb').boundingBox();
+  await win.mouse.move(topNow.x + topNow.width / 2, topNow.y + topNow.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(topNow.x + topNow.width / 2, audioHead.y + audioHead.height - 2, { steps: 8 });
+  await win.mouse.up();
+  const kept = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  check('a picture layer cannot be dragged below the audio', kept.slice(0, 3).join() === 'v-bg,v-top,t-x', kept.join());
+  await win.keyboard.press('Control+KeyZ');
+  const unDragged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  check('undo puts a dragged layer back', unDragged.slice(0, 3).join() === 'v-top,t-x,v-bg', unDragged.join());
+  await win.locator('[data-head="v-top"] .layer-check').click();
+  check('the card check hides the layer', (await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-top').hidden)) === true &&
+    close(await settled(1, plateP), [255, 255, 255], 12) && (await win.locator('[data-menu="v-top"]').count()) === 0);
+
+  // Placement: a dragged layer sticks to the frame's center line (not with Alt), and the align buttons put it on an edge.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid, redSolid],
+    tracks: [
+      layerTrack('t-x', [{ ...text('lx', 0, 2, 'X', { ...layerStyle, background: '#FFFFFF' }, 0.5, 0.7, 'none'), rotation: 0, spans: [] }]),
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vb', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: { scale: 0.5, x: 0.2, y: 0 } }] },
+      { id: 'v-bg', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vr', assetId: redSolid.id, start: 0, in: 0, out: 2 }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.locator('[data-clip="vb"]').click();
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  const clipX = (id) => win.evaluate((cid) => {
+    const c = window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((k) => k.id === cid);
+    return c.transform ? c.transform.x : c.x;
+  }, id);
+  const stageBox = await win.locator('.stage').boundingBox();
+  const tbox = await win.locator('.transform-box').boundingBox();
+  const grab = { x: tbox.x + tbox.width / 2, y: tbox.y + tbox.height / 2 };
+  const nearCenter = grab.x - 0.2 * stageBox.width + 3;
+  await win.mouse.move(grab.x, grab.y);
+  await win.mouse.down();
+  await win.mouse.move(nearCenter, grab.y, { steps: 6 });
+  check('a dragged layer shows the line it sticks to', (await win.locator('[data-testid="snap-x"]').count()) === 1);
+  await win.mouse.up();
+  const snappedX = await clipX('vb');
+  check('a dragged layer sticks to the frame center', Math.abs(snappedX) < 0.003, String(snappedX));
+  check('the snap line goes away on release', (await win.locator('[data-testid="snap-x"]').count()) === 0);
+  const tbox2 = await win.locator('.transform-box').boundingBox();
+  const grab2 = { x: tbox2.x + tbox2.width / 2, y: tbox2.y + tbox2.height / 2 };
+  await win.keyboard.down('Alt');
+  await win.mouse.move(grab2.x, grab2.y);
+  await win.mouse.down();
+  await win.mouse.move(grab2.x + 3, grab2.y, { steps: 3 });
+  await win.mouse.up();
+  await win.keyboard.up('Alt');
+  const freeX = await clipX('vb');
+  check('Alt drags without sticking', Math.abs(freeX - snappedX - 3 / stageBox.width) < 0.002, `${snappedX} -> ${freeX}`);
+  await win.locator('[data-align="left"]').click();
+  const leftX = await clipX('vb');
+  check('align left puts the picture on the frame edge at export size', Math.round(270 + leftX * 1080) === 0, String(leftX));
+  check('align left shows the background on the right: preview', close(await settled(1, { x: 1000, y: 960, s: 8 }), [255, 0, 0], 12) &&
+    close(await settled(1, { x: 80, y: 960, s: 8 }), [0, 0, 255], 12));
+  await win.locator('[data-clip="lx"]').click();
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.locator('[data-align="top"]').click();
+  const topBox = await win.locator('.transform-box').boundingBox();
+  check('align top puts the text on the frame top', Math.abs(topBox.y - stageBox.y) < 2, `${topBox.y} vs ${stageBox.y}`);
+  await win.keyboard.press('Control+KeyZ');
+  const undoneY = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  check('undo takes an align back', Math.abs(undoneY - 0.7) < 1e-9, String(undoneY));
+
+  // Layer opacity and blend modes: a #4080C0 layer over #804020, the same in preview and export.
+  const [lowSolid, highSolid] = await win.evaluate(async () =>
+    [await window.api.makeSolid('#804020', 1080, 1920), await window.api.makeSolid('#4080C0', 1080, 1920)]);
+  const lookProject = (look) => ({
+    ...base,
+    assets: [...base.assets, lowSolid, highSolid],
+    tracks: [
+      { id: 'v-hi', kind: 'video', muted: false, hidden: false, ...look, clips: [{ ...MC, id: 'hi', assetId: highSolid.id, start: 0, in: 0, out: 2 }] },
+      { id: 'v-lo', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'lo', assetId: lowSolid.id, start: 0, in: 0, out: 2 }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.evaluate((p) => window.__cutdesk.load(p), lookProject({}));
+  await win.locator('[data-head="v-hi"] .layer-thumb').click();
+  await win.locator('[data-menu="v-hi"] [data-testid="layer-blend"]').selectOption('multiply');
+  await win.locator('[data-menu="v-hi"] [data-testid="layer-opacity"]').fill('50');
+  const looked = await win.evaluate(() => window.__cutdesk.state().project.tracks[0]);
+  check('the layer menu sets blend mode and opacity', looked.blend === 'multiply' && looked.opacity === 0.5, JSON.stringify({ b: looked.blend, o: looked.opacity }));
+  check('the card shows the blend mode and opacity', (await win.locator('[data-head="v-hi"] .layer-notes').textContent()).includes('곱하기 · 50%'));
+  check('layers that mix differently do not merge', await win.locator('[data-menu="v-hi"] button', { hasText: '아래 레이어와 병합' }).isDisabled());
+  await win.locator('[data-head="v-hi"] .layer-thumb').click();
+  await win.keyboard.press('Control+KeyZ');
+  check('undo takes the opacity back', (await win.evaluate(() => window.__cutdesk.state().project.tracks[0].opacity)) === undefined);
+  const looks = [
+    { name: 'multiply', look: { blend: 'multiply' }, want: [32, 32, 24] },
+    { name: 'overlay', look: { blend: 'overlay' }, want: [65, 64, 48] },
+    { name: 'normal at 50%', look: { opacity: 0.5 }, want: [96, 96, 112] },
+    { name: 'difference at 60%', look: { blend: 'difference', opacity: 0.6 }, want: [90, 64, 109] },
+  ];
+  const lookP = { x: 540, y: 960, s: 8 };
+  for (const l of looks) {
+    await win.evaluate((p) => window.__cutdesk.load(p), lookProject(l.look));
+    const shown = await settled(1, lookP);
+    check(`layer ${l.name}: preview`, close(shown, l.want, 6), `${shown} want ${l.want}`);
+    const out = join(dir, `look-${l.name.replace(/\W+/g, '-')}.mp4`);
+    await exportTo(out);
+    const made = samplePixel(out, 1, lookP.x, lookP.y, 8);
+    check(`layer ${l.name}: export`, close(made, l.want, 10), `${made} want ${l.want}`);
+  }
+
+  // Clipping mask: a full-frame #4080C0 layer clipped to a half-size #804020 one shows only inside it.
+  const clipProject = (top, bottom) => ({
+    ...base,
+    assets: [...base.assets, lowSolid, highSolid],
+    tracks: [
+      { id: 'v-clip', kind: 'video', muted: false, hidden: false, ...top, clips: [{ ...MC, id: 'cl', assetId: highSolid.id, start: 0, in: 0, out: 2 }] },
+      { id: 'v-base', kind: 'video', muted: false, hidden: false, ...bottom,
+        clips: [{ ...MC, id: 'cb', assetId: lowSolid.id, start: 0, in: 0, out: 2, transform: { scale: 0.5, x: 0, y: 0 } }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.evaluate((p) => window.__cutdesk.load(p), clipProject({}, {}));
+  check('the bottom layer cannot be clipped', await (await menu('v-base', '클리핑 마스크')).isDisabled());
+  await win.locator('[data-head="v-base"] .layer-thumb').click();
+  await (await menu('v-clip', '클리핑 마스크')).click();
+  check('the menu turns the clipping mask on', (await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clipped)) === true &&
+    (await win.locator('[data-head="v-clip"].clipped').count()) === 1);
+  const clipInP = { x: 540, y: 960, s: 8 };
+  const clipOutP = { x: 100, y: 300, s: 8 };
+  const clips = [
+    { name: 'normal', top: { clipped: true }, bottom: {}, inside: [64, 128, 192] },
+    { name: 'multiply', top: { clipped: true, blend: 'multiply' }, bottom: {}, inside: [32, 32, 24] },
+    { name: 'on a half-opacity base', top: { clipped: true }, bottom: { opacity: 0.5 }, inside: [32, 64, 96] },
+  ];
+  for (const c of clips) {
+    await win.evaluate((p) => window.__cutdesk.load(p), clipProject(c.top, c.bottom));
+    const shownIn = await settled(1, clipInP);
+    const shownOut = await settled(1, clipOutP);
+    check(`clipping ${c.name}: preview`, close(shownIn, c.inside, 6) && close(shownOut, [0, 0, 0], 6), `${shownIn} / ${shownOut} want ${c.inside}`);
+    const out = join(dir, `clip-${c.name.replace(/\W+/g, '-')}.mp4`);
+    await exportTo(out);
+    const madeIn = samplePixel(out, 1, clipInP.x, clipInP.y, 8);
+    const madeOut = samplePixel(out, 1, clipOutP.x, clipOutP.y, 8);
+    check(`clipping ${c.name}: export`, close(madeIn, c.inside, 10) && close(madeOut, [0, 0, 0], 10), `${madeIn} / ${madeOut} want ${c.inside}`);
+  }
+  await win.evaluate((p) => window.__cutdesk.load(p), clipProject({ clipped: true }, { hidden: true }));
+  check('hiding the base hides its clipping masks', close(await settled(1, clipInP), [0, 0, 0], 6));
 
   // Clips butt exactly against a neighbour whose end is off the frame grid, when moved and when trimmed.
   await win.evaluate((p) => window.__cutdesk.load(p), {

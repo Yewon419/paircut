@@ -69,6 +69,16 @@ export function App() {
   };
 
   useEffect(() => startPausedSync(), []);
+  useEffect(() => {
+    window.api
+      .openLastProject()
+      .then((opened) => {
+        if (!opened || useEditor.getState().dirty) return;
+        loadProject(opened.project, opened.path);
+        setNotice(opened.missing.length > 0 ? `찾을 수 없는 파일 ${opened.missing.length}개: ${opened.missing.join(', ')}` : null);
+      })
+      .catch((err: unknown) => setNotice(`마지막 프로젝트를 열지 못했어요: ${(err as Error).message}`));
+  }, []);
   useEffect(() => startAgentBridge(), []);
 
   useEffect(() => {

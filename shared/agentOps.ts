@@ -69,13 +69,12 @@ export const EditOp = z.discriminatedUnion('op', [
       .describe('type/word/letters: letters, words or fading letters appear in turn; blur/track/wipe: blur in, letter spacing closing in, left-to-right reveal'),
     rotation: z.number().min(-180).max(180).optional().describe('degrees clockwise, whole text around its center'),
     effect: z
-      .enum(['none', 'invert', 'mono', 'frost', 'knockout', 'glow', 'chroma', 'glitch', 'behind'])
+      .enum(['none', 'invert', 'mono', 'frost', 'knockout', 'glow', 'chroma', 'glitch'])
       .optional()
       .describe(
         'letters vs the picture under them: invert = difference with the text color (white = photo negative), ' +
           'mono = picture in gray, frost = picture blurred and lightened, knockout = plate in the text color with letters cut out, ' +
-          'glow = soft halo in the text color, chroma = red/cyan split, glitch = sliced and shifted letters in short bursts, ' +
-          'behind = subject of the video track below drawn over the letters (needs subject masks cut in the inspector before export)',
+          'glow = soft halo in the text color, chroma = red/cyan split, glitch = sliced and shifted letters in short bursts',
       ),
   }),
   z

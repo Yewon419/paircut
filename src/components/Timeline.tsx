@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AnyClip, Project, Track } from '../../shared/project';
+import type { AnyClip, BlendMode, Project, Track } from '../../shared/project';
 import {
   assetById,
+  BLEND_MODES,
+  canClip,
+  layerBlend,
+  layerOpacity,
   clipDuration,
   clipEnd,
   effectiveDissolve,
@@ -10,10 +14,11 @@ import {
   projectDuration,
   resolveTokens,
 } from '../../shared/project';
-import { seek } from '../engine/player';
+import { compositor, seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
   beginGesture,
+  commit,
   deleteSelected,
   deleteTrack,
   duplicateTrack,
@@ -21,11 +26,13 @@ import {
   findClip,
   fitStart,
   frameSnap,
+  layerDropIndex,
   mergeDownBlocker,
   mergeTrackDown,
   moveClip,
   moveClipToNewTrack,
   moveTrack,
+  moveTrackTo,
   overlaps,
   placeAsset,
   redo,
@@ -33,16 +40,20 @@ import {
   splitAtPlayhead,
   tidyTracks,
   toggleTrack,
-  trackNeighbour,
+  stackNeighbour,
   undo,
   updateClip,
   updateGesture,
   useEditor,
+  withTrack,
 } from '../store';
 import { ASSET_MIME } from './MediaBin';
 
 const RULER_H = 28;
 const TRACK_H = 56;
+/** Layer card thumbnail, a 9:16 frame at twice its CSS size. */
+const THUMB_W = 54;
+const THUMB_H = 96;
 const ZONE_H = 22;
 const SNAP_PX = 8;
 const MIN_ZOOM = 10;
@@ -139,6 +150,32 @@ export function Timeline() {
   const duration = projectDuration(project);
   const contentWidth = Math.max(viewWidth, (duration + 20) * zoom);
   const rows = rowsOf(project);
+  const [layerDrag, setLayerDrag] = useState<{ id: string; slot: number } | null>(null);
+
+  /** Gap between layer cards under the pointer: 0 = above the top card, tracks.length = below the bottom one. */
+  const layerSlot = (clientY: number): number => {
+    const cards = [...document.querySelectorAll<HTMLElement>('.tl-heads [data-head]')];
+    const at = cards.findIndex((el) => {
+      const box = el.getBoundingClientRect();
+      return clientY < box.top + box.height / 2;
+    });
+    return at === -1 ? cards.length : at;
+  };
+  const onLayerDrag = (trackId: string, clientY: number, drop: boolean) => {
+    const slot = layerSlot(clientY);
+    if (!drop) {
+      setLayerDrag({ id: trackId, slot });
+      return;
+    }
+    setLayerDrag(null);
+    moveTrackTo(trackId, slot);
+  };
+  const dropLineFor = (track: Track): 'before' | 'after' | null => {
+    if (!layerDrag || layerDropIndex(project, layerDrag.id, layerDrag.slot) === null) return null;
+    const i = project.tracks.indexOf(track);
+    if (layerDrag.slot === i) return 'before';
+    return layerDrag.slot === project.tracks.length && i === project.tracks.length - 1 ? 'after' : null;
+  };
 
   const timeAt = (clientX: number): number => {
     const el = scrollRef.current;
@@ -323,37 +360,14 @@ export function Timeline() {
           <div style={{ height: RULER_H }} />
           {rows.map((row) =>
             row.type === 'track' ? (
-              <div key={rowKey(row)} className="tl-head" data-head={row.track.id} style={{ height: TRACK_H }}>
-                <TrackName project={project} track={row.track} />
-                <div className="tl-head-btns">
-                  {row.track.kind !== 'audio' && (
-                    <button
-                      className={row.track.hidden ? 'toggle' : 'toggle on'}
-                      onClick={() => toggleTrack(row.track.id, 'hidden')}
-                      title="화면 보이기"
-                    >
-                      {row.track.hidden ? '숨김' : '보임'}
-                    </button>
-                  )}
-                  {row.track.kind !== 'text' && (
-                    <button
-                      className={row.track.muted ? 'toggle' : 'toggle on'}
-                      onClick={() => toggleTrack(row.track.id, 'muted')}
-                      title="소리"
-                    >
-                      {row.track.muted ? '음소거' : '소리'}
-                    </button>
-                  )}
-                  <button
-                    className={row.track.locked ? 'toggle on lock' : 'toggle lock'}
-                    onClick={() => toggleTrack(row.track.id, 'locked')}
-                    title="잠그면 클립을 옮기거나 자르거나 지울 수 없어요"
-                  >
-                    {row.track.locked ? '잠김' : '잠금'}
-                  </button>
-                  <TrackMenu project={project} track={row.track} />
-                </div>
-              </div>
+              <LayerCard
+                key={rowKey(row)}
+                project={project}
+                track={row.track}
+                dragging={layerDrag?.id === row.track.id}
+                dropLine={dropLineFor(row.track)}
+                onDrag={onLayerDrag}
+              />
             ) : (
               <div key={rowKey(row)} style={{ height: ZONE_H }} />
             ),
@@ -440,9 +454,18 @@ export function Timeline() {
   );
 }
 
-/** The track's label; double-click to rename, an empty name goes back to the default label. */
-function TrackName({ project, track }: { project: Project; track: Track }) {
-  const [editing, setEditing] = useState(false);
+/** The layer's name; double-click (or 이름 바꾸기 in its menu) to rename, empty goes back to the default label. */
+function TrackName({
+  project,
+  track,
+  editing,
+  setEditing,
+}: {
+  project: Project;
+  track: Track;
+  editing: boolean;
+  setEditing: (on: boolean) => void;
+}) {
   const label = trackLabel(project, track);
   if (!editing) {
     return (
@@ -457,6 +480,7 @@ function TrackName({ project, track }: { project: Project; track: Track }) {
       autoFocus
       defaultValue={track.name ?? ''}
       placeholder={label}
+      onPointerDown={(e) => e.stopPropagation()}
       onFocus={(e) => e.currentTarget.select()}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
@@ -470,61 +494,216 @@ function TrackName({ project, track }: { project: Project; track: Track }) {
   );
 }
 
-const MENU_H = 230;
-
-/** Layer actions: order, merge, duplicate, delete. Opens below its button (above near the window's bottom). */
-function TrackMenu({ project, track }: { project: Project; track: Track }) {
-  const [at, setAt] = useState<React.CSSProperties | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const btnRef = useRef<HTMLButtonElement>(null);
+/** The layer drawn alone at the playhead, on a transparency checkerboard. */
+function LayerThumb({ trackId }: { trackId: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
-    if (!at) return;
-    // Its own button is left to onClick, which toggles; closing here too would reopen it.
-    const close = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (!menuRef.current?.contains(target) && !btnRef.current?.contains(target)) setAt(null);
+    compositor.attachThumb(trackId, ref.current);
+    return () => compositor.attachThumb(trackId, null);
+  }, [trackId]);
+  return <canvas ref={ref} className="layer-thumb" width={THUMB_W} height={THUMB_H} />;
+}
+
+const KIND_LABEL = { text: '글자', video: '영상', audio: '오디오' } as const;
+const DRAG_PX = 4;
+const MENU_H = 430;
+
+interface LayerCardProps {
+  project: Project;
+  track: Track;
+  /** Gap the dragged card would drop into, shown as a line above (or below, for the last card) this one. */
+  dropLine: 'before' | 'after' | null;
+  dragging: boolean;
+  onDrag: (trackId: string, clientY: number, drop: boolean) => void;
+}
+
+/**
+ * A layer as a card, like a drawing app's layer list: thumbnail, name, what it holds, a visibility (or sound) check.
+ * Tap it for the layer menu, drag it up or down to restack.
+ */
+function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProps) {
+  const [menuAt, setMenuAt] = useState<React.CSSProperties | null>(null);
+  const [editing, setEditing] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const audio = track.kind === 'audio';
+  const shown = audio ? !track.muted : !track.hidden;
+  const blend = layerBlend(track);
+  const opacity = layerOpacity(track);
+  const notes = [
+    KIND_LABEL[track.kind],
+    blend !== 'normal' ? (BLEND_MODES.find((m) => m.id === blend)?.label ?? '') : '',
+    opacity < 1 ? `${Math.round(opacity * 100)}%` : '',
+    track.clipped && track.kind !== 'audio' ? '클리핑' : '',
+    track.locked ? '잠김' : '',
+    track.kind === 'video' && track.muted ? '음소거' : '',
+  ].filter(Boolean);
+
+  const onDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || editing) return;
+    const startY = e.clientY;
+    let moved = false;
+    const move = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientY - startY) < DRAG_PX) return;
+      moved = true;
+      onDrag(track.id, ev.clientY, false);
     };
-    window.addEventListener('pointerdown', close, true);
-    return () => window.removeEventListener('pointerdown', close, true);
-  }, [at]);
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      if (moved) {
+        onDrag(track.id, ev.clientY, true);
+        return;
+      }
+      const box = cardRef.current?.getBoundingClientRect();
+      if (!box) return;
+      const top = Math.min(box.top, window.innerHeight - MENU_H - 8);
+      setMenuAt((open) => (open ? null : { left: box.right + 6, top: Math.max(8, top) }));
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <div
+      ref={cardRef}
+      className={`tl-head layer-card${track.clipped && track.kind !== 'audio' ? ' clipped' : ''}${shown ? '' : ' off'}${menuAt ? ' open' : ''}${dragging ? ' dragging' : ''}${dropLine ? ` drop-${dropLine}` : ''}`}
+      data-head={track.id}
+      style={{ height: TRACK_H }}
+      onPointerDown={onDown}
+    >
+      {audio ? <div className="layer-thumb layer-thumb-audio">♪</div> : <LayerThumb trackId={track.id} />}
+      <div className="layer-info">
+        <TrackName project={project} track={track} editing={editing} setEditing={setEditing} />
+        <span className="layer-notes">{notes.join(' · ')}</span>
+      </div>
+      <input
+        type="checkbox"
+        className="layer-check"
+        checked={shown}
+        title={audio ? '소리' : '화면 보이기'}
+        onPointerDown={(e) => e.stopPropagation()}
+        onChange={() => toggleTrack(track.id, audio ? 'muted' : 'hidden')}
+      />
+      {menuAt && (
+        <LayerMenu
+          project={project}
+          track={track}
+          at={menuAt}
+          card={cardRef}
+          close={() => setMenuAt(null)}
+          rename={() => setEditing(true)}
+        />
+      )}
+    </div>
+  );
+}
+
+interface LayerMenuProps {
+  project: Project;
+  track: Track;
+  at: React.CSSProperties;
+  card: React.RefObject<HTMLDivElement | null>;
+  close: () => void;
+  rename: () => void;
+}
+
+/** Layer actions beside its card: rename, lock, sound, order, merge, duplicate, delete. */
+function LayerMenu({ project, track, at, card, close, rename }: LayerMenuProps) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // The card itself is left to its own tap, which toggles; closing here too would reopen it.
+    const away = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (!menuRef.current?.contains(target) && !card.current?.contains(target)) close();
+    };
+    window.addEventListener('pointerdown', away, true);
+    return () => window.removeEventListener('pointerdown', away, true);
+  }, [card, close]);
   const blocker = mergeDownBlocker(project, track.id);
   const run = (action: () => void) => () => {
     action();
-    setAt(null);
+    close();
   };
+  const setOpacity = (opacity: number) => {
+    const update = (p: Project) =>
+      withTrack(p, track.id, (t) => {
+        const rest = { ...t };
+        delete rest.opacity;
+        return opacity >= 1 ? rest : { ...rest, opacity };
+      });
+    // A drag is one undo step; a change from anywhere else is committed on its own.
+    if (useEditor.getState().gestureBase) updateGesture(update);
+    else commit(update);
+  };
+  const setBlend = (blend: BlendMode) =>
+    commit((p) =>
+      withTrack(p, track.id, (t) => {
+        const rest = { ...t };
+        delete rest.blend;
+        return blend === 'normal' ? rest : { ...rest, blend };
+      }),
+    );
   return (
-    <>
-      <button
-        ref={btnRef}
-        className="icon tl-menu-btn"
-        title="레이어 메뉴"
-        onClick={(e) => {
-          const box = e.currentTarget.getBoundingClientRect();
-          const up = box.bottom + 4 + MENU_H > window.innerHeight;
-          setAt(at ? null : up ? { left: box.left, bottom: window.innerHeight - box.top + 4 } : { left: box.left, top: box.bottom + 4 });
-        }}
-      >
-        ⋯
-      </button>
-      {at && (
-        <div className="tl-menu" ref={menuRef} style={at} data-menu={track.id}>
-          <button disabled={!trackNeighbour(project, track.id, -1)} onClick={run(() => moveTrack(track.id, -1))}>
-            앞으로 (위로)
-          </button>
-          <button disabled={!trackNeighbour(project, track.id, 1)} onClick={run(() => moveTrack(track.id, 1))}>
-            뒤로 (아래로)
-          </button>
-          <button disabled={blocker !== null} title={blocker ?? ''} onClick={run(() => mergeTrackDown(track.id))}>
-            아래 레이어와 병합
-          </button>
-          {blocker && <div className="tl-menu-note">{blocker}</div>}
-          <button onClick={run(() => duplicateTrack(track.id))}>복제</button>
-          <button className="danger" disabled={track.locked} onClick={run(() => deleteTrack(track.id))}>
-            삭제
-          </button>
+    <div className="tl-menu" ref={menuRef} style={at} data-menu={track.id} onPointerDown={(e) => e.stopPropagation()}>
+      {track.kind !== 'audio' && (
+        <div className="layer-look">
+          <label>
+            <span>불투명도 {Math.round(layerOpacity(track) * 100)}%</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(layerOpacity(track) * 100)}
+              data-testid="layer-opacity"
+              onPointerDown={beginGesture}
+              onPointerUp={endGesture}
+              onChange={(e) => setOpacity(Number(e.target.value) / 100)}
+            />
+          </label>
+          <label>
+            <span>혼합 모드</span>
+            <select value={layerBlend(track)} data-testid="layer-blend" onChange={(e) => setBlend(e.target.value as BlendMode)}>
+              {BLEND_MODES.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="tl-menu-sep" />
         </div>
       )}
-    </>
+      {track.kind !== 'audio' && (
+        <button
+          disabled={!track.clipped && !canClip(project, track.id)}
+          title="아래 레이어가 보이는 곳에만 이 레이어가 보여요"
+          onClick={run(() => toggleTrack(track.id, 'clipped'))}
+        >
+          {track.clipped ? '클리핑 마스크 해제' : '클리핑 마스크'}
+        </button>
+      )}
+      <button onClick={run(rename)}>이름 바꾸기</button>
+      <button onClick={run(() => toggleTrack(track.id, 'locked'))}>{track.locked ? '잠금 해제' : '잠금'}</button>
+      {track.kind === 'video' && (
+        <button onClick={run(() => toggleTrack(track.id, 'muted'))}>{track.muted ? '소리 켜기' : '소리 끄기'}</button>
+      )}
+      <div className="tl-menu-sep" />
+      <button disabled={!stackNeighbour(project, track.id, -1)} onClick={run(() => moveTrack(track.id, -1))}>
+        앞으로 (위로)
+      </button>
+      <button disabled={!stackNeighbour(project, track.id, 1)} onClick={run(() => moveTrack(track.id, 1))}>
+        뒤로 (아래로)
+      </button>
+      <button disabled={blocker !== null} title={blocker ?? ''} onClick={run(() => mergeTrackDown(track.id))}>
+        아래 레이어와 병합
+      </button>
+      {blocker && <div className="tl-menu-note">{blocker}</div>}
+      <button onClick={run(() => duplicateTrack(track.id))}>복제</button>
+      <button className="danger" disabled={track.locked} onClick={run(() => deleteTrack(track.id))}>
+        삭제
+      </button>
+    </div>
   );
 }
 

@@ -3,8 +3,6 @@ import {
   ANIM_OUT,
   assetById,
   backdropEffect,
-  behindOverlap,
-  behindSubjects,
   clipDuration,
   clipEnd,
   cropBox,
@@ -18,17 +16,18 @@ import {
   isIntroAnim,
   isMediaClip,
   isTextClip,
-  matteIndex,
-  matteNeeds,
+  layerBlend,
+  layerGroups,
+  layerOpacity,
+  mixesAsLayer,
   MONO_WEIGHTS,
   placeVisual,
   POP_FROM,
   projectDuration,
   RISE_PX,
-  sourceTime,
   visualSpan,
 } from './project';
-import type { BackdropEffect, Clip, Project, TextClip, Track } from './project';
+import type { BackdropEffect, BlendMode, Clip, Project, Track } from './project';
 import { colorKey, cubeFile, isNeutral } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
@@ -68,6 +67,21 @@ export interface ExportPlan {
   fps: number;
 }
 
+/**
+ * ffmpeg blend modes matching the canvas ones, with the layer as the top input and the picture under it as the bottom.
+ * The canvas 'overlay' looks at the picture under it, which is ffmpeg's 'hardlight' with these inputs.
+ */
+const FFMPEG_BLEND: Record<BlendMode, string> = {
+  normal: 'normal',
+  multiply: 'multiply',
+  screen: 'screen',
+  overlay: 'hardlight',
+  darken: 'darken',
+  lighten: 'lighten',
+  add: 'addition',
+  difference: 'difference',
+};
+
 function num(n: number): string {
   return n.toFixed(4).replace(/\.?0+$/, '') || '0';
 }
@@ -86,11 +100,6 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   if (duration <= 0) throw new Error('timeline is empty');
   const { width: W, height: H } = outputSize(project, height);
   const fps = project.fps;
-  const missing = matteNeeds(project);
-  if (missing.length > 0) {
-    const list = missing.map((m) => `${assetById(project, m.assetId).name} ${num(m.from)}-${num(m.to)}s`).join(', ');
-    throw new Error(`subject masks are missing for text set to behind (${list}); cut them in the inspector first`);
-  }
 
   const inputArgs: string[] = [];
   const filters: string[] = [];
@@ -112,13 +121,15 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   filters.push(`color=c=black:s=${W}x${H}:r=${fps}:d=${num(duration)}[bg0]`);
   let base = 'bg0';
   let overlayCount = 0;
+  /** ':format=auto' while a layer is laid on its own clear canvas, so the overlays keep its alpha. */
+  let overlayFormat = '';
 
   const layers = new Map(textLayers.map((l) => [l.clipId, l]));
   /** `when` narrows the clip range further (an ffmpeg expression in t); glitch frames use it to take turns. */
   const overlay = (label: string, x: string, y: string, from: number, to: number, when = '1') => {
     const out = `o${overlayCount++}`;
     filters.push(
-      `[${base}][${label}]overlay=x='${x}':y='${y}':eof_action=pass:` +
+      `[${base}][${label}]overlay=x='${x}':y='${y}':eof_action=pass${overlayFormat}:` +
         `enable='between(t,${num(from)},${num(to - 0.0001)})*(${when})'[${out}]`,
     );
     base = out;
@@ -159,55 +170,48 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
   };
 
   /**
-   * Mirrors drawSubjects(): `under` is the picture before the letters went on; it goes back over them through the
-   * subject clips' matte frames, laid where those clips are placed, on a clear full frame.
+   * Mirrors drawLayer: the layer's own canvas gets its opacity, is blended with the picture under it, and the blend
+   * goes back over that picture through the layer's alpha: (1 - a) * under + a * blend(under, layer), as on the canvas.
    */
-  const subjects = (text: TextClip, under: string) => {
+  const mixOver = (under: string, layer: string, track: Track): string => {
     const n = overlayCount++;
-    filters.push(`color=c=black@0:s=${W}x${H}:r=${fps}:d=${num(duration)},format=rgba[sm${n}]`);
-    let mask = `sm${n}`;
-    behindSubjects(project, text).forEach((clip, j) => {
-      const asset = assetById(project, clip.assetId);
-      const matte = asset.matte;
-      if (!matte) throw new Error(`no subject masks on ${asset.path}`);
-      const span = behindOverlap(text, clip);
-      const len = span.to - span.from;
-      const idx = inputIndex++;
-      const pattern = `${matte.dir}/m%05d.png`;
-      if (asset.kind === 'image') {
-        inputArgs.push('-loop', '1', '-framerate', String(fps), '-t', num(len), '-i', pattern.replace('%05d', '00000'));
-      } else {
-        const first = matteIndex(matte, sourceTime(clip, span.from));
-        inputArgs.push('-framerate', String(fps), '-start_number', String(first), '-i', pattern);
-      }
-      const r = placeVisual(asset.width, asset.height, W, H, clip.transform);
-      const b = hasCrop(clip.crop) ? cropBox(r, clip.crop) : { x: 0, y: 0, w: r.w, h: r.h };
-      const crop = hasCrop(clip.crop) ? `crop=${b.w}:${b.h}:${b.x}:${b.y},` : '';
-      const retime = clip.speed === 1 || asset.kind === 'image' ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
-      filters.push(
-        `[${idx}:v]${retime}fps=${fps},trim=duration=${num(len)},scale=${r.w}:${r.h}:flags=bicubic,format=rgba,${crop}` +
-          `setpts=PTS-STARTPTS+${num(span.from)}/TB[mt${n}_${j}]`,
-      );
-      const next = `sm${n}_${j}`;
-      filters.push(
-        `[${mask}][mt${n}_${j}]overlay=x=${r.x + b.x}:y=${r.y + b.y}:eof_action=pass:format=auto:` +
-          `enable='between(t,${num(span.from)},${num(span.to - 0.0001)})',format=rgba[${next}]`,
-      );
-      mask = next;
-    });
-    filters.push(`[${mask}]alphaextract[sa${n}]`);
-    filters.push(`[${under}]format=rgba[su${n}]`);
-    filters.push(`[su${n}][sa${n}]alphamerge[sx${n}]`);
-    const out = `o${n}`;
-    filters.push(
-      `[${base}][sx${n}]overlay=eof_action=pass:enable='between(t,${num(text.start)},${num(clipEnd(text) - 0.0001)})'[${out}]`,
-    );
-    base = out;
+    const opacity = layerOpacity(track);
+    filters.push(`[${layer}]${opacity < 1 ? `colorchannelmixer=aa=${num(opacity)},` : ''}split[lc${n}][lm${n}]`);
+    filters.push(`[lc${n}]format=gbrp[lg${n}]`);
+    filters.push(`[${under}]format=gbrp,split[ub${n}][uf${n}]`);
+    filters.push(`[lg${n}][uf${n}]blend=all_mode=${FFMPEG_BLEND[layerBlend(track)]}[x${n}]`);
+    filters.push(`[lm${n}]alphaextract[ma${n}]`);
+    filters.push(`[x${n}][ma${n}]alphamerge[xa${n}]`);
+    filters.push(`[ub${n}][xa${n}]overlay=eof_action=pass[o${n}]`);
+    return `o${n}`;
   };
 
-  const visualTracks = project.tracks.filter((t: Track) => t.kind !== 'audio');
-  for (let ti = visualTracks.length - 1; ti >= 0; ti--) {
-    const track = visualTracks[ti];
+  /**
+   * Mirrors drawGroup's clipping: the layer's alpha is cut to the group's, it is mixed onto the group like any layer,
+   * and the group keeps its own alpha.
+   */
+  const clipInto = (group: string, layer: string, track: Track): string => {
+    const n = overlayCount++;
+    filters.push(`[${group}]split[gc${n}][gm${n}]`);
+    filters.push(`[gm${n}]alphaextract,split[ga${n}][gk${n}]`);
+    filters.push(`[${layer}]split[lc${n}][lm${n}]`);
+    filters.push(`[lm${n}]alphaextract[la${n}]`);
+    filters.push(`[la${n}][ga${n}]blend=all_mode=multiply[mk${n}]`);
+    filters.push(`[lc${n}][mk${n}]alphamerge[cut${n}]`);
+    const mixed = mixOver(`gc${n}`, `cut${n}`, track);
+    filters.push(`[${mixed}][gk${n}]alphamerge,format=rgba[g${n}]`);
+    return `g${n}`;
+  };
+
+  /** A clear full frame for the next overlays, which keep their alpha on it. */
+  const clearCanvas = (): string => {
+    const n = overlayCount++;
+    filters.push(`color=c=black@0:s=${W}x${H}:r=${fps}:d=${num(duration)},format=rgba[ly${n}]`);
+    return `ly${n}`;
+  };
+
+  /** Lays the track's clips over `base`: pictures while the track is shown, a video clip's sound either way. */
+  const layTrack = (track: Track) => {
     for (const clip of track.clips) {
       if (isTextClip(clip)) {
         if (track.hidden) continue;
@@ -250,13 +254,6 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
             : '';
         const y = `${layer.intro ? layer.intro.y : layer.y}${rise}`;
         const effect = backdropEffect(clip.style.effect);
-        const behind = clip.style.effect === 'behind' && behindSubjects(project, clip).length > 0;
-        let under = '';
-        if (behind) {
-          under = `u${overlayCount++}`;
-          filters.push(`[${base}]split[${under}a][${under}]`);
-          base = `${under}a`;
-        }
         if (effect) {
           backdrop(label, x, y, clip.start, clipEnd(clip), effect);
         } else if (layer.variants.length > 0) {
@@ -274,7 +271,6 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         } else {
           overlay(label, x, y, clip.start, clipEnd(clip));
         }
-        if (behind) subjects(clip, under);
         continue;
       }
       if (!isMediaClip(clip)) continue;
@@ -317,6 +313,34 @@ export function buildExportPlan(project: Project, height: number, textLayers: Te
         audioLabels.push(pushAudio(filters, idx, clip, lead));
       }
     }
+  };
+
+  for (const { base: bottom, clipped } of layerGroups(project)) {
+    if (bottom.hidden) {
+      layTrack(bottom);
+      for (const track of clipped) layTrack({ ...track, hidden: true });
+      continue;
+    }
+    if (clipped.length === 0 && !mixesAsLayer(bottom)) {
+      layTrack(bottom);
+      continue;
+    }
+    const under = base;
+    overlayFormat = ':format=auto';
+    base = clearCanvas();
+    layTrack(bottom);
+    for (const track of clipped) {
+      if (track.hidden) {
+        layTrack(track);
+        continue;
+      }
+      const group = base;
+      base = clearCanvas();
+      layTrack(track);
+      base = clipInto(group, base, track);
+    }
+    overlayFormat = '';
+    base = mixOver(under, base, bottom);
   }
 
   for (const track of project.tracks.filter((t) => t.kind === 'audio')) {

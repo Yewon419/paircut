@@ -209,16 +209,22 @@ export function withAsset(p: Project, asset: MediaAsset, trackId: string | null,
   return { ...p, tracks };
 }
 
-const KIND_ORDER: Record<TrackKind, number> = { text: 0, video: 1, audio: 2 };
-
-/** Tracks stay grouped top to bottom as text, video, audio; clamps an insert index into its group. */
+/**
+ * Clamps a new track's insert index: text tracks go among the text tracks, video tracks from the topmost video track
+ * down, audio below every picture track. Picture tracks moved in front of each other (moveTrack) stay where they are.
+ */
 function clampTrackInsert(p: Project, kind: TrackKind, index: number): number {
-  const order = KIND_ORDER[kind];
-  const first = p.tracks.findIndex((t) => KIND_ORDER[t.kind] >= order);
-  const groupStart = first === -1 ? p.tracks.length : first;
-  const after = p.tracks.findIndex((t) => KIND_ORDER[t.kind] > order);
-  const groupEnd = after === -1 ? p.tracks.length : after;
-  return Math.max(groupStart, Math.min(groupEnd, index));
+  const len = p.tracks.length;
+  const at = (k: TrackKind) => p.tracks.findIndex((t) => t.kind === k);
+  const firstAudio = at('audio') === -1 ? len : at('audio');
+  const clamp = (lo: number, hi: number) => Math.max(lo, Math.min(hi, index));
+  if (kind === 'audio') return clamp(firstAudio, len);
+  const lastText = p.tracks.map((t) => t.kind).lastIndexOf('text');
+  if (kind === 'text') {
+    const firstPicture = p.tracks.findIndex((t) => t.kind !== 'text');
+    return clamp(0, lastText !== -1 ? lastText + 1 : firstPicture === -1 ? len : firstPicture);
+  }
+  return clamp(at('video') !== -1 ? at('video') : lastText + 1, firstAudio);
 }
 
 export function moveClip(base: Project, clipId: string, toTrackId: string, start: number): Project | null {
@@ -374,7 +380,7 @@ export function deleteSelected(): void {
   set({ selectedClipId: null });
 }
 
-export function toggleTrack(trackId: string, key: 'muted' | 'hidden' | 'locked'): void {
+export function toggleTrack(trackId: string, key: 'muted' | 'hidden' | 'locked' | 'clipped'): void {
   commit((p) => withTrack(p, trackId, (t) => ({ ...t, [key]: !t[key] })));
 }
 
@@ -396,14 +402,46 @@ export function trackNeighbour(p: Project, trackId: string, dir: -1 | 1): Track 
   return other && other.kind === p.tracks[i].kind ? other : null;
 }
 
-/** Swaps a track with its same-kind neighbour, so its clips draw in front of (up) or behind (down) that one. */
+/** The track a track swaps with when moved up or down: text and video tracks pass each other, audio stays below. */
+export function stackNeighbour(p: Project, trackId: string, dir: -1 | 1): Track | null {
+  const i = p.tracks.findIndex((t) => t.id === trackId);
+  const other = i === -1 ? undefined : p.tracks[i + dir];
+  return other && (other.kind === 'audio') === (p.tracks[i].kind === 'audio') ? other : null;
+}
+
+/** Swaps a track with its neighbour, so its clips draw in front of (up) or behind (down) that one. */
 export function moveTrack(trackId: string, dir: -1 | 1): void {
   commit((p) => {
-    const other = trackNeighbour(p, trackId, dir);
+    const other = stackNeighbour(p, trackId, dir);
     if (!other) return p;
     const i = p.tracks.findIndex((t) => t.id === trackId);
     const tracks = [...p.tracks];
     [tracks[i], tracks[i + dir]] = [tracks[i + dir], tracks[i]];
+    return { ...p, tracks };
+  });
+}
+
+/**
+ * The index a dragged layer ends up at when dropped into gap `slot` (0 = above the top layer, tracks.length = below
+ * the bottom one), or null when that leaves it in place or puts it on the wrong side of the picture/audio split.
+ */
+export function layerDropIndex(p: Project, trackId: string, slot: number): number | null {
+  const i = p.tracks.findIndex((t) => t.id === trackId);
+  if (i === -1) return null;
+  const firstAudio = p.tracks.findIndex((t) => t.kind === 'audio');
+  const split = firstAudio === -1 ? p.tracks.length : firstAudio;
+  if (p.tracks[i].kind === 'audio' ? slot < split : slot > split) return null;
+  const to = slot > i ? slot - 1 : slot;
+  return to === i ? null : to;
+}
+
+/** Moves a layer to the gap `slot` between layers, as when its card is dragged there. */
+export function moveTrackTo(trackId: string, slot: number): void {
+  commit((p) => {
+    const to = layerDropIndex(p, trackId, slot);
+    if (to === null) return p;
+    const tracks = p.tracks.filter((t) => t.id !== trackId);
+    tracks.splice(to, 0, p.tracks.find((t) => t.id === trackId) as Track);
     return { ...p, tracks };
   });
 }
@@ -414,6 +452,10 @@ export function mergeDownBlocker(p: Project, trackId: string): string | null {
   const below = trackNeighbour(p, trackId, 1);
   if (!track || !below) return '아래에 같은 종류 레이어가 없어요';
   if (track.locked || below.locked) return '잠긴 레이어는 병합할 수 없어요';
+  if ((track.opacity ?? 1) !== (below.opacity ?? 1) || (track.blend ?? 'normal') !== (below.blend ?? 'normal')) {
+    return '불투명도나 혼합 모드가 달라서 병합하면 모양이 바뀌어요';
+  }
+  if (Boolean(track.clipped) !== Boolean(below.clipped)) return '클리핑 마스크가 달라서 병합하면 모양이 바뀌어요';
   const clash = track.clips.find((c) => overlaps(below, c.start, clipEnd(c), null));
   return clash ? `${clash.start.toFixed(1)}초에서 클립이 겹쳐요` : null;
 }

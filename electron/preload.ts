@@ -10,7 +10,6 @@ const api: CutdeskApi = {
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),
   makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
-  makeMatte: (asset, from, to, fps) => ipcRenderer.invoke('media:matte', asset, from, to, fps),
   makeSubject: (asset, from, to, fps) => ipcRenderer.invoke('media:subject', asset, from, to, fps),
   onMatteProgress: (listener) => {
     const handler = (_e: IpcRendererEvent, p: MatteProgress) => listener(p);
@@ -21,6 +20,7 @@ const api: CutdeskApi = {
   mediaUrl: (path) => `${MEDIA_SCHEME}://local/${encodeURIComponent(path)}`,
   saveProject: (project, path) => ipcRenderer.invoke('project:save', project, path),
   openProject: () => ipcRenderer.invoke('project:open'),
+  openLastProject: () => ipcRenderer.invoke('project:openLast'),
   pickExportPath: () => ipcRenderer.invoke('export:pickPath'),
   startExport: (project, options, texts) => ipcRenderer.invoke('export:start', project, options, texts),
   cancelExport: () => ipcRenderer.invoke('export:cancel'),

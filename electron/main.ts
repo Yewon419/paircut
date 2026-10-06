@@ -5,13 +5,13 @@ import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
-import type { MediaAsset, Matte, Project } from '../shared/project';
+import type { MediaAsset, Project } from '../shared/project';
 import { normalizeProject } from '../shared/project';
 import { callRendererTool, callTool, registerAgent } from './agent';
 import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runExport } from './exporter';
-import { makeMatte, makeSubjectFile } from './matte';
+import { makeSubjectFile } from './matte';
 import { importMedia, makeSolidImage } from './media';
 
 const isTest = process.env.CUTDESK_TEST === '1';
@@ -173,19 +173,16 @@ function registerIpc(): void {
       throw err;
     }
   });
-  ipcMain.handle('media:matte', async (_e, asset: MediaAsset, from: number, to: number, fps: number): Promise<Matte> => {
-    const root = join(app.getPath('userData'), 'mattes');
-    mkdirSync(root, { recursive: true });
-    const script = join(__dirname, '..', '..', 'tools', 'matte.py');
-    try {
-      return await makeMatte(asset, from, to, fps, root, script, (done, total) =>
-        win?.webContents.send('matte:progress', { assetId: asset.id, done, total }),
-      );
-    } catch (err) {
-      console.error(`[matte] ${asset.path} [${from}, ${to}] @${fps}: ${(err as Error).message}`);
-      throw err;
-    }
-  });
+
+  /** Remembers the project file last opened or saved, so the next launch can bring it back. */
+  const lastProjectFile = join(app.getPath('userData'), 'last-project.json');
+  const rememberProject = (path: string) => writeFileSync(lastProjectFile, JSON.stringify({ path }), 'utf8');
+  const readProject = (path: string): OpenedProject => {
+    const project = normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project);
+    if (project.version !== 1) throw new Error(`unsupported project version: ${String(project.version)}`);
+    const missing = project.assets.filter((a) => !existsSync(a.path)).map((a) => a.path);
+    return { path, project, missing };
+  };
 
   ipcMain.handle('project:save', async (_e, project: Project, path: string | null) => {
     let target = path;
@@ -199,6 +196,7 @@ function registerIpc(): void {
       target = res.filePath;
     }
     writeFileSync(target, JSON.stringify(project, null, 2), 'utf8');
+    if (!isTest) rememberProject(target);
     return target;
   });
 
@@ -209,11 +207,15 @@ function registerIpc(): void {
       filters: [{ name: 'cutdesk 프로젝트', extensions: ['json'] }],
     });
     if (res.canceled || res.filePaths.length === 0) return null;
-    const path = res.filePaths[0];
-    const project = normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project);
-    if (project.version !== 1) throw new Error(`unsupported project version: ${String(project.version)}`);
-    const missing = project.assets.filter((a) => !existsSync(a.path)).map((a) => a.path);
-    return { path, project, missing };
+    const opened = readProject(res.filePaths[0]);
+    if (!isTest) rememberProject(opened.path);
+    return opened;
+  });
+
+  ipcMain.handle('project:openLast', (): OpenedProject | null => {
+    if (isTest || !existsSync(lastProjectFile)) return null;
+    const { path } = JSON.parse(readFileSync(lastProjectFile, 'utf8')) as { path: string };
+    return existsSync(path) ? readProject(path) : null;
   });
 
   ipcMain.handle('export:pickPath', async () => {

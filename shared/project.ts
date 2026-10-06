@@ -18,13 +18,11 @@ export interface MediaAsset {
   solid?: string;
   /** Webm codec when the video carries transparency (motion graphics); export must decode it with libvpx. */
   alpha?: 'vp8' | 'vp9';
-  /** Subject masks for text drawn behind the subject; see behindSubjects(). */
-  matte?: Matte;
 }
 
 /**
- * Per-frame subject masks cut by rembg: RGBA PNGs `m00000.png`.. in `dir`, white with alpha = subject.
- * Frame n is the source picture at from + n / fps (stills have one frame).
+ * Per-frame subject masks cut by rembg for a subject layer: RGBA PNGs `m00000.png`.. in `dir`, white with
+ * alpha = subject. Frame n is the source picture at from + n / fps (stills have one frame).
  */
 export interface Matte {
   dir: string;
@@ -32,14 +30,6 @@ export interface Matte {
   to: number;
   fps: number;
   count: number;
-}
-
-export function matteFile(matte: Matte, n: number): string {
-  return `${matte.dir}/m${String(n).padStart(5, '0')}.png`;
-}
-
-export function matteIndex(matte: Matte, source: number): number {
-  return Math.min(matte.count - 1, Math.max(0, Math.round((source - matte.from) * matte.fps)));
 }
 
 export interface ClipTransform {
@@ -111,9 +101,8 @@ export type TextAnim = 'none' | 'fade' | 'pop' | 'rise' | 'type' | 'word' | 'let
  * frost: the picture blurred and lifted toward white. knockout: a plate in the text color with the letters cut out.
  * glow: a soft halo in the text color. chroma: red and cyan copies split sideways behind the letters.
  * glitch: short bursts where the letters are sliced and shifted with a wider split.
- * behind: the subject of the footage below (person, object) is drawn again over the letters.
  */
-export type TextEffect = 'none' | 'invert' | 'mono' | 'frost' | 'knockout' | 'glow' | 'chroma' | 'glitch' | 'behind';
+export type TextEffect = 'none' | 'invert' | 'mono' | 'frost' | 'knockout' | 'glow' | 'chroma' | 'glitch';
 export type BackdropEffect = 'invert' | 'mono' | 'frost';
 
 export function backdropEffect(effect: TextEffect): BackdropEffect | null {
@@ -237,7 +226,80 @@ export interface Track {
   name?: string;
   /** Locked tracks keep their clips where they are: no drag, trim, split, delete or drop. */
   locked?: boolean;
+  /** How see-through the whole layer is, 0..1; absent = 1. */
+  opacity?: number;
+  /** How the layer mixes with the layers under it; absent = normal. */
+  blend?: BlendMode;
+  /** Clipping mask: the layer shows only where the picture layer under it (its group's base) is opaque. */
+  clipped?: boolean;
   clips: AnyClip[];
+}
+
+/** Layer blend modes, as in a drawing app. Preview uses the canvas operation of the same name ('add' is 'lighter'). */
+export type BlendMode = 'normal' | 'multiply' | 'screen' | 'overlay' | 'darken' | 'lighten' | 'add' | 'difference';
+
+export const BLEND_MODES: { id: BlendMode; label: string }[] = [
+  { id: 'normal', label: '표준' },
+  { id: 'multiply', label: '곱하기' },
+  { id: 'screen', label: '스크린' },
+  { id: 'overlay', label: '오버레이' },
+  { id: 'darken', label: '어둡게' },
+  { id: 'lighten', label: '밝게' },
+  { id: 'add', label: '더하기' },
+  { id: 'difference', label: '차이' },
+];
+
+export function layerOpacity(track: Track): number {
+  return track.opacity ?? 1;
+}
+
+export function layerBlend(track: Track): BlendMode {
+  return track.blend ?? 'normal';
+}
+
+/**
+ * Whether the layer is drawn on its own and then mixed in with its opacity and blend mode. Not for a layer at full
+ * opacity in normal mode, and not for text whose effect treats the picture under it (frost, mono, invert): that
+ * effect needs the whole picture, so such a layer is drawn straight in.
+ */
+export function mixesAsLayer(track: Track): boolean {
+  if (track.kind === 'audio' || (layerOpacity(track) >= 1 && layerBlend(track) === 'normal')) return false;
+  return drawsAlone(track);
+}
+
+/** False for text whose effect treats the picture under it: that needs the whole picture, not a layer of its own. */
+function drawsAlone(track: Track): boolean {
+  return !track.clips.some((c) => isTextClip(c) && backdropEffect(c.style.effect) !== null);
+}
+
+/** A picture layer with the clipping-mask layers stacked right above it, which show only where it is opaque. */
+export interface LayerGroup {
+  base: Track;
+  /** Bottom to top. */
+  clipped: Track[];
+}
+
+/**
+ * Picture layers bottom to top, each clipping-mask layer joined to the layer under it. A clipped layer with no
+ * picture layer under it, or one that can't be drawn on its own (or onto such a base), stands as a layer by itself.
+ */
+export function layerGroups(project: Project): LayerGroup[] {
+  const groups: LayerGroup[] = [];
+  const visual = project.tracks.filter((t) => t.kind !== 'audio');
+  for (let i = visual.length - 1; i >= 0; i--) {
+    const track = visual[i];
+    const group = groups[groups.length - 1];
+    if (track.clipped && group && drawsAlone(track) && drawsAlone(group.base)) group.clipped.push(track);
+    else groups.push({ base: track, clipped: [] });
+  }
+  return groups;
+}
+
+/** Whether turning on the clipping mask would clip this layer to something. */
+export function canClip(project: Project, trackId: string): boolean {
+  const visual = project.tracks.filter((t) => t.kind !== 'audio');
+  const i = visual.findIndex((t) => t.id === trackId);
+  return i !== -1 && i < visual.length - 1;
 }
 
 export interface ProjectVars {
@@ -413,15 +475,19 @@ export function resolveTokens(text: string, vars: ProjectVars): string {
 export function normalizeProject(p: Project): Project {
   return {
     ...p,
+    // Subject masks belonged to the dropped 'behind' text effect.
+    assets: p.assets.map((a) => ('matte' in a ? (Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'matte')) as MediaAsset) : a)),
     vars: { ...DEFAULT_VARS, ...(p.vars ?? {}) },
     markers: p.markers ?? [],
     tracks: p.tracks.map((t) => ({
       ...t,
-      clips: t.clips.map((c) =>
-        isMediaClip(c)
-          ? { ...MEDIA_CLIP_DEFAULTS, ...c }
-          : { ...TEXT_CLIP_DEFAULTS, ...c, style: { ...TEXT_STYLE_DEFAULTS, ...c.style } },
-      ),
+      clips: t.clips.map((c) => {
+        if (isMediaClip(c)) return { ...MEDIA_CLIP_DEFAULTS, ...c };
+        const style = { ...TEXT_STYLE_DEFAULTS, ...c.style };
+        // 'behind' (the subject drawn over the letters) was dropped for a subject layer moved above the text.
+        if ((style.effect as string) === 'behind') style.effect = 'none';
+        return { ...TEXT_CLIP_DEFAULTS, ...c, style };
+      }),
     })),
   };
 }
@@ -505,56 +571,6 @@ export function visualAlpha(span: VisualSpan, t: number): number {
 /** Source position for a frame at t; past either end of the file it holds the first or last frame. */
 export function frameTime(clip: Clip, sourceDuration: number, t: number): number {
   return Math.min(sourceDuration, Math.max(0, sourceTime(clip, t)));
-}
-
-/** The clips a 'behind' text hides behind: those on the nearest shown video track below its track that overlap it. */
-export function behindSubjects(project: Project, text: TextClip): Clip[] {
-  const visual = project.tracks.filter((t) => t.kind !== 'audio');
-  const at = visual.findIndex((t) => t.clips.some((c) => c.id === text.id));
-  if (at < 0) return [];
-  const below = visual.slice(at + 1).find((t) => t.kind === 'video' && !t.hidden);
-  if (!below) return [];
-  return below.clips.filter(isMediaClip).filter((c) => c.start < clipEnd(text) && clipEnd(c) > text.start);
-}
-
-/** Timeline span where a 'behind' text and one of its subject clips are both on screen. */
-export function behindOverlap(text: TextClip, clip: Clip): { from: number; to: number } {
-  return { from: Math.max(text.start, clip.start), to: Math.min(clipEnd(text), clipEnd(clip)) };
-}
-
-export interface MatteNeed {
-  assetId: string;
-  from: number;
-  to: number;
-}
-
-function covers(matte: Matte | undefined, fps: number, from: number, to: number): boolean {
-  return !!matte && matte.fps === fps && matte.from <= from + 1e-6 && matte.to >= to - 1e-6;
-}
-
-/** Source ranges the 'behind' texts need masks for, one per asset, merged with what the asset already has. Empty = ready. */
-export function matteNeeds(project: Project): MatteNeed[] {
-  const need = new Map<string, MatteNeed>();
-  for (const track of project.tracks) {
-    if (track.kind !== 'text' || track.hidden) continue;
-    for (const text of textClips(track)) {
-      if (text.style.effect !== 'behind') continue;
-      for (const clip of behindSubjects(project, text)) {
-        const asset = assetById(project, clip.assetId);
-        const span = behindOverlap(text, clip);
-        const from = asset.kind === 'image' ? 0 : frameTime(clip, asset.duration, span.from);
-        const to = asset.kind === 'image' ? 0 : frameTime(clip, asset.duration, span.to);
-        const prev = need.get(asset.id);
-        need.set(asset.id, { assetId: asset.id, from: Math.min(from, prev?.from ?? from), to: Math.max(to, prev?.to ?? to) });
-      }
-    }
-  }
-  return [...need.values()].flatMap((n) => {
-    const m = assetById(project, n.assetId).matte;
-    if (covers(m, project.fps, n.from, n.to)) return [];
-    const keep = m && m.fps === project.fps;
-    return [{ ...n, from: keep ? Math.min(m.from, n.from) : n.from, to: keep ? Math.max(m.to, n.to) : n.to }];
-  });
 }
 
 export function projectDuration(project: Project): number {

@@ -4,7 +4,6 @@ import { NEUTRAL_COLOR } from '../../shared/color';
 import type { Clip, ClipCrop, ClipTransform, FontId, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
   assetById,
-  behindSubjects,
   clipDuration,
   CROP_MAX,
   ddayOf,
@@ -12,7 +11,6 @@ import {
   effectiveDissolve,
   IDENTITY_TRANSFORM,
   isTextClip,
-  matteNeeds,
   NO_CROP,
   projectDuration,
   resolveTokens,
@@ -22,6 +20,8 @@ import {
   validCustomFont,
   VOLUME_MAX,
 } from '../../shared/project';
+import type { AlignTo } from '../align';
+import { alignShift, layerBox } from '../align';
 import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
 import { fontInstalled } from '../engine/text';
@@ -59,6 +59,38 @@ const FONTS: { id: FontId; label: string }[] = [
 ];
 
 const PC_FONT = '__pc';
+
+const ALIGNS: { to: AlignTo; label: string }[] = [
+  { to: 'left', label: '왼쪽' },
+  { to: 'hcenter', label: '가로 가운데' },
+  { to: 'right', label: '오른쪽' },
+  { to: 'top', label: '위' },
+  { to: 'vcenter', label: '세로 가운데' },
+  { to: 'bottom', label: '아래' },
+];
+
+/** Puts the layer against a frame edge or on a center line, by what it shows (a picture after its crop). */
+function AlignButtons({ project, clip }: { project: Project; clip: Clip | TextClip }) {
+  const align = (to: AlignTo) => {
+    const box = layerBox(project, clip);
+    if (!box) return;
+    const { dx, dy } = alignShift(box, to);
+    commit((p) =>
+      isTextClip(clip)
+        ? updateTextClip(p, clip.id, (c) => ({ ...c, x: c.x + dx, y: c.y + dy }))
+        : updateMediaClip(p, clip.id, (c) => ({ ...c, transform: { ...c.transform, x: c.transform.x + dx, y: c.transform.y + dy } })),
+    );
+  };
+  return (
+    <div className="align-grid">
+      {ALIGNS.map((a) => (
+        <button key={a.to} data-align={a.to} onClick={() => align(a.to)}>
+          {a.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 const SPEEDS = [0.5, 1, 1.5, 2];
 const DISSOLVES = [0, 0.3, 0.5, 1];
@@ -100,58 +132,10 @@ const TEXT_EFFECTS: { id: TextEffect; label: string }[] = [
   { id: 'glow', label: '글로우' },
   { id: 'chroma', label: '색수차' },
   { id: 'glitch', label: '글리치' },
-  { id: 'behind', label: '피사체 뒤' },
 ];
 
 /** Measured u2net speed on this machine's CPU (electron/matte.ts). */
 const MATTE_SECONDS_PER_FRAME = 0.5;
-
-function BehindControls({ project, clip }: { project: Project; clip: TextClip }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const needs = matteNeeds(project);
-  const frames = needs.reduce(
-    (n, m) => n + (assetById(project, m.assetId).kind === 'image' ? 1 : Math.round((m.to - m.from) * project.fps) + 1),
-    0,
-  );
-  const cut = async () => {
-    setError(null);
-    try {
-      for (const need of needs) {
-        const asset = assetById(useEditor.getState().project, need.assetId);
-        setBusy(`${asset.name} 준비 중`);
-        const off = window.api.onMatteProgress((p) => {
-          if (p.assetId === asset.id) setBusy(`${asset.name} ${p.done}/${p.total}`);
-        });
-        try {
-          const matte = await window.api.makeMatte(asset, need.from, need.to, project.fps);
-          commit((p) => ({ ...p, assets: p.assets.map((a) => (a.id === asset.id ? { ...a, matte } : a)) }));
-        } finally {
-          off();
-        }
-      }
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(null);
-    }
-  };
-  if (behindSubjects(project, clip).length === 0) {
-    return <p className="hint">바로 아래 영상 트랙에 이 자막과 겹치는 클립이 없어요.</p>;
-  }
-  return (
-    <div className="behind-controls">
-      {needs.length === 0 ? (
-        <p className="hint" data-testid="matte-ready">피사체 마스크 준비됨</p>
-      ) : (
-        <button onClick={() => void cut()} disabled={busy !== null} data-testid="matte-make">
-          {busy ?? `피사체 분리 (${frames}프레임, 약 ${Math.ceil(frames * MATTE_SECONDS_PER_FRAME)}초)`}
-        </button>
-      )}
-      {error && <div className="error">{error}</div>}
-    </div>
-  );
-}
 
 export function Inspector() {
   const project = useEditor((s) => s.project);
@@ -377,7 +361,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             data-testid="text-effect"
             value={style.effect}
             onChange={(e) => setStyle({ effect: e.target.value as TextEffect })}
-            title="반전·흑백 창·유리 창은 글자 아래 화면을 바꿔 그려요. 뚫린 글자는 글자색 판에서 글자 모양을 뚫어요. 피사체 뒤는 바로 아래 영상 트랙의 사람·물체를 글자 위로 다시 얹어요"
+            title="반전·흑백 창·유리 창은 글자 아래 화면을 바꿔 그려요. 뚫린 글자는 글자색 판에서 글자 모양을 뚫어요. 사람·물체를 글자 앞에 두려면 영상 클립의 피사체를 새 레이어로 만든 뒤 그 레이어를 글자 레이어 위로 올려요"
           >
             {TEXT_EFFECTS.map((f) => (
               <option key={f.id} value={f.id}>
@@ -386,7 +370,6 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             ))}
           </select>
         </label>
-        {style.effect === 'behind' && <BehindControls project={project} clip={clip} />}
         <label className="check">
           <input
             type="checkbox"
@@ -463,7 +446,8 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
             onChange={(e) => set((c) => ({ ...c, rotation: clampNum(e.target.value, -180, 180) }))}
           />
         </label>
-        <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 글자 크기가 바뀌어요.</p>
+        <AlignButtons project={project} clip={clip} />
+        <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 글자 크기가 바뀌어요. 끌 때 화면·다른 레이어 선에 붙고, Alt를 누르면 안 붙어요.</p>
       </div>
       <SpanControls clip={clip} resolved={resolved} selection={selection} set={set} />
     </aside>
@@ -878,8 +862,9 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
               />
             </label>
           </div>
+          <AlignButtons project={project} clip={clip} />
           <button onClick={() => setTransform({ ...IDENTITY_TRANSFORM })}>꽉 채우기로 되돌리기</button>
-          <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 확대가 바뀌어요.</p>
+          <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 확대가 바뀌어요. 끌 때 화면·다른 레이어 선에 붙고, Alt를 누르면 안 붙어요.</p>
         </div>
       )}
       {visual && <CropControls clip={clip} />}

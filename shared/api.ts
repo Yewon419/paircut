@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentModel, AgentToolResult, ToolName } from './agentOps';
-import type { MediaAsset, Matte, Project } from './project';
+import type { MediaAsset, Project } from './project';
 
 export interface ExportOptions {
   outPath: string;
@@ -58,7 +58,6 @@ export interface CutdeskApi {
   /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */
   makeSolid(color: string, width: number, height: number): Promise<MediaAsset>;
   /** Cuts subject masks for the asset's source seconds [from, to] with rembg (CPU, about 0.5 s a frame). */
-  makeMatte(asset: MediaAsset, from: number, to: number, fps: number): Promise<Matte>;
   onMatteProgress(listener: (p: MatteProgress) => void): () => void;
   /** A new asset with only the subject of [from, to] left opaque (alpha webm, or PNG for a still). */
   makeSubject(asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset>;
@@ -66,6 +65,8 @@ export interface CutdeskApi {
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;
   openProject(): Promise<OpenedProject | null>;
+  /** The project file last opened or saved, if it still exists. */
+  openLastProject(): Promise<OpenedProject | null>;
   pickExportPath(): Promise<string | null>;
   startExport(project: Project, options: ExportOptions, texts: TextImage[]): Promise<void>;
   cancelExport(): Promise<void>;
