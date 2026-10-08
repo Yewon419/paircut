@@ -4,7 +4,7 @@ import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, stat
 import { extname, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
-import type { ExportEvent, ExportOptions, OpenedProject, TextFile, TextImage } from '../shared/api';
+import type { ExportEvent, ExportOptions, OpenedProject, SfxEntry, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
 import { normalizeProject } from '../shared/project';
@@ -102,6 +102,23 @@ function createWindow(): void {
   void win.loadFile(join(__dirname, '..', '..', 'dist', 'index.html'));
 }
 
+interface SfxManifestItem {
+  file: string;
+  name: string;
+  group: string;
+}
+
+/** Bundled sound effects: `sfx/sfx.json` next to the app, each file checked so a missing one fails here, not at probe. */
+function listSfx(): SfxEntry[] {
+  const dir = join(app.getAppPath(), 'sfx');
+  const items = JSON.parse(readFileSync(join(dir, 'sfx.json'), 'utf8')) as SfxManifestItem[];
+  return items.map((it) => {
+    const path = join(dir, it.file);
+    if (!existsSync(path)) throw new Error(`sfx file missing: ${path}`);
+    return { name: it.name, group: it.group, path };
+  });
+}
+
 async function probePaths(paths: string[]): Promise<MediaAsset[]> {
   const dir = cacheDir();
   const assets: MediaAsset[] = [];
@@ -165,6 +182,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
+  ipcMain.handle('sfx:list', (): SfxEntry[] => listSfx());
   ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
   ipcMain.handle('media:still', (_e, asset: MediaAsset, seconds: number): Promise<MediaAsset> => makeStill(asset, seconds));
   ipcMain.handle('media:subject', async (_e, asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset> => {

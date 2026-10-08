@@ -65,6 +65,14 @@ const FONTS: { id: FontId; label: string }[] = [
   { id: 'pres-bold', label: '프레젠테이션' },
   { id: 'pres-black', label: '프레젠테이션 Black' },
   { id: 'hand', label: '손글씨' },
+  { id: 'josefin', label: 'Josefin Sans Bold' },
+  { id: 'josefin-light', label: 'Josefin Sans Light' },
+  { id: 'josefin-slab', label: 'Josefin Slab Bold' },
+  { id: 'montserrat', label: 'Montserrat ExtraBold (Gotham 대체)' },
+  { id: 'montserrat-medium', label: 'Montserrat Medium' },
+  { id: 'inter', label: 'Inter Bold (Helvetica 대체)' },
+  { id: 'inter-regular', label: 'Inter Regular' },
+  { id: 'scratch', label: '긁힌 손글씨 (Rock Salt)' },
 ];
 
 const PC_FONT = '__pc';

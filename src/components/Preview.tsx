@@ -7,7 +7,7 @@ import { layerBox, previewSize, snapMove, snapTargets } from '../align';
 import { compositor, pause, seek, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
 import { RULES } from '../rules';
-import { beginGesture, endGesture, findClip, updateGesture, updateMediaClip, updateTextClip, useEditor, withTransformAt } from '../store';
+import { beginGesture, endGesture, findClip, frameSnap, updateGesture, updateMediaClip, updateTextClip, useEditor, withTransformAt } from '../store';
 
 /** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
 const SNAP_PX = 6;
@@ -134,6 +134,29 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     seek(t);
   };
 
+  /** The bar under the picture: press or drag anywhere on it to move the playhead, like a video player. */
+  const onSeekDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const el = e.currentTarget as HTMLElement;
+    const total = projectDuration(useEditor.getState().project);
+    const timeAt = (clientX: number) => {
+      const box = el.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (clientX - box.left) / box.width));
+      return frameSnap(frac * total, useEditor.getState().project.fps);
+    };
+    el.setPointerCapture(e.pointerId);
+    seek(timeAt(e.clientX));
+    const move = (ev: PointerEvent) => seek(timeAt(ev.clientX));
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
+  const total = projectDuration(project);
+  const seekPct = total > 0 ? Math.min(100, (playhead / total) * 100) : 0;
+
   const stageStyle: CSSProperties =
     zoom > 0
       ? { aspectRatio: `${project.width} / ${project.height}`, height: `${project.height * zoom}px` }
@@ -173,6 +196,10 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
           {snapLines.x !== null && <div className="snap-line v" style={{ left: `${snapLines.x * 100}%` }} data-testid="snap-x" />}
           {snapLines.y !== null && <div className="snap-line h" style={{ top: `${snapLines.y * 100}%` }} data-testid="snap-y" />}
         </div>
+      </div>
+      <div className="seekbar" data-testid="seekbar" title="누르거나 끌어서 시간 이동" onPointerDown={onSeekDown}>
+        <div className="seekbar-fill" style={{ width: `${seekPct}%` }} />
+        <div className="seekbar-knob" style={{ left: `${seekPct}%` }} />
       </div>
       <div className="transport">
         <div className="transport-left">

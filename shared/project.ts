@@ -132,7 +132,15 @@ export type FontId =
   | 'serif'
   | 'pres-bold'
   | 'pres-black'
-  | 'hand';
+  | 'hand'
+  | 'josefin'
+  | 'josefin-light'
+  | 'josefin-slab'
+  | 'montserrat'
+  | 'montserrat-medium'
+  | 'inter'
+  | 'inter-regular'
+  | 'scratch';
 export type TextAlign = 'center' | 'left';
 /** Intro anims (see INTRO_ANIMS) bring the letters in themselves, frame by frame; the rest ramp the whole block. */
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise' | 'type' | 'word' | 'letters' | 'blur' | 'track' | 'wipe';

@@ -45,6 +45,13 @@ export type ExportEvent =
   | { type: 'error'; message: string }
   | { type: 'cancelled' };
 
+/** One bundled sound effect from `sfx/sfx.json`; `path` is absolute so it probes like any media file. */
+export interface SfxEntry {
+  name: string;
+  group: string;
+  path: string;
+}
+
 export interface OpenedProject {
   path: string;
   project: Project;
@@ -55,6 +62,8 @@ export interface CutdeskApi {
   isTest(): Promise<boolean>;
   pickMedia(): Promise<string[]>;
   probeMedia(paths: string[]): Promise<MediaAsset[]>;
+  /** The sound effects shipped in the app's `sfx` folder, in manifest order. */
+  listSfx(): Promise<SfxEntry[]>;
   /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */
   makeSolid(color: string, width: number, height: number): Promise<MediaAsset>;
   /** A PNG of the frame shown at `seconds` into the asset, probed as an image asset (made once, then reused). */

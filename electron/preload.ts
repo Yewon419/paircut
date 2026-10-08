@@ -9,6 +9,7 @@ const api: CutdeskApi = {
   isTest: () => ipcRenderer.invoke('app:isTest'),
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),
+  listSfx: () => ipcRenderer.invoke('sfx:list'),
   makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
   makeStill: (asset, seconds) => ipcRenderer.invoke('media:still', asset, seconds),
   makeSubject: (asset, from, to, fps) => ipcRenderer.invoke('media:subject', asset, from, to, fps),

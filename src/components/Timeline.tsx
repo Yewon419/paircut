@@ -78,6 +78,9 @@ const THUMB_W = 54;
 const THUMB_H = 96;
 const ZONE_H = 22;
 const SNAP_PX = 8;
+/** Scrubbing within this many pixels of a side edge scrolls the timeline, up to EDGE_SPEED px a frame. */
+const EDGE_PX = 28;
+const EDGE_SPEED = 24;
 const MIN_ZOOM = 10;
 const MAX_ZOOM = 400;
 
@@ -164,9 +167,12 @@ export function Timeline() {
     () =>
       useEditor.subscribe((s, prev) => {
         const el = scrollRef.current;
-        if (!el || !s.playing || s.playhead === prev.playhead) return;
+        if (!el || s.playhead === prev.playhead) return;
         const x = s.playhead * s.zoom;
-        if (x > el.scrollLeft + el.clientWidth - 40 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
+        // Playing: keep a little room ahead. Paused: only when the playhead is actually off-screen, so an
+        // edge-scrolling scrub (which clamps to the visible edge) is never snapped away.
+        const margin = s.playing ? 40 : -1;
+        if (x > el.scrollLeft + el.clientWidth - margin || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
       }),
     [],
   );
@@ -228,8 +234,37 @@ export function Timeline() {
     useEditor.setState({ selectedClipId: null });
     el.setPointerCapture(e.pointerId);
     seek(scrubTime(e.clientX));
-    const move = (ev: PointerEvent) => seek(scrubTime(ev.clientX));
+    // Holding the pointer at (or past) a side edge keeps scrolling that way; the playhead rides the edge.
+    let raf = 0;
+    let lastX = e.clientX;
+    const edgeSpeed = (clientX: number): number => {
+      const px = clientX - el.getBoundingClientRect().left;
+      if (px < EDGE_PX) return -Math.min(EDGE_SPEED, EDGE_PX - px);
+      if (px > el.clientWidth - EDGE_PX) return Math.min(EDGE_SPEED, px - (el.clientWidth - EDGE_PX));
+      return 0;
+    };
+    const visibleX = (clientX: number): number => {
+      const left = el.getBoundingClientRect().left;
+      return Math.max(left, Math.min(left + el.clientWidth, clientX));
+    };
+    const tick = () => {
+      const v = edgeSpeed(lastX);
+      if (v === 0) {
+        raf = 0;
+        return;
+      }
+      el.scrollLeft = Math.max(0, Math.min(el.scrollWidth - el.clientWidth, el.scrollLeft + v));
+      seek(scrubTime(visibleX(lastX)));
+      raf = requestAnimationFrame(tick);
+    };
+    const move = (ev: PointerEvent) => {
+      lastX = ev.clientX;
+      seek(scrubTime(visibleX(ev.clientX)));
+      if (!raf && edgeSpeed(ev.clientX) !== 0) raf = requestAnimationFrame(tick);
+    };
     const up = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
     };

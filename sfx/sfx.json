@@ -1,0 +1,22 @@
+[
+  { "file": "mixclap_whoosh.mp3", "name": "우쉬", "group": "전환", "source": "MixClap (CC0)" },
+  { "file": "mixclap_whoosh-fast.mp3", "name": "빠른 우쉬", "group": "전환", "source": "MixClap (CC0)" },
+  { "file": "bsb_swipe.mp3", "name": "스와이프", "group": "전환", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "mixclap_impact.mp3", "name": "임팩트", "group": "전환", "source": "MixClap (CC0)" },
+  { "file": "mixclap_impact-short.mp3", "name": "짧은 임팩트", "group": "전환", "source": "MixClap (CC0)" },
+  { "file": "kenney_pluck_001.ogg", "name": "팝", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "kenney_drop_002.ogg", "name": "톡", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "kenney_click_001.ogg", "name": "클릭", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "kenney_tick_001.ogg", "name": "틱", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "kenney_confirmation_001.ogg", "name": "띵", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "kenney_bong_001.ogg", "name": "봉", "group": "글자", "source": "Kenney Interface Sounds (CC0)" },
+  { "file": "bsb_typewriter-key.mp3", "name": "타자 한 타", "group": "글자", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "mixclap_riser.mp3", "name": "라이저", "group": "빌드업", "source": "MixClap (CC0)" },
+  { "file": "mixclap_riser-impact.mp3", "name": "라이저+임팩트", "group": "빌드업", "source": "MixClap (CC0)" },
+  { "file": "mixclap_drumroll.mp3", "name": "드럼롤", "group": "빌드업", "source": "MixClap (CC0)" },
+  { "file": "bsb_heartbeat-single.mp3", "name": "심장박동 한 번", "group": "빌드업", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "bsb_heartbeat-loop.mp3", "name": "심장박동 루프", "group": "빌드업", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "bsb_camera-shutter.mp3", "name": "카메라 셔터", "group": "기타", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "bsb_page-turn.mp3", "name": "종이 넘김", "group": "기타", "source": "BigSoundBank / Joseph Sardin (CC0)" },
+  { "file": "mixclap_glitch.mp3", "name": "글리치", "group": "기타", "source": "MixClap (CC0)" }
+]

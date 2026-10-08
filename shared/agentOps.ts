@@ -8,8 +8,32 @@ import { z } from 'zod';
 const id = z.string().describe('clip id from get_state');
 const sec = z.number().min(0);
 const font = z
-  .enum(['black', 'extrabold', 'bold', 'semibold', 'medium', 'regular', 'light', 'extralight', 'thin', 'serif', 'pres-bold', 'pres-black', 'hand'])
-  .describe('black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting');
+  .enum([
+    'black',
+    'extrabold',
+    'bold',
+    'semibold',
+    'medium',
+    'regular',
+    'light',
+    'extralight',
+    'thin',
+    'serif',
+    'pres-bold',
+    'pres-black',
+    'hand',
+    'josefin',
+    'josefin-light',
+    'josefin-slab',
+    'montserrat',
+    'montserrat-medium',
+    'inter',
+    'inter-regular',
+    'scratch',
+  ])
+  .describe(
+    'black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting; Latin only: josefin(-light) = Josefin Sans 700/300, josefin-slab = Josefin Slab 700, montserrat(-medium) = Montserrat 800/500 (Gotham-like), inter(-regular) = Inter 700/400 (Helvetica-like), scratch = Rock Salt scratchy marker',
+  );
 const color = z
   .object({
     brightness: z.number().min(-1).max(1),

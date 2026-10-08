@@ -35,6 +35,14 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
   'pres-bold': { family: 'Cutdesk Presentation', weight: 700 },
   'pres-black': { family: 'Cutdesk Presentation', weight: 900 },
   hand: { family: 'Cutdesk Hand', weight: 400 },
+  josefin: { family: 'Josefin Sans', weight: 700 },
+  'josefin-light': { family: 'Josefin Sans', weight: 300 },
+  'josefin-slab': { family: 'Josefin Slab', weight: 700 },
+  montserrat: { family: 'Montserrat', weight: 800 },
+  'montserrat-medium': { family: 'Montserrat', weight: 500 },
+  inter: { family: 'Inter', weight: 700 },
+  'inter-regular': { family: 'Inter', weight: 400 },
+  scratch: { family: 'Rock Salt', weight: 400 },
 };
 /** Shadow blur radius as a fraction of the font size. */
 const SHADOW_BLUR = 0.16;
