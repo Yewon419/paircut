@@ -30,9 +30,10 @@ const font = z
     'inter',
     'inter-regular',
     'scratch',
+    'instrument-italic',
   ])
   .describe(
-    'black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting; Latin only: josefin(-light) = Josefin Sans 700/300, josefin-slab = Josefin Slab 700, montserrat(-medium) = Montserrat 800/500 (Gotham-like), inter(-regular) = Inter 700/400 (Helvetica-like), scratch = Rock Salt scratchy marker',
+    'black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting; Latin only: josefin(-light) = Josefin Sans 700/300, josefin-slab = Josefin Slab 700, montserrat(-medium) = Montserrat 800/500 (Gotham-like), inter(-regular) = Inter 700/400 (Helvetica-like), scratch = Rock Salt scratchy marker, instrument-italic = Instrument Serif Italic (editorial emphasis)',
   );
 const color = z
   .object({

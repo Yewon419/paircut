@@ -77,6 +77,15 @@
   src: url('./fonts/RockSalt-Regular.woff2') format('woff2');
 }
 
+/* Instrument Serif Italic, Latin subset (see fonts/InstrumentSerif-OFL.txt); own name and normal style so the plain font string picks it */
+@font-face {
+  font-family: 'Cutdesk Instrument Italic';
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+  src: url('./fonts/InstrumentSerif-Italic-latin.woff2') format('woff2');
+}
+
 @font-face {
   font-family: 'Cutdesk Hand';
   font-weight: 400;

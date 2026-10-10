@@ -43,6 +43,7 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
   inter: { family: 'Inter', weight: 700 },
   'inter-regular': { family: 'Inter', weight: 400 },
   scratch: { family: 'Rock Salt', weight: 400 },
+  'instrument-italic': { family: 'Cutdesk Instrument Italic', weight: 400 },
 };
 /** Shadow blur radius as a fraction of the font size. */
 const SHADOW_BLUR = 0.16;

@@ -140,7 +140,8 @@ export type FontId =
   | 'montserrat-medium'
   | 'inter'
   | 'inter-regular'
-  | 'scratch';
+  | 'scratch'
+  | 'instrument-italic';
 export type TextAlign = 'center' | 'left';
 /** Intro anims (see INTRO_ANIMS) bring the letters in themselves, frame by frame; the rest ramp the whole block. */
 export type TextAnim = 'none' | 'fade' | 'pop' | 'rise' | 'type' | 'word' | 'letters' | 'blur' | 'track' | 'wipe';

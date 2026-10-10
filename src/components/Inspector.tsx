@@ -73,6 +73,7 @@ const FONTS: { id: FontId; label: string }[] = [
   { id: 'inter', label: 'Inter Bold (Helvetica 대체)' },
   { id: 'inter-regular', label: 'Inter Regular' },
   { id: 'scratch', label: '긁힌 손글씨 (Rock Salt)' },
+  { id: 'instrument-italic', label: 'Instrument Serif Italic' },
 ];
 
 const PC_FONT = '__pc';
