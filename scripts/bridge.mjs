@@ -3,6 +3,8 @@
 //   node scripts/bridge.mjs edit '{"ops":[{"op":"seek","t":3}]}'
 //   node scripts/bridge.mjs load_project @draft.cutdesk.json   (file holding { "project": ... })
 //   node scripts/bridge.mjs screenshot '{"t":3}' shot.jpg      (image tools: optional output path)
+//   node scripts/bridge.mjs new_project '{"path":"C:/x/test.cutdesk.json"}'   (discard:true drops unsaved work)
+//   node scripts/bridge.mjs save_project ['{"path":"C:/x/copy.cutdesk.json","overwrite":true}']   (no path: open file)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';

@@ -1427,6 +1427,35 @@ try {
   await win.locator('[data-testid="key-clear"]').click();
   check('clearing keyframes leaves a plain transform', (await keysOf('fa')).length === 0);
 
+  // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
+  const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);
+  const fileState = () => win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    return { dirty: s.dirty, filePath: s.filePath, clips: s.project.tracks.flatMap((t) => t.clips).length };
+  });
+  const fileBefore = await fileState();
+  const refused = await bridge('new_project');
+  check('new_project refuses to drop unsaved work', fileBefore.dirty && refused.isError && (await fileState()).clips === fileBefore.clips, refused.text);
+  const relative = await bridge('save_project', { path: 'rel.cutdesk.json' });
+  check('save_project needs an absolute .json path', relative.isError && relative.text.includes('absolute'), relative.text);
+  const fileA = join(dir, 'bridge-a.cutdesk.json');
+  const savedA = await bridge('save_project', { path: fileA });
+  const afterA = await fileState();
+  check('save_project with a path saves as and opens that file', !savedA.isError && afterA.filePath === fileA && !afterA.dirty &&
+    JSON.parse(readFileSync(fileA, 'utf8')).tracks.flatMap((t) => t.clips).length === fileBefore.clips, savedA.text);
+  const again = await bridge('save_project', { path: fileA });
+  check('save_project will not replace an existing file without overwrite', again.isError && again.text.includes('overwrite'), again.text);
+  const savedOpen = await bridge('save_project');
+  check('save_project without a path saves the open file', !savedOpen.isError && savedOpen.text.includes(fileA), savedOpen.text);
+  const fileB = join(dir, 'bridge-b.cutdesk.json');
+  const madeB = await bridge('new_project', { path: fileB });
+  const afterB = await fileState();
+  check('new_project with a path starts empty and saves there', !madeB.isError && afterB.clips === 0 && afterB.filePath === fileB &&
+    JSON.parse(readFileSync(fileB, 'utf8')).tracks.flatMap((t) => t.clips).length === 0, madeB.text);
+  const taken = await bridge('new_project', { path: fileA });
+  check('new_project will not replace an existing file without overwrite', taken.isError && (await fileState()).filePath === fileB, taken.text);
+  await win.evaluate((p) => window.__cutdesk.load(p), project);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

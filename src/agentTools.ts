@@ -11,6 +11,7 @@ import {
   clipDuration,
   clipEnd,
   CROP_MAX,
+  emptyProject,
   hasCrop,
   isMediaClip,
   isTextClip,
@@ -34,6 +35,7 @@ import {
   commit,
   findClip,
   frameSnap,
+  loadProject,
   mainTrackId,
   moveClip,
   overlaps,
@@ -61,6 +63,8 @@ const SHOT_H = 480;
 const EditInput = z.object({ ops: z.array(EditOp).min(1) });
 const ShotInput = z.object({ t: z.number().min(0).optional() });
 const ExportInput = z.object({ outPath: z.string().min(1), height: z.number().int().positive().default(1920) });
+const NewProjectInput = z.object({ path: z.string().min(1).optional(), discard: z.boolean().default(false) });
+const SaveProjectInput = z.object({ path: z.string().min(1).optional() });
 
 const n = (x: number): string => String(Math.round(x * 100) / 100);
 const q = (s: string): string => JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}…` : s);
@@ -529,6 +533,34 @@ async function exportTool(input: unknown): Promise<AgentToolResult> {
   return { text: `exported ${done} (${n(projectDuration(project))}s, height ${height})` };
 }
 
+/** Writes the current project to path and makes it the open file. */
+async function saveTo(path: string): Promise<string> {
+  const saved = await window.api.saveProject(useEditor.getState().project, path);
+  if (!saved) throw new Error(`saving to ${path} returned no path`);
+  useEditor.setState({ filePath: saved, dirty: false });
+  return saved;
+}
+
+/** Bridge: starts an empty project; refuses to drop unsaved work unless discard is set. */
+async function newProjectTool(input: unknown): Promise<AgentToolResult> {
+  const { path, discard } = NewProjectInput.parse(input);
+  if (useEditor.getState().dirty && !discard) {
+    return { text: 'new_project: the open project has unsaved changes; save_project first or pass discard:true. Nothing was changed', isError: true };
+  }
+  pause();
+  loadProject(emptyProject(), null);
+  if (!path) return { text: 'ok, new empty project (no file yet; save_project with a path names it)' };
+  return { text: `ok, new empty project saved as ${await saveTo(path)}` };
+}
+
+/** Bridge: saves to the open file, or to path (save as) without a dialog. */
+async function saveProjectTool(input: unknown): Promise<AgentToolResult> {
+  const { path } = SaveProjectInput.parse(input);
+  const target = path ?? useEditor.getState().filePath;
+  if (!target) return { text: 'save_project: this project has no file yet; pass { path }. Nothing was saved', isError: true };
+  return { text: `ok, saved ${await saveTo(target)}` };
+}
+
 export async function runAgentTool(name: ToolName, input: unknown): Promise<AgentToolResult> {
   try {
     if (name === 'get_state') return { text: stateText() };
@@ -536,6 +568,8 @@ export async function runAgentTool(name: ToolName, input: unknown): Promise<Agen
     if (name === 'screenshot') return await screenshot(input);
     if (name === 'load_project') return loadProjectTool(input);
     if (name === 'export') return await exportTool(input);
+    if (name === 'new_project') return await newProjectTool(input);
+    if (name === 'save_project') return await saveProjectTool(input);
     return { text: `${name} is handled by the main process`, isError: true };
   } catch (err) {
     console.error(`[agent] ${name} failed`, err);

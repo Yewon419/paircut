@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { extname, join } from 'node:path';
+import { dirname, extname, isAbsolute, join } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import type { ExportEvent, ExportOptions, OpenedProject, SfxEntry, TextFile, TextImage } from '../shared/api';
@@ -156,8 +156,25 @@ async function bridgeTool(name: ToolName, input: unknown): Promise<AgentToolResu
       return { text: `probe_media failed for ${JSON.stringify(paths)}: ${(err as Error).message}`, isError: true };
     }
   }
+  if (name === 'new_project' || name === 'save_project') {
+    const problem = projectPathProblem(name, input);
+    if (problem) return { text: problem, isError: true };
+    return callRendererTool(name, input);
+  }
   if (name === 'load_project' || name === 'export') return callRendererTool(name, input);
   return callTool(name, input);
+}
+
+/** Bridge saves never open a dialog, so the path is checked here; an existing file needs overwrite:true. */
+function projectPathProblem(name: string, input: unknown): string | null {
+  const { path, overwrite } = input as { path?: unknown; overwrite?: unknown };
+  if (path === undefined) return null;
+  if (typeof path !== 'string' || !isAbsolute(path) || extname(path).toLowerCase() !== '.json') {
+    return `${name} needs an absolute .json path, got ${JSON.stringify(path)}; nothing was changed`;
+  }
+  if (!existsSync(dirname(path))) return `${name}: folder ${dirname(path)} does not exist; nothing was changed`;
+  if (existsSync(path) && overwrite !== true) return `${name}: ${path} already exists; pass overwrite:true to replace it. Nothing was changed`;
+  return null;
 }
 
 function send(event: ExportEvent): void {
@@ -328,6 +345,7 @@ void app.whenReady().then(() => {
   registerIpc();
   createWindow();
   if (!isTest) app.on('will-quit', startBridge(app.getPath('userData'), bridgeTool));
+  else (globalThis as { __cutdeskBridge?: object }).__cutdeskBridge = { callTool: bridgeTool };
 });
 
 app.on('window-all-closed', () => {

@@ -175,7 +175,7 @@ export type AgentToolName = (typeof AGENT_TOOLS)[number];
  * Extra tools for the local bridge only (Claude Code editing the open window from outside).
  * Never offered to the in-app Claude, which cannot replace projects, probe files or export.
  */
-export const BRIDGE_TOOLS = ['load_project', 'probe_media', 'export'] as const;
+export const BRIDGE_TOOLS = ['load_project', 'probe_media', 'export', 'new_project', 'save_project'] as const;
 export type BridgeToolName = (typeof BRIDGE_TOOLS)[number];
 export type ToolName = AgentToolName | BridgeToolName;
 
