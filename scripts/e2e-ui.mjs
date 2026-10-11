@@ -1458,6 +1458,106 @@ try {
   await win.keyboard.press('Control+KeyZ');
   check('undo takes the added layer back', !(await sel()).ids.includes(aNew));
 
+  // Copy, cut and paste of every clip kind, multi-select, paste attributes, paste into another project.
+  const looked2 = { crop: { l: 0.1, t: 0, r: 0.2, b: 0 }, color: { brightness: 0, contrast: 0, saturation: -0.5, temperature: 0 },
+    keys: [{ t: 0, scale: 1, x: 0, y: 0 }, { t: 1, scale: 1.5, x: 0.1, y: 0 }] };
+  const clipboardProject = {
+    ...base,
+    tracks: [
+      layerTrack('t-a', [{ ...text('la', 0, 2, 'A', layerStyle, 0.5, 0.3, 'none'), rotation: 0, spans: [] }]),
+      layerTrack('t-b', [{ ...text('lb', 3, 2, 'B', layerStyle, 0.5, 0.5, 'none'), rotation: 0, spans: [] }]),
+      ...base.tracks.filter((t) => t.kind !== 'text').map((t) => (t.id !== 'v-main' ? t
+        : { ...t, clips: t.clips.map((c) => (c.id === 'c2' ? { ...c, ...looked2 } : c)) })),
+    ],
+  };
+  await win.evaluate((p) => window.__cutdesk.load(p), clipboardProject);
+  const clipsOf = (trackId) => win.evaluate((id) => window.__cutdesk.state().project.tracks.find((t) => t.id === id)?.clips ?? [], trackId);
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
+  await win.evaluate(() => window.__cutdesk.seek(7));
+  await win.keyboard.press('Control+KeyC');
+  await win.keyboard.press('Control+KeyV');
+  let vm = await clipsOf('v-main');
+  const c2copy = vm.find((c) => Math.abs(c.start - 7) < 1e-6);
+  check('a picture clip pastes on its layer at the playhead with crop, color and keyframes', c2copy && c2copy.id !== 'c2' &&
+    c2copy.assetId === vm.find((c) => c.id === 'c2').assetId && c2copy.crop.l === 0.1 && c2copy.color.saturation === -0.5 &&
+    c2copy.keys?.length === 2, JSON.stringify(vm.map((c) => `${c.id}@${c.start}`)));
+  check('after a paste the playhead sits at the pasted clip\'s end', Math.abs((await playheadNow()) - 9) < 1e-6, String(await playheadNow()));
+  await win.keyboard.press('Control+KeyV');
+  vm = await clipsOf('v-main');
+  check('pasting again lines the next copy up after the first', vm.some((c) => Math.abs(c.start - 9) < 1e-6) &&
+    Math.abs((await playheadNow()) - 11) < 1e-6, vm.map((c) => c.start).join());
+  await win.evaluate(() => window.__cutdesk.seek(0));
+  await win.keyboard.press('Control+KeyV');
+  ls = await sel();
+  const vAbove = ls.ids[ls.ids.indexOf('v-main') - 1];
+  check('a taken spot sends the paste to a new layer right above', vAbove.startsWith('v-') && vAbove !== 'v-top' &&
+    ls.clips[vAbove]?.join() === '*0', ls.ids.join());
+  await win.locator('[data-clip="c4"]').click({ position: { x: 4, y: 10 } });
+  await win.evaluate(() => window.__cutdesk.seek(5));
+  await win.keyboard.press('Control+KeyC');
+  await win.keyboard.press('Control+KeyV');
+  check('an audio clip copies too', (await clipsOf('a-1')).map((c) => c.start).join() === '2,5', (await clipsOf('a-1')).map((c) => c.start).join());
+
+  await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
+  await win.keyboard.press('Control+KeyX');
+  const afterCut = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').length);
+  await win.evaluate(() => window.__cutdesk.seek(6));
+  await win.keyboard.press('Control+KeyV');
+  const afterCutPaste = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').map((c) => c.start));
+  check('Ctrl+X removes the clip and Ctrl+V brings it back', afterCut === 0 && afterCutPaste.join() === '6', `${afterCut} / ${afterCutPaste}`);
+
+  await win.evaluate((p) => window.__cutdesk.load(p), clipboardProject);
+  await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
+  await win.locator('[data-clip="c4"]').click({ position: { x: 4, y: 10 }, modifiers: ['Shift'] });
+  check('Ctrl- and Shift-click add clips to the selection', (await win.evaluate(() => window.__cutdesk.state().selectedIds.join())) === 'la,c2,c4' &&
+    (await win.locator('.tl-clip.selected').count()) === 3);
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
+  check('Ctrl-click on a selected clip takes it out', (await win.evaluate(() => window.__cutdesk.state().selectedIds.join())) === 'la,c4');
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
+  await win.keyboard.press('Control+KeyC');
+  await win.locator('[data-head="t-a"] .layer-thumb').click();
+  await win.evaluate(() => window.__cutdesk.seek(7));
+  await win.keyboard.press('Control+KeyV');
+  const multi = await win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    const at = (id) => s.project.tracks.find((t) => t.id === id).clips.filter((c) => c.start >= 7).map((c) => c.start).join();
+    return { ta: at('t-a'), vm: at('v-main'), a1: at('a-1'), sel: s.selectedIds.length, main: s.selectedClipId, layer: s.selectedTrackId, playhead: s.playhead };
+  });
+  check('a multi-clip paste keeps each clip\'s layer and spacing', multi.ta === '7' && multi.vm === '10' && multi.a1 === '9', JSON.stringify(multi));
+  check('the pasted clips stay selected, led by the top layer', multi.sel === 3 && multi.layer === 't-a' && Math.abs(multi.playhead - 12) < 1e-6,
+    JSON.stringify(multi));
+  await win.keyboard.press('Delete');
+  const leftAfterDelete = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.start >= 7).length);
+  check('Delete removes every selected clip', leftAfterDelete === 0, String(leftAfterDelete));
+
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
+  await win.keyboard.press('Control+KeyC');
+  await win.locator('[data-clip="c1"]').click({ position: { x: 4, y: 10 } });
+  await win.locator('[data-clip="c3"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
+  await win.locator('[data-clip="lb"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
+  await win.keyboard.press('Control+Alt+KeyV');
+  vm = await clipsOf('v-main');
+  const lbAfter = (await clipsOf('t-b'))[0];
+  check('Ctrl+Alt+V puts the copied look on every selected clip of the same kind', ['c1', 'c3'].every((id) => {
+    const c = vm.find((k) => k.id === id);
+    return c.color.saturation === -0.5 && c.crop.r === 0.2 && c.keys?.length === 2;
+  }) && lbAfter.style.size === 60 && vm.map((c) => c.start).join() === '0,3,5', JSON.stringify(vm.map((c) => [c.id, c.start, c.color.saturation])));
+  await win.keyboard.press('Control+KeyZ');
+  vm = await clipsOf('v-main');
+  check('one undo takes the pasted look off again', vm.find((c) => c.id === 'c1').color.saturation === 0 && vm.find((c) => c.id === 'c3').color.saturation === 0);
+
+  const c2asset = vm.find((c) => c.id === 'c2').assetId;
+  await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
+  await win.keyboard.press('Control+KeyC');
+  await win.evaluate(({ p, asset }) => window.__cutdesk.load({ ...p, assets: p.assets.filter((a) => a.id !== asset),
+    tracks: [{ id: 't-1', kind: 'text', muted: false, hidden: false, clips: [] }, { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [] },
+      { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] }] }), { p: base, asset: c2asset });
+  await win.keyboard.press('Control+KeyV');
+  const other = await win.evaluate(() => window.__cutdesk.state().project);
+  check('a paste into another project brings the media along', other.assets.some((a) => a.id === c2asset) &&
+    other.tracks.find((t) => t.id === 'v-main').clips[0]?.assetId === c2asset, JSON.stringify(other.tracks.map((t) => t.clips.length)));
+
   // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
   const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);
   const fileState = () => win.evaluate(() => {

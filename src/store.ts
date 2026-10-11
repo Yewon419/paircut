@@ -25,7 +25,10 @@ export interface EditorState {
   gestureBase: Project | null;
   filePath: string | null;
   dirty: boolean;
+  /** The main selected clip: the inspector, preview handles and single-clip tools work on it. */
   selectedClipId: string | null;
+  /** Every selected clip (Ctrl/Shift-click adds more); copy, cut and delete work on all of them. */
+  selectedIds: string[];
   /** The layer new clips go to (paste, text templates, the media bin's add button); follows the selected clip. */
   selectedTrackId: string | null;
   playhead: number;
@@ -44,6 +47,7 @@ export const useEditor = create<EditorState>(() => ({
   filePath: null,
   dirty: false,
   selectedClipId: null,
+  selectedIds: [],
   selectedTrackId: null,
   playhead: 0,
   playing: false,
@@ -104,13 +108,20 @@ export function redo(): void {
 }
 
 function pruneSelection(): void {
-  const { selectedClipId, selectedTrackId, project } = get();
-  if (selectedClipId && !findClip(project, selectedClipId)) set({ selectedClipId: null });
+  const { selectedClipId, selectedIds, selectedTrackId, project } = get();
+  const alive = selectedIds.filter((id) => findClip(project, id));
+  if (alive.length !== selectedIds.length) set({ selectedIds: alive });
+  if (selectedClipId && !findClip(project, selectedClipId)) set({ selectedClipId: alive.at(-1) ?? null });
   if (selectedTrackId && !project.tracks.some((t) => t.id === selectedTrackId)) set({ selectedTrackId: null });
 }
 
-// Selecting a clip selects its layer, also after the clip moves to another layer.
 useEditor.subscribe((s) => {
+  // A selection set without the main clip in it is stale: setting selectedClipId alone means a single selection.
+  if (s.selectedClipId === null ? s.selectedIds.length > 0 : !s.selectedIds.includes(s.selectedClipId)) {
+    set({ selectedIds: s.selectedClipId ? [s.selectedClipId] : [] });
+    return;
+  }
+  // Selecting a clip selects its layer, also after the clip moves to another layer.
   if (!s.selectedClipId) return;
   const found = findClip(s.project, s.selectedClipId);
   if (found && found.track.id !== s.selectedTrackId) set({ selectedTrackId: found.track.id });
@@ -118,6 +129,22 @@ useEditor.subscribe((s) => {
 
 export function selectTrack(trackId: string): void {
   set({ selectedTrackId: trackId, selectedClipId: null });
+}
+
+/** Ctrl/Shift-click: adds the clip to the selection, or takes it out when it is already in. */
+export function toggleSelect(clipId: string): void {
+  const { selectedIds } = get();
+  if (selectedIds.includes(clipId)) {
+    const rest = selectedIds.filter((id) => id !== clipId);
+    set({ selectedIds: rest, selectedClipId: rest.at(-1) ?? null });
+  } else {
+    set({ selectedIds: [...selectedIds, clipId], selectedClipId: clipId });
+  }
+}
+
+/** Selects these clips together; the last one is the main selection the inspector shows. */
+export function selectClips(ids: string[]): void {
+  set({ selectedIds: ids, selectedClipId: ids.at(-1) ?? null });
 }
 
 export function loadProject(project: Project, filePath: string | null): void {
@@ -129,6 +156,7 @@ export function loadProject(project: Project, filePath: string | null): void {
     filePath,
     dirty: false,
     selectedClipId: null,
+    selectedIds: [],
     selectedTrackId: null,
     playhead: 0,
     playing: false,
@@ -620,11 +648,15 @@ export function clearKeys(clipId: string): void {
   );
 }
 
+/** Deletes every selected clip as one undo step; clips on locked layers stay (and stay selected). */
 export function deleteSelected(): void {
-  const { project, selectedClipId } = get();
-  if (!selectedClipId || findClip(project, selectedClipId)?.track.locked) return;
-  commit((p) => tidyTracks(p, { ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.id !== selectedClipId) })) }));
-  set({ selectedClipId: null });
+  const { project, selectedIds } = get();
+  const gone = new Set(selectedIds.filter((id) => !findClip(project, id)?.track.locked));
+  if (gone.size === 0) return;
+  commit((p) =>
+    tidyTracks(p, { ...p, tracks: p.tracks.map((t) => (t.locked ? t : { ...t, clips: t.clips.filter((c) => !gone.has(c.id)) })) }),
+  );
+  selectClips(selectedIds.filter((id) => !gone.has(id)));
 }
 
 export function toggleTrack(trackId: string, key: 'muted' | 'hidden' | 'locked' | 'clipped'): void {
@@ -859,22 +891,6 @@ function newTextTrack(clips: AnyClip[]): Track {
 export function addTextClip(clip: TextClip): void {
   commit((p) => withClipOnLayer(p, clip, 'text', get().selectedTrackId) ?? withTextClip(p, clip));
   set({ selectedClipId: clip.id });
-}
-
-let copiedText: TextClip | null = null;
-
-/** Remembers the selected text clip for pasteText; other clip kinds are not copied. */
-export function copySelectedText(): void {
-  const { project, selectedClipId } = get();
-  const found = selectedClipId ? findClip(project, selectedClipId) : null;
-  if (found && isTextClip(found.clip)) copiedText = structuredClone(found.clip);
-}
-
-/** A fresh copy of the last copied text clip at the playhead, on the selected layer like addTextClip. */
-export function pasteText(): void {
-  if (!copiedText) return;
-  const { project, playhead } = get();
-  addTextClip({ ...structuredClone(copiedText), id: uid('c'), start: frameSnap(playhead, project.fps) });
 }
 
 export function withTextClip(p: Project, clip: TextClip): Project {

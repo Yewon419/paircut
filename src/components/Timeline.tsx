@@ -64,6 +64,7 @@ import {
   toggleTrack,
   trimAtPlayhead,
   stackNeighbour,
+  toggleSelect,
   undo,
   updateClip,
   updateGesture,
@@ -149,6 +150,7 @@ export function Timeline() {
   const zoom = useEditor((s) => s.zoom);
   const snap = useEditor((s) => s.snap);
   const selectedClipId = useEditor((s) => s.selectedClipId);
+  const selectedIds = useEditor((s) => s.selectedIds);
   const selectedTrackId = useEditor((s) => s.selectedTrackId);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
@@ -280,7 +282,11 @@ export function Timeline() {
     e.preventDefault();
     // preventDefault keeps focus where it was; an inspector field would then swallow Ctrl+C/V, S and Delete.
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    useEditor.setState({ selectedClipId: clip.id });
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      toggleSelect(clip.id);
+      return;
+    }
+    useEditor.setState({ selectedClipId: clip.id, selectedIds: [clip.id] });
     // Selecting a block the playhead is not over brings the playhead to its first frame.
     const { playhead } = useEditor.getState();
     if (playhead < clip.start || playhead >= clipEnd(clip)) seek(clip.start);
@@ -536,7 +542,7 @@ export function Timeline() {
                       project={project}
                       clip={clip}
                       zoom={zoom}
-                      selected={clip.id === selectedClipId}
+                      selected={selectedIds.includes(clip.id)}
                       dim={row.track.hidden}
                       dissolve={isMediaClip(clip) ? effectiveDissolve(row.track, clip) : 0}
                       onDown={startClipDrag}

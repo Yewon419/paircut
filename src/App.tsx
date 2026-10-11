@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { Download, FilePlus, FolderOpen, Save } from 'lucide-react';
 import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
+import { copySelection, cutSelection, pasteAttributes, pasteClipboard } from './clipboard';
 import { startAgentBridge } from './components/AgentPanel';
 import { ExportDialog } from './components/ExportDialog';
 import { Inspector } from './components/Inspector';
@@ -12,12 +13,10 @@ import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { compositor, pause, seek, startPausedSync, togglePlay } from './engine/player';
 import {
-  copySelectedText,
   deleteSelected,
   duplicateSelected,
   freezeFrame,
   loadProject,
-  pasteText,
   redo,
   splitAtPlayhead,
   toggleMarker,
@@ -175,10 +174,15 @@ export function App() {
         e.preventDefault();
         redo();
       } else if (ctrl && e.code === 'KeyC') {
-        copySelectedText();
+        copySelection();
+      } else if (ctrl && e.code === 'KeyX') {
+        cutSelection();
+      } else if (ctrl && e.altKey && e.code === 'KeyV') {
+        e.preventDefault();
+        pasteAttributes();
       } else if (ctrl && e.code === 'KeyV') {
         e.preventDefault();
-        pasteText();
+        pasteClipboard();
       } else if (ctrl && e.code === 'KeyS') {
         e.preventDefault();
         void saveProject(e.shiftKey);
