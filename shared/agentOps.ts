@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ASPECT_IDS } from './project';
 
 /**
  * Edit operations the in-app Claude can send in one `edit` call. The main process validates tool
@@ -110,7 +111,7 @@ export const EditOp = z.discriminatedUnion('op', [
       font: font.optional(),
       scale: z.number().min(0.2).max(5).optional().describe('size multiplier'),
       rotate: z.number().min(-180).max(180).optional().describe('degrees clockwise around the part itself'),
-      dx: z.number().min(-1080).max(1080).optional().describe('offset in px of a 1080-wide frame'),
+      dx: z.number().min(-1080).max(1080).optional().describe('offset in px of a frame whose short side is 1080'),
       dy: z.number().min(-1920).max(1920).optional(),
       remove: z.boolean().optional().describe('drop the styling of this part'),
     })
@@ -154,6 +155,9 @@ export const EditOp = z.discriminatedUnion('op', [
       .optional()
       .describe('picture layers: clipping mask, the layer shows only where the picture layer under it is opaque'),
   }),
+  z
+    .object({ op: z.literal('aspect'), aspect: z.enum(ASPECT_IDS) })
+    .describe('frame shape; clips keep their place as fractions of the frame, text keeps its size against the short side'),
 ]);
 
 export type EditOp = z.infer<typeof EditOp>;

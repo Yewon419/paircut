@@ -6,7 +6,7 @@ import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDurati
 import { clipsAtPoint, layerBox, previewSize, snapMove, snapTargets } from '../align';
 import { compositor, pause, seek, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
-import { SAFE_ZONE } from '../safeZone';
+import { hasSafeZone, SAFE_ZONE } from '../safeZone';
 import { beginGesture, endGesture, findClip, frameSnap, updateGesture, updateMediaClip, updateTextClip, useEditor, withTransformAt } from '../store';
 
 /** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
@@ -35,6 +35,7 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
   const playing = useEditor((s) => s.playing);
   const selectedClipId = useEditor((s) => s.selectedClipId);
   const { w: cw, h: ch } = previewSize(project);
+  const safeZone = hasSafeZone(project);
 
   useEffect(() => {
     compositor.attach(canvasRef.current);
@@ -205,7 +206,7 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
       <div className={zoom > 0 ? 'stage-wrap zoomed' : 'stage-wrap'}>
         <div className="stage" ref={stageRef} style={stageStyle} onWheel={onWheel} onPointerDown={onStageDown}>
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
-          {guides && (
+          {guides && safeZone && (
             <div className="safe-zone" data-testid="safe-zone">
               <div className="band" style={{ left: 0, right: 0, top: 0, height: `${SAFE_ZONE.top * 100}%` }} />
               <div className="band" style={{ left: 0, right: 0, bottom: 0, height: `${SAFE_ZONE.bottom * 100}%` }} />
@@ -265,9 +266,10 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
           </select>
           <span className="sep" />
           <button
-            className={guides ? 'icon on' : 'icon'}
+            className={guides && safeZone ? 'icon on' : 'icon'}
             onClick={() => setGuides(!guides)}
-            title="안전 영역: 위 14%, 아래 35%, 좌우 6%"
+            disabled={!safeZone}
+            title={safeZone ? '안전 영역: 위 14%, 아래 35%, 좌우 6%' : '안전 영역은 9:16에서만 써요'}
             aria-label="안전 영역"
           >
             <ScanLine />

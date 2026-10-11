@@ -162,7 +162,7 @@ export function backdropEffect(effect: TextEffect): BackdropEffect | null {
 
 /** Gray weights of the canvas 'saturation' blend (Rec. 601 rounded); the exporter mixes channels with the same numbers. */
 export const MONO_WEIGHTS = [0.3, 0.59, 0.11] as const;
-/** Frost blur sigma in pixels of a 1080-wide frame, and how far the blurred picture is mixed toward white. */
+/** Frost blur sigma in pixels of a frame whose short side is 1080, and how far the blurred picture is mixed toward white. */
 export const FROST_SIGMA = 14;
 export const FROST_LIFT = 0.25;
 /** Glow blur (canvas shadowBlur) and chroma split, as fractions of the font size. */
@@ -229,7 +229,7 @@ export interface TextSpan {
   scale?: number;
   /** Degrees, clockwise, around the span's own center. */
   rotate?: number;
-  /** Offset in design (1080-wide) pixels. */
+  /** Offset in design pixels (short side 1080). */
   dx?: number;
   dy?: number;
 }
@@ -514,6 +514,30 @@ export function normalizeProject(p: Project): Project {
 export const IMAGE_DEFAULT_DURATION = 3;
 
 export const IDENTITY_TRANSFORM: ClipTransform = { scale: 1, x: 0, y: 0 };
+
+/** Frame shapes a project can take; the short side is always 1080. */
+export const ASPECTS = [
+  { id: '9:16', width: 1080, height: 1920 },
+  { id: '16:9', width: 1920, height: 1080 },
+  { id: '1:1', width: 1080, height: 1080 },
+  { id: '4:5', width: 1080, height: 1350 },
+] as const;
+
+export type AspectId = (typeof ASPECTS)[number]['id'];
+
+export const ASPECT_IDS = ASPECTS.map((a) => a.id) as [AspectId, ...AspectId[]];
+
+/** The aspect the project's frame matches, or null for a size made some other way. */
+export function aspectOf(p: Project): AspectId | null {
+  return ASPECTS.find((a) => a.width === p.width && a.height === p.height)?.id ?? null;
+}
+
+/** The project with its frame set to the aspect. Clips keep their placement as fractions of the frame. */
+export function withAspect(p: Project, id: AspectId): Project {
+  const a = ASPECTS.find((x) => x.id === id);
+  if (!a) throw new Error(`unknown aspect ${id}`);
+  return { ...p, width: a.width, height: a.height };
+}
 
 export function emptyProject(): Project {
   return {

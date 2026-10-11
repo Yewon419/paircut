@@ -1,5 +1,6 @@
 // UI end-to-end: launches the real Electron app, drives the editor, and checks that the
 // preview canvas matches the exported MP4 at the same timestamps.
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
@@ -1617,6 +1618,61 @@ try {
   check('a clip picked in the preview is scrolled into view on the timeline', offBefore && inView.ok, `${offBefore} ${JSON.stringify(inView)}`);
   await win.keyboard.press('Control+KeyZ');
   check('one undo takes the preview drag back', Math.abs((await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y)) - pxY0) < 1e-9);
+
+  // Frame shape: 16:9 keeps clip placement and text size against the short side; preview and export agree.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid],
+    tracks: [
+      layerTrack('t-x', [{ ...text('ax', 0, 2, 'X', { ...layerStyle, background: '#FFFFFF' }, 0.5, 0.5, 'none'), rotation: 0, spans: [] }]),
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'ab', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: halfSize }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  const textShare = async () => {
+    await win.locator('[data-clip="ax"]').click({ position: { x: 4, y: 10 } });
+    await win.evaluate(() => window.__cutdesk.seek(1));
+    const s = await win.locator('.stage').boundingBox();
+    const b = await win.locator('.transform-box').boundingBox();
+    await win.mouse.click(s.x + 4, s.y + 4);
+    return b.height / Math.min(s.width, s.height);
+  };
+  const tallShare = await textShare();
+  check('the project panel names the frame shape', (await win.locator('[data-testid="project-aspect"]').inputValue()) === '9:16');
+  await win.locator('[data-testid="project-aspect"]').selectOption('16:9');
+  const wide = await win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    const c = document.querySelector('[data-testid="preview-canvas"]');
+    return { w: s.project.width, h: s.project.height, cw: c.width, ch: c.height, dirty: s.dirty };
+  });
+  check('choosing 16:9 makes the frame 1920x1080 and the preview follows', wide.w === 1920 && wide.h === 1080 && wide.cw === 960 &&
+    wide.ch === 540 && wide.dirty, JSON.stringify(wide));
+  check('the safe zone is only for 9:16', (await win.locator('[data-testid="safe-zone"]').count()) === 0 &&
+    (await win.locator('button[aria-label="안전 영역"]').isDisabled()));
+  const wideShare = await textShare();
+  check('text keeps its size against the short side', Math.abs(wideShare / tallShare - 1) < 0.05, `${tallShare} -> ${wideShare}`);
+  const wideAt = { plate: { x: 960, y: 540, s: 8 }, blue: { x: 960, y: 760, s: 8 }, edge: { x: 1840, y: 540, s: 8 } };
+  const widePreview = [await settled(1, wideAt.plate), await settled(1, wideAt.blue), await settled(1, wideAt.edge)];
+  check('16:9 preview: text in the middle, the half-size picture around it, black at the side',
+    close(widePreview[0], [255, 255, 255], 12) && close(widePreview[1], [0, 0, 255], 12) && close(widePreview[2], [0, 0, 0], 12),
+    JSON.stringify(widePreview));
+  {
+    const out = join(dir, 'wide.mp4');
+    const made = await app.evaluate((_e, i) => globalThis.__cutdeskBridge.callTool('export', i), { outPath: out });
+    const stream = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_streams', '-select_streams', 'v', out],
+      { encoding: 'utf8' })).streams[0];
+    check('export without a height uses the project\'s frame', !made.isError && stream.width === 1920 && stream.height === 1080,
+      `${made.text} ${stream.width}x${stream.height}`);
+    const px = [samplePixel(out, 1, 960, 540, 8), samplePixel(out, 1, 960, 760, 8), samplePixel(out, 1, 1840, 540, 8)];
+    check('16:9 export matches the preview', close(px[0], [255, 255, 255], 14) && close(px[1], [0, 0, 255], 14) && close(px[2], [0, 0, 0], 14),
+      JSON.stringify(px));
+  }
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+KeyZ');
+  check('undo takes the frame shape back', (await win.evaluate(() => window.__cutdesk.state().project.height)) === 1920);
+  const viaOp = await tool('edit', { ops: [{ op: 'aspect', aspect: '4:5' }] });
+  check('the edit tool sets the frame shape, and get_state shows it', !viaOp.isError && (await tool('get_state')).text.includes('size=1080x1350'),
+    viaOp.text);
 
   // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
   const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);

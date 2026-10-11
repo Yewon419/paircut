@@ -46,8 +46,13 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
 };
 /** Shadow blur radius as a fraction of the font size. */
 const SHADOW_BLUR = 0.16;
-/** Style sizes are authored for a 1080px-wide frame and scaled to the target frame. */
-export const DESIGN_WIDTH = 1080;
+/** Style sizes are authored for a frame whose short side is 1080px and scaled to the target frame. */
+const DESIGN_SIDE = 1080;
+
+/** How much style sizes grow on a frame of this size: by its short side, so a wide frame does not blow text up. */
+export function designScale(frameW: number, frameH: number): number {
+  return Math.min(frameW, frameH) / DESIGN_SIDE;
+}
 const MAX_WIDTH_FRAC = 0.88;
 const LINE_HEIGHT = 1.22;
 
@@ -289,7 +294,7 @@ export function rasterizeText(
   alphas: readonly number[] | null,
   spread: number,
 ): TextRaster {
-  const k = frameW / DESIGN_WIDTH;
+  const k = designScale(frameW, frameH);
   const style = clip.style;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
@@ -545,7 +550,7 @@ export function introRaster(clip: TextClip, frameW: number, frameH: number, loca
   if (anim === 'track') return blurred(rasterizeText(clip, frameW, frameH, null, TRACK_FROM * (1 - p)), 0, p);
   const full = cachedRaster(clip, frameW, frameH);
   if (anim === 'wipe') return wiped(full, p);
-  return blurred(full, BLUR_FROM * clip.style.size * (frameW / DESIGN_WIDTH) * (1 - p), p);
+  return blurred(full, BLUR_FROM * clip.style.size * designScale(frameW, frameH) * (1 - p), p);
 }
 
 const cache = new Map<string, TextRaster>();
@@ -578,7 +583,7 @@ export function cachedIntro(clip: TextClip, frameW: number, frameH: number, fram
 export interface AnimState {
   alpha: number;
   scale: number;
-  /** Vertical offset in design (1080-wide) pixels. */
+  /** Vertical offset in design pixels (short side 1080). */
   dy: number;
 }
 

@@ -6,6 +6,7 @@ import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
 import type { TextSpan } from '../shared/project';
 import {
+  ASPECT_IDS,
   assetById,
   canClip,
   clipDuration,
@@ -21,6 +22,7 @@ import {
   projectDuration,
   spanIndex,
   validCustomFont,
+  withAspect,
 } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
 import { compositor, pause } from './engine/player';
@@ -57,8 +59,8 @@ const SHOT_H = 480;
 
 const EditInput = z.object({ ops: z.array(EditOp).min(1) });
 const ShotInput = z.object({ t: z.number().min(0).optional() });
-const ExportInput = z.object({ outPath: z.string().min(1), height: z.number().int().positive().default(1920) });
-const NewProjectInput = z.object({ path: z.string().min(1).optional(), discard: z.boolean().default(false) });
+const ExportInput = z.object({ outPath: z.string().min(1), height: z.number().int().positive().optional() });
+const NewProjectInput = z.object({ path: z.string().min(1).optional(), discard: z.boolean().default(false), aspect: z.enum(ASPECT_IDS).default('9:16') });
 const SaveProjectInput = z.object({ path: z.string().min(1).optional() });
 const SHEET_MAX = 24;
 const SheetInput = z
@@ -133,7 +135,7 @@ function clipLine(p: Project, c: AnyClip): string {
 export function stateText(): string {
   const { project: p, playhead, selectedClipId, selectedTrackId } = useEditor.getState();
   const lines = [
-    `duration=${n(projectDuration(p))}s playhead=${n(playhead)} selected=${selectedClipId ?? '-'} layer=${selectedTrackId ?? '-'} fps=${p.fps}`,
+    `duration=${n(projectDuration(p))}s playhead=${n(playhead)} selected=${selectedClipId ?? '-'} layer=${selectedTrackId ?? '-'} fps=${p.fps} size=${p.width}x${p.height}`,
     'assets:',
     ...p.assets.map(
       (a) =>
@@ -415,6 +417,9 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       });
       return;
     }
+    case 'aspect':
+      d.p = withAspect(p, op.aspect);
+      return;
   }
 }
 
@@ -539,8 +544,10 @@ function loadProjectTool(input: unknown): AgentToolResult {
 
 /** Bridge: renders the current project to outPath and resolves when the file is written. */
 async function exportTool(input: unknown): Promise<AgentToolResult> {
-  const { outPath, height } = ExportInput.parse(input);
+  const parsed = ExportInput.parse(input);
   const project = useEditor.getState().project;
+  const height = parsed.height ?? project.height;
+  const outPath = parsed.outPath;
   const done = await new Promise<string>((resolve, reject) => {
     const off = window.api.onExportEvent((ev) => {
       if (ev.type === 'done') {
@@ -569,14 +576,14 @@ async function saveTo(path: string): Promise<string> {
 
 /** Bridge: starts an empty project; refuses to drop unsaved work unless discard is set. */
 async function newProjectTool(input: unknown): Promise<AgentToolResult> {
-  const { path, discard } = NewProjectInput.parse(input);
+  const { path, discard, aspect } = NewProjectInput.parse(input);
   if (useEditor.getState().dirty && !discard) {
     return { text: 'new_project: the open project has unsaved changes; save_project first or pass discard:true. Nothing was changed', isError: true };
   }
   pause();
-  loadProject(emptyProject(), null);
-  if (!path) return { text: 'ok, new empty project (no file yet; save_project with a path names it)' };
-  return { text: `ok, new empty project saved as ${await saveTo(path)}` };
+  loadProject(withAspect(emptyProject(), aspect), null);
+  if (!path) return { text: `ok, new empty ${aspect} project (no file yet; save_project with a path names it)` };
+  return { text: `ok, new empty ${aspect} project saved as ${await saveTo(path)}` };
 }
 
 /** Bridge: saves to the open file, or to path (save as) without a dialog. */

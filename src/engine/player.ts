@@ -25,7 +25,7 @@ import {
 import { setPlayhead, useEditor } from '../store';
 import { isNeutral } from '../../shared/color';
 import { grader } from './grade';
-import { animState, cachedIntro, cachedRaster, DESIGN_WIDTH, drawText } from './text';
+import { animState, cachedIntro, cachedRaster, designScale, drawText } from './text';
 
 type MediaEl = HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
 
@@ -322,7 +322,7 @@ class Compositor {
   private drawTrack(ctx: CanvasRenderingContext2D, project: Project, track: Track, t: number): void {
     const canvas = this.canvas;
     if (!canvas) return;
-    const k = canvas.width / DESIGN_WIDTH;
+    const k = designScale(canvas.width, canvas.height);
     if (track.kind === 'text') {
       const clip = track.clips.find((c) => t >= c.start && t < clipEnd(c));
       if (clip && isTextClip(clip)) {

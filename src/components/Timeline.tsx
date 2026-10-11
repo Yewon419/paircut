@@ -77,8 +77,8 @@ const RULER_H = 24;
 /** Row height per layer kind, after OpenCut: pictures get room for their frames, text is a slim bar. */
 const TRACK_H: Record<TrackKind, number> = { video: 60, text: 36, audio: 48 };
 /** Layer card thumbnail, a 9:16 frame at twice its CSS size. */
-const THUMB_W = 54;
-const THUMB_H = 96;
+/** Layer thumbnails are drawn at twice the size they show, inside a square box. */
+const THUMB_BOX = 96;
 const ZONE_H = 22;
 const SNAP_PX = 8;
 /** Scrubbing within this many pixels of a side edge scrolls the timeline, up to EDGE_SPEED px a frame. */
@@ -682,11 +682,17 @@ function TrackName({
 /** The layer drawn alone at the playhead, on a transparency checkerboard. */
 function LayerThumb({ trackId }: { trackId: string }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const fw = useEditor((s) => s.project.width);
+  const fh = useEditor((s) => s.project.height);
+  const fit = THUMB_BOX / Math.max(fw, fh);
+  const w = Math.round(fw * fit);
+  const h = Math.round(fh * fit);
   useEffect(() => {
     compositor.attachThumb(trackId, ref.current);
     return () => compositor.attachThumb(trackId, null);
   }, [trackId]);
-  return <canvas ref={ref} className="layer-thumb" width={THUMB_W} height={THUMB_H} />;
+  const shape = { '--thumb-w': w / THUMB_BOX, '--thumb-h': h / THUMB_BOX } as React.CSSProperties;
+  return <canvas ref={ref} className="layer-thumb" width={w} height={h} style={shape} />;
 }
 
 const KIND_LABEL = { text: '글자', video: '영상', audio: '오디오' } as const;

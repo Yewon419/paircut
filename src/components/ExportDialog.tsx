@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { outputSize } from '../../shared/exportGraph';
+import type { Project } from '../../shared/project';
 import { projectDuration } from '../../shared/project';
 import { pause } from '../engine/player';
 import { textImagesFor } from '../exportTexts';
@@ -7,14 +9,19 @@ import { useEditor } from '../store';
 
 type Phase = { kind: 'idle' } | { kind: 'running'; ratio: number } | { kind: 'done'; outPath: string } | { kind: 'error'; message: string };
 
-const HEIGHTS = [
-  { height: 1920, label: '1080p (1080×1920)' },
-  { height: 1280, label: '720p (720×1280)' },
-];
+/** Export sizes by the frame's short side, for the project's shape. */
+function sizesFor(project: Project): { height: number; label: string }[] {
+  const short = Math.min(project.width, project.height);
+  return [1080, 720].map((side) => {
+    const { width, height } = outputSize(project, Math.round((project.height * side) / short / 2) * 2);
+    return { height, label: `${side}p (${width}×${height})` };
+  });
+}
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
   const project = useEditor((s) => s.project);
-  const [height, setHeight] = useState(1920);
+  const sizes = sizesFor(project);
+  const [height, setHeight] = useState(sizes[0].height);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const duration = projectDuration(project);
 
@@ -56,7 +63,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
               MP4 · H.264 · AAC · {project.fps}fps · {formatSeconds(duration)}
             </p>
             <div className="choices">
-              {HEIGHTS.map((h) => (
+              {sizes.map((h) => (
                 <label key={h.height} className={height === h.height ? 'choice on' : 'choice'}>
                   <input
                     type="radio"

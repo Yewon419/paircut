@@ -901,8 +901,8 @@ input[type='range'] {
 }
 
 .tl-head.short .layer-thumb {
-  width: 16px;
-  height: 28px;
+  width: calc(28px * var(--thumb-w, 0.5625));
+  height: calc(28px * var(--thumb-h, 1));
 }
 
 .layer-card:hover,
@@ -925,8 +925,8 @@ input[type='range'] {
 
 .layer-thumb {
   flex: none;
-  width: 27px;
-  height: 48px;
+  width: calc(48px * var(--thumb-w, 0.5625));
+  height: calc(48px * var(--thumb-h, 1));
   border: 1px solid var(--line-strong);
   border-radius: 3px;
   background-color: #2b2b2b;

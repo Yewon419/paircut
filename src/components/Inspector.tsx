@@ -2,8 +2,10 @@ import { useState } from 'react';
 import { ChevronLeft, ChevronRight, Diamond, MousePointerClick } from 'lucide-react';
 import type { ClipColor } from '../../shared/color';
 import { NEUTRAL_COLOR } from '../../shared/color';
-import type { Clip, ClipCrop, ClipTransform, FontId, KeyEase, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
+import type { AspectId, Clip, ClipCrop, ClipTransform, FontId, KeyEase, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
+  ASPECTS,
+  aspectOf,
   assetById,
   clipDuration,
   CROP_MAX,
@@ -19,6 +21,7 @@ import {
   transformAt,
   validCustomFont,
   VOLUME_MAX,
+  withAspect,
 } from '../../shared/project';
 import type { AlignTo } from '../align';
 import { alignShift, layerBox } from '../align';
@@ -166,6 +169,8 @@ export function Inspector() {
   return <MediaPanel project={project} clip={found.clip} visual={found.track.kind === 'video'} />;
 }
 
+const ASPECT_NAMES: Record<AspectId, string> = { '9:16': '세로', '16:9': '가로', '1:1': '정사각', '4:5': '피드' };
+
 function ProjectPanel({ project }: { project: Project }) {
   return (
     <aside className="panel inspector">
@@ -182,7 +187,26 @@ function ProjectPanel({ project }: { project: Project }) {
       <dl className="props">
         <dt>크기</dt>
         <dd>
-          {project.width}×{project.height} (9:16)
+          <select
+            value={aspectOf(project) ?? ''}
+            data-testid="project-aspect"
+            title="화면 비율: 클립은 화면 안에서의 위치를 그대로 지켜요"
+            onChange={(e) => {
+              const a = ASPECTS.find((x) => x.id === e.target.value);
+              if (a) commit((p) => withAspect(p, a.id));
+            }}
+          >
+            {ASPECTS.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.id} {ASPECT_NAMES[a.id]} ({a.width}×{a.height})
+              </option>
+            ))}
+            {aspectOf(project) === null && (
+              <option value="">
+                {project.width}×{project.height}
+              </option>
+            )}
+          </select>
         </dd>
         <dt>프레임</dt>
         <dd>{project.fps}fps</dd>
