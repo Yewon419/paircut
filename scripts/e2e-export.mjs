@@ -8,7 +8,9 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { BITTEUL_COLOR, gradePixel } = require('../dist-electron/shared/color.js');
+const { gradePixel } = require('../dist-electron/shared/color.js');
+/** A grade that moves every control, so the lut3d path is checked end to end. */
+const GRADE = { brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 };
 
 /** Stripes of the swatch fixture, top to bottom, 480px each. */
 export const SWATCHES = [[70, 160, 60], [70, 50, 200], [220, 150, 110], [128, 128, 128]];
@@ -202,8 +204,8 @@ async function checkColor(base, swatch, dir) {
   const project = {
     ...base,
     tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
-      { ...clip, color: BITTEUL_COLOR },
-      { ...clip, id: 'g2', start: 1, color: { brightness: 0, contrast: 0, saturation: -1, temperature: 0, look: 0 } },
+      { ...clip, color: GRADE },
+      { ...clip, id: 'g2', start: 1, color: { brightness: 0, contrast: 0, saturation: -1, temperature: 0 } },
     ] }],
   };
   const out = join(dir, 'color.mp4');
@@ -211,10 +213,10 @@ async function checkColor(base, swatch, dir) {
   check('color export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
   if (result.type !== 'done') return;
   SWATCHES.forEach((src, i) => {
-    const want = gradePixel(src.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+    const want = gradePixel(src.map((v) => v / 255), GRADE).map((v) => Math.round(v * 255));
     const got = samplePixel(out, 0.5, 536, i * 480 + 236);
     const off = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
-    check(`bitteul look on ${src.join(',')}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
+    check(`grade on ${src.join(',')}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
   });
   const gray = samplePixel(out, 1.5, 536, 480 + 236);
   check('saturation -100% gives gray', Math.max(...gray) - Math.min(...gray) <= 4, gray.join(','));
@@ -279,7 +281,6 @@ export async function buildFixtureProject(f, cacheDir) {
     project: normalizeProject({
       version: 1, width: 1080, height: 1920, fps: 30,
       assets: [land, rot, pic, tone, swatch],
-      vars: { uploadDate: '2026-10-03', ddayTarget: '2027-09-01', salary: 0, goal: 2236300 },
       markers: [],
       tracks: [
         { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [

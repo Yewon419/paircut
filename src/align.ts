@@ -1,7 +1,7 @@
 import type { AnyClip, Project, Rect } from '../shared/project';
 import { assetById, clipEnd, cropBox, isMediaClip, isTextClip, placeVisual, transformAt } from '../shared/project';
 import { compositor } from './engine/player';
-import { RULES } from './rules';
+import { SAFE_ZONE } from './safeZone';
 
 export const PREVIEW_SCALE = 0.5;
 
@@ -59,8 +59,8 @@ export function layerBox(project: Project, clip: AnyClip, t: number): Box | null
 
 /** The frame's edges and center, the safe-zone lines, and the edges and centers of the other layers on screen at t. */
 export function snapTargets(project: Project, t: number, movingClipId: string): SnapTargets {
-  const xs = [0, 0.5, 1, RULES.safeSide, 1 - RULES.safeSide];
-  const ys = [0, 0.5, 1, RULES.safeTop, 1 - RULES.safeBottom];
+  const xs = [0, 0.5, 1, SAFE_ZONE.side, 1 - SAFE_ZONE.side];
+  const ys = [0, 0.5, 1, SAFE_ZONE.top, 1 - SAFE_ZONE.bottom];
   for (const track of project.tracks) {
     if (track.kind === 'audio' || track.hidden) continue;
     for (const clip of track.clips) {

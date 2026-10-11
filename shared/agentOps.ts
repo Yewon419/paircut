@@ -41,7 +41,6 @@ const color = z
     contrast: z.number().min(-1).max(1),
     saturation: z.number().min(-1).max(1),
     temperature: z.number().min(-1).max(1),
-    look: z.number().min(0).max(1),
   })
   .partial();
 
@@ -67,8 +66,7 @@ export const EditOp = z.discriminatedUnion('op', [
   }).describe('one-color full-frame picture, e.g. a background'),
   z.object({
     op: z.literal('add_text'),
-    preset: z.enum(['hook-num', 'hook', 'sub', 'aside', 'badge-dday', 'badge-salary']),
-    text: z.string().optional(),
+    text: z.string().optional().describe('default "텍스트": white, centered, no outline; style it with set_text'),
     start: sec,
     dur: z.number().positive().optional(),
   }),
@@ -106,7 +104,7 @@ export const EditOp = z.discriminatedUnion('op', [
     .object({
       op: z.literal('span'),
       clip: id,
-      match: z.string().min(1).describe('exact text inside the clip (after {D}-style tokens are filled in)'),
+      match: z.string().min(1).describe('exact text inside the clip'),
       nth: z.number().int().min(0).default(0).describe('which occurrence of match, 0 = first'),
       color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
       font: font.optional(),
@@ -156,14 +154,6 @@ export const EditOp = z.discriminatedUnion('op', [
       .optional()
       .describe('picture layers: clipping mask, the layer shows only where the picture layer under it is opaque'),
   }),
-  z.object({
-    op: z.literal('vars'),
-    uploadDate: z.string().optional().describe('YYYY-MM-DD'),
-    ddayTarget: z.string().optional(),
-    salary: z.number().optional(),
-    goal: z.number().optional(),
-  }),
-  z.object({ op: z.literal('import_conti'), post: z.string().describe('board post id, e.g. p001') }),
 ]);
 
 export type EditOp = z.infer<typeof EditOp>;

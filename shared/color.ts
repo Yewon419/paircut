@@ -11,68 +11,25 @@ export interface ClipColor {
   saturation: number;
   /** -1..1, positive is warmer */
   temperature: number;
-  /** 0..1 strength of the Bitteul look (hue-selective part of CHARACTER.md 2-1) */
-  look: number;
 }
 
-export const NEUTRAL_COLOR: ClipColor = { brightness: 0, contrast: 0, saturation: 0, temperature: 0, look: 0 };
-
-/** Starting values from CHARACTER.md 2-1: brighter, softer contrast, plus the look (greens down, blues to cerulean). */
-export const BITTEUL_COLOR: ClipColor = { brightness: 0.2, contrast: -0.15, saturation: 0, temperature: 0, look: 1 };
+export const NEUTRAL_COLOR: ClipColor = { brightness: 0, contrast: 0, saturation: 0, temperature: 0 };
 
 export const LUT_SIZE = 33;
 
-/** Hue of cerulean #2B86C5. */
-const CERULEAN_HUE = 204.5;
-
 export function isNeutral(c: ClipColor): boolean {
-  return c.brightness === 0 && c.contrast === 0 && c.saturation === 0 && c.temperature === 0 && c.look === 0;
+  return c.brightness === 0 && c.contrast === 0 && c.saturation === 0 && c.temperature === 0;
 }
 
 export function colorKey(c: ClipColor): string {
-  return [c.brightness, c.contrast, c.saturation, c.temperature, c.look].map((v) => v.toFixed(3)).join('_');
+  return [c.brightness, c.contrast, c.saturation, c.temperature].map((v) => v.toFixed(3)).join('_');
 }
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-/** 1 inside [lo, hi] degrees, linear falloff over `soft` degrees outside. */
-function band(h: number, lo: number, hi: number, soft: number): number {
-  if (h >= lo && h <= hi) return 1;
-  const d = h < lo ? lo - h : h - hi;
-  return Math.max(0, 1 - d / soft);
-}
-
-function rgbToHsv(r: number, g: number, b: number): [number, number, number] {
-  const max = Math.max(r, g, b);
-  const d = max - Math.min(r, g, b);
-  let h = 0;
-  if (d > 0) {
-    if (max === r) h = 60 * (((g - b) / d + 6) % 6);
-    else if (max === g) h = 60 * ((b - r) / d + 2);
-    else h = 60 * ((r - g) / d + 4);
-  }
-  return [h, max === 0 ? 0 : d / max, max];
-}
-
-function hsvToRgb(h: number, s: number, v: number): [number, number, number] {
-  const c = v * s;
-  const hp = (((h % 360) + 360) % 360) / 60;
-  const x = c * (1 - Math.abs((hp % 2) - 1));
-  const m = v - c;
-  const [r, g, b] =
-    hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x] : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
-  return [r + m, g + m, b + m];
-}
-
-/** Maps one RGB pixel (0..1). Order: look, temperature, saturation, contrast, brightness. */
+/** Maps one RGB pixel (0..1). Order: temperature, saturation, contrast, brightness. */
 export function gradePixel(rgb: [number, number, number], c: ClipColor): [number, number, number] {
   let [r, g, b] = rgb;
-  if (c.look > 0) {
-    const [h, s, v] = rgbToHsv(r, g, b);
-    const green = 1 - 0.5 * c.look * band(h, 75, 165, 30);
-    const pull = 0.7 * c.look * band(h, 185, 260, 25);
-    [r, g, b] = hsvToRgb(h + (CERULEAN_HUE - h) * pull, s * green, v);
-  }
   if (c.temperature !== 0) {
     r *= 1 + 0.1 * c.temperature;
     b *= 1 - 0.1 * c.temperature;

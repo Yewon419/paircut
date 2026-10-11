@@ -7,14 +7,12 @@ import {
   assetById,
   clipDuration,
   CROP_MAX,
-  ddayOf,
   DISSOLVE_MAX,
   effectiveDissolve,
   IDENTITY_TRANSFORM,
   isTextClip,
   NO_CROP,
   projectDuration,
-  resolveTokens,
   SPEED_MAX,
   spanIndex,
   SPEED_MIN,
@@ -27,7 +25,7 @@ import { alignShift, layerBox } from '../align';
 import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
 import { fontInstalled } from '../engine/text';
-import { NAVY } from '../presets';
+import { DEFAULT_BACKGROUND } from '../presets';
 import { allTemplates, useTemplates } from '../textTemplates';
 import {
   applyColorToAll,
@@ -40,7 +38,6 @@ import {
   keyIndexAt,
   setClipSpeed,
   setKeyEase,
-  setVars,
   toggleKeyAtPlayhead,
   updateGesture,
   updateMediaClip,
@@ -123,7 +120,6 @@ const COLOR_SLIDERS: { key: keyof ClipColor; label: string; min: number }[] = [
   { key: 'contrast', label: '대비', min: -100 },
   { key: 'saturation', label: '채도', min: -100 },
   { key: 'temperature', label: '색온도', min: -100 },
-  { key: 'look', label: '빛뜰 톤', min: 0 },
 ];
 
 const CROP_EDGES: { key: keyof ClipCrop; opposite: keyof ClipCrop; label: string }[] = [
@@ -171,7 +167,6 @@ export function Inspector() {
 }
 
 function ProjectPanel({ project }: { project: Project }) {
-  const vars = project.vars;
   return (
     <aside className="panel inspector">
       <div className="panel-head">
@@ -194,32 +189,6 @@ function ProjectPanel({ project }: { project: Project }) {
         <dt>길이</dt>
         <dd>{formatSeconds(projectDuration(project))}</dd>
       </dl>
-      <div className="panel-sub">배지 숫자</div>
-      <div className="transform-controls">
-        <div className="row">
-          <label>
-            <span>올리는 날</span>
-            <input type="date" value={vars.uploadDate} onChange={(e) => setVars({ uploadDate: e.target.value })} />
-          </label>
-          <label>
-            <span>복학일</span>
-            <input type="date" value={vars.ddayTarget} onChange={(e) => setVars({ ddayTarget: e.target.value })} />
-          </label>
-        </div>
-        <div className="row">
-          <label>
-            <span>이번 달 월급</span>
-            <input type="number" min={0} step={100} value={vars.salary} onChange={(e) => setVars({ salary: Number(e.target.value) })} />
-          </label>
-          <label>
-            <span>목표</span>
-            <input type="number" min={0} step={100} value={vars.goal} onChange={(e) => setVars({ goal: Number(e.target.value) })} />
-          </label>
-        </div>
-        <p className="hint" data-testid="dday">
-          D-{ddayOf(vars)} · 자막에 {'{D}'} {'{월급}'} {'{목표}'}를 쓰면 이 값으로 바뀌어요.
-        </p>
-      </div>
     </aside>
   );
 }
@@ -263,8 +232,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
   const live = (update: (c: TextClip) => TextClip) => updateGesture((base) => updateTextClip(base, id, update));
   const set = (update: (c: TextClip) => TextClip) => commit((p) => updateTextClip(p, id, update));
   const setStyle = (patch: Partial<TextStyle>) => set((c) => ({ ...c, style: { ...c.style, ...patch } }));
-  const resolved = resolveTokens(clip.text, project.vars);
-  const lines = resolved.split('\n');
+  const lines = clip.text.split('\n');
   const longest = Math.max(...lines.map((l) => l.length));
   useTemplates((s) => s.user);
   const templates = allTemplates();
@@ -295,7 +263,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
           }}
         />
         <p className="hint">
-          {lines.length}줄 · 한 줄 최대 {longest}자{resolved !== clip.text ? ` · 미리보기: ${resolved}` : ''}
+          {lines.length}줄 · 한 줄 최대 {longest}자
         </p>
         <label>
           <span>프리셋</span>
@@ -404,7 +372,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
           <input
             type="checkbox"
             checked={style.background !== null}
-            onChange={(e) => setStyle({ background: e.target.checked ? NAVY : null })}
+            onChange={(e) => setStyle({ background: e.target.checked ? DEFAULT_BACKGROUND : null })}
           />
           <span>배경 상자</span>
           {style.background !== null && (
@@ -479,7 +447,7 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
         <AlignButtons project={project} clip={clip} />
         <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 글자 크기가 바뀌어요. 끌 때 화면·다른 레이어 선에 붙고, Alt를 누르면 안 붙어요.</p>
       </div>
-      <SpanControls clip={clip} resolved={resolved} selection={selection} set={set} />
+      <SpanControls clip={clip} resolved={clip.text} selection={selection} set={set} />
     </aside>
   );
 }
@@ -520,8 +488,7 @@ function SpanControls({
   set: (update: (c: TextClip) => TextClip) => void;
 }) {
   const picked = clip.text.slice(selection.start, selection.end);
-  const hasToken = /[{}]/.test(picked);
-  const usable = picked.trim() !== '' && !hasToken;
+  const usable = picked.trim() !== '';
   const add = () => {
     if (!usable) return;
     const nth = occurrenceAt(clip.text, picked, selection.start);
@@ -539,11 +506,7 @@ function SpanControls({
         <button data-testid="span-add" disabled={!usable} onClick={add}>
           {usable ? `선택한 글자 꾸미기: ${short}` : '선택한 글자 꾸미기'}
         </button>
-        <p className="hint">
-          {hasToken
-            ? '{D} 같은 자리표시는 꾸밀 수 없어요. 그 앞뒤 글자만 골라요.'
-            : '위 글상자에서 글자를 끌어 고른 뒤 눌러요. 문장을 고쳐도 같은 글자를 따라가요.'}
-        </p>
+        <p className="hint">위 글상자에서 글자를 끌어 고른 뒤 눌러요. 문장을 고쳐도 같은 글자를 따라가요.</p>
         {clip.spans.map((sp, i) => (
           <div key={`${sp.match}#${sp.nth}`} className="span-card" data-testid="span-row">
             <div className="span-head">
@@ -1034,11 +997,9 @@ function ColorControls({ clip }: { clip: Clip }) {
             <button onClick={() => setColor(p.color)} data-color-preset={p.name}>
               {p.name}
             </button>
-            {!p.builtin && (
-              <button className="chip-x" onClick={() => deletePreset(p.id)} title="프리셋 삭제" data-delete-preset={p.name}>
-                ×
-              </button>
-            )}
+            <button className="chip-x" onClick={() => deletePreset(p.id)} title="프리셋 삭제" data-delete-preset={p.name}>
+              ×
+            </button>
           </span>
         ))}
         <button onClick={() => setColor(NEUTRAL_COLOR)}>원래대로</button>
@@ -1081,7 +1042,6 @@ function ColorControls({ clip }: { clip: Clip }) {
       <button onClick={() => applyColorToAll(clip.color)} data-testid="color-all">
         모든 영상·사진 클립에 적용
       </button>
-      <p className="hint">빛뜰 보정은 밝게, 대비는 부드럽게, 초록은 채도를 낮추고 파랑은 세룰리안으로 모아요(CHARACTER 2-1).</p>
     </div>
   );
 }

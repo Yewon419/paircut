@@ -19,7 +19,6 @@ import {
   projectDuration,
   introFrames,
   isIntroAnim,
-  resolveTokens,
   visualAlpha,
   visualSpan,
 } from '../../shared/project';
@@ -232,7 +231,7 @@ class Compositor {
 
   textRect(project: Project, clip: TextClip): Rect | null {
     if (!this.canvas) return null;
-    const r = cachedRaster(clip, project.vars, this.canvas.width, this.canvas.height);
+    const r = cachedRaster(clip, this.canvas.width, this.canvas.height);
     return { x: r.x, y: r.y, w: r.w, h: r.h };
   }
 
@@ -325,10 +324,10 @@ class Compositor {
         const frame = Math.floor((t - clip.start) * project.fps + 1e-6);
         const intro =
           isIntroAnim(clip.anim) &&
-          frame < introFrames(clip.anim, resolveTokens(clip.text, project.vars), clipDuration(clip), project.fps);
+          frame < introFrames(clip.anim, clip.text, clipDuration(clip), project.fps);
         const r = intro
-          ? cachedIntro(clip, project.vars, canvas.width, canvas.height, frame, project.fps)
-          : cachedRaster(clip, project.vars, canvas.width, canvas.height);
+          ? cachedIntro(clip, canvas.width, canvas.height, frame, project.fps)
+          : cachedRaster(clip, canvas.width, canvas.height);
         // No glitch bursts during an intro: a burst frame always shows the whole text.
         const v = r.variants.length > 0 && !intro ? glitchVariant(t - clip.start) : -1;
         drawText(ctx, v >= 0 ? { ...r, canvas: r.variants[v] } : r, animState(clip, t), k, clip.style.effect);

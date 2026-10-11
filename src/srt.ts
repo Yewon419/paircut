@@ -1,5 +1,5 @@
-import type { ProjectVars, TextClip } from '../shared/project';
-import { clipEnd, resolveTokens } from '../shared/project';
+import type { TextClip } from '../shared/project';
+import { clipEnd } from '../shared/project';
 
 export interface SrtCue {
   start: number;
@@ -38,10 +38,10 @@ export function parseSrt(content: string): SrtCue[] {
 }
 
 /** Badges (text with a background box) are overlays, not dialogue, so they are left out. */
-export function toSrt(clips: TextClip[], vars: ProjectVars): string {
+export function toSrt(clips: TextClip[]): string {
   return [...clips]
     .filter((c) => !c.style.background)
     .sort((a, b) => a.start - b.start)
-    .map((c, i) => `${i + 1}\n${stamp(c.start)} --> ${stamp(clipEnd(c))}\n${resolveTokens(c.text, vars)}\n`)
+    .map((c, i) => `${i + 1}\n${stamp(c.start)} --> ${stamp(clipEnd(c))}\n${c.text}\n`)
     .join('\n');
 }

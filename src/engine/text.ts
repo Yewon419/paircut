@@ -1,4 +1,4 @@
-import type { FontId, ProjectVars, TextClip, TextEffect } from '../../shared/project';
+import type { FontId, TextClip, TextEffect } from '../../shared/project';
 import {
   ANIM_IN,
   ANIM_OUT,
@@ -14,7 +14,6 @@ import {
   isIntroAnim,
   letterAlphas,
   POP_FROM,
-  resolveTokens,
   RISE_PX,
   spanIndex,
   TRACK_FROM,
@@ -252,19 +251,6 @@ function roundRect(ctx: CanvasRenderingContext2D, w: number, h: number, r: numbe
   ctx.closePath();
 }
 
-let measureCtx: CanvasRenderingContext2D | null = null;
-
-/** Lines exactly as rasterizeText breaks them, for rule checks. */
-export function wrappedLines(clip: TextClip, vars: ProjectVars, frameW: number): string[] {
-  measureCtx ??= document.createElement('canvas').getContext('2d');
-  if (!measureCtx) throw new Error('2d context unavailable');
-  const ctx = measureCtx;
-  const text = resolveTokens(clip.text, vars);
-  const looks = looksOf(text, clip, frameW / DESIGN_WIDTH);
-  const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
-  return ranges.map(([a, b]) => text.slice(a, b));
-}
-
 /** A run placed in block coordinates (origin = center of the unrotated text block). */
 interface Placed {
   run: Run;
@@ -298,7 +284,6 @@ function corners(cx: number, cy: number, w: number, h: number, a: number, g: num
  */
 export function rasterizeText(
   clip: TextClip,
-  vars: ProjectVars,
   frameW: number,
   frameH: number,
   alphas: readonly number[] | null,
@@ -309,7 +294,7 @@ export function rasterizeText(
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('2d context unavailable');
-  const text = resolveTokens(clip.text, vars);
+  const text = clip.text;
   const looks = looksOf(text, clip, k);
   const ranges = wrapRanges(text, MAX_WIDTH_FRAC * frameW, (a, b) => advance(ctx, text, looks, a, b));
   const size = style.size * k;
@@ -548,17 +533,17 @@ function wiped(r: TextRaster, p: number): TextRaster {
 }
 
 /** One frame of an intro anim, `local` seconds into the clip. Preview and export both draw intros with this. */
-export function introRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number, local: number): TextRaster {
-  const text = resolveTokens(clip.text, vars);
+export function introRaster(clip: TextClip, frameW: number, frameH: number, local: number): TextRaster {
+  const text = clip.text;
   const duration = clipDuration(clip);
   const anim = clip.anim;
   if (anim === 'type' || anim === 'word' || anim === 'letters') {
-    return rasterizeText(clip, vars, frameW, frameH, letterAlphas(anim, text, duration, local), 0);
+    return rasterizeText(clip, frameW, frameH, letterAlphas(anim, text, duration, local), 0);
   }
   if (anim !== 'blur' && anim !== 'track' && anim !== 'wipe') throw new Error(`not an intro anim: ${anim}`);
   const p = introProgress(anim, text, duration, local);
-  if (anim === 'track') return blurred(rasterizeText(clip, vars, frameW, frameH, null, TRACK_FROM * (1 - p)), 0, p);
-  const full = cachedRaster(clip, vars, frameW, frameH);
+  if (anim === 'track') return blurred(rasterizeText(clip, frameW, frameH, null, TRACK_FROM * (1 - p)), 0, p);
+  const full = cachedRaster(clip, frameW, frameH);
   if (anim === 'wipe') return wiped(full, p);
   return blurred(full, BLUR_FROM * clip.style.size * (frameW / DESIGN_WIDTH) * (1 - p), p);
 }
@@ -575,19 +560,19 @@ function remembered(key: string, make: () => TextRaster): TextRaster {
   return raster;
 }
 
-function looksKey(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): unknown[] {
-  return [clip.text, clip.style, clip.x, clip.y, clip.rotation, clip.spans, vars, frameW, frameH];
+function looksKey(clip: TextClip, frameW: number, frameH: number): unknown[] {
+  return [clip.text, clip.style, clip.x, clip.y, clip.rotation, clip.spans, frameW, frameH];
 }
 
-export function cachedRaster(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number): TextRaster {
-  const key = JSON.stringify(looksKey(clip, vars, frameW, frameH));
-  return remembered(key, () => rasterizeText(clip, vars, frameW, frameH, null, 0));
+export function cachedRaster(clip: TextClip, frameW: number, frameH: number): TextRaster {
+  const key = JSON.stringify(looksKey(clip, frameW, frameH));
+  return remembered(key, () => rasterizeText(clip, frameW, frameH, null, 0));
 }
 
 /** Intro frame `frame` (at frame / fps seconds into the clip). */
-export function cachedIntro(clip: TextClip, vars: ProjectVars, frameW: number, frameH: number, frame: number, fps: number): TextRaster {
-  const key = JSON.stringify([...looksKey(clip, vars, frameW, frameH), clip.anim, clipDuration(clip), fps, frame]);
-  return remembered(key, () => introRaster(clip, vars, frameW, frameH, frame / fps));
+export function cachedIntro(clip: TextClip, frameW: number, frameH: number, frame: number, fps: number): TextRaster {
+  const key = JSON.stringify([...looksKey(clip, frameW, frameH), clip.anim, clipDuration(clip), fps, frame]);
+  return remembered(key, () => introRaster(clip, frameW, frameH, frame / fps));
 }
 
 export interface AnimState {

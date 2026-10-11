@@ -6,7 +6,7 @@ import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDurati
 import { layerBox, previewSize, snapMove, snapTargets } from '../align';
 import { compositor, pause, seek, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
-import { RULES } from '../rules';
+import { SAFE_ZONE } from '../safeZone';
 import { beginGesture, endGesture, findClip, frameSnap, updateGesture, updateMediaClip, updateTextClip, useEditor, withTransformAt } from '../store';
 
 /** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
@@ -169,15 +169,15 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
           {guides && (
             <div className="safe-zone" data-testid="safe-zone">
-              <div className="band" style={{ left: 0, right: 0, top: 0, height: `${RULES.safeTop * 100}%` }} />
-              <div className="band" style={{ left: 0, right: 0, bottom: 0, height: `${RULES.safeBottom * 100}%` }} />
+              <div className="band" style={{ left: 0, right: 0, top: 0, height: `${SAFE_ZONE.top * 100}%` }} />
+              <div className="band" style={{ left: 0, right: 0, bottom: 0, height: `${SAFE_ZONE.bottom * 100}%` }} />
               <div
                 className="band"
-                style={{ left: 0, top: `${RULES.safeTop * 100}%`, bottom: `${RULES.safeBottom * 100}%`, width: `${RULES.safeSide * 100}%` }}
+                style={{ left: 0, top: `${SAFE_ZONE.top * 100}%`, bottom: `${SAFE_ZONE.bottom * 100}%`, width: `${SAFE_ZONE.side * 100}%` }}
               />
               <div
                 className="band"
-                style={{ right: 0, top: `${RULES.safeTop * 100}%`, bottom: `${RULES.safeBottom * 100}%`, width: `${RULES.safeSide * 100}%` }}
+                style={{ right: 0, top: `${SAFE_ZONE.top * 100}%`, bottom: `${SAFE_ZONE.bottom * 100}%`, width: `${SAFE_ZONE.side * 100}%` }}
               />
             </div>
           )}

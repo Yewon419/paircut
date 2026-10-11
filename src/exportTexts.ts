@@ -1,7 +1,7 @@
 import type { TextImage, TextIntro } from '../shared/api';
 import { outputSize } from '../shared/exportGraph';
 import type { Project, TextClip } from '../shared/project';
-import { clipDuration, introFrames, isIntroAnim, resolveTokens, textClips } from '../shared/project';
+import { clipDuration, introFrames, isIntroAnim, textClips } from '../shared/project';
 import type { TextRaster } from './engine/text';
 import { introRaster, rasterizeText } from './engine/text';
 
@@ -13,9 +13,9 @@ function png(canvas: HTMLCanvasElement): string {
 /** Every intro frame, then the settled raster, each redrawn into the box that holds them all. */
 function introOf(project: Project, clip: TextClip, settled: TextRaster, width: number, height: number): TextIntro | null {
   if (!isIntroAnim(clip.anim)) return null;
-  const n = introFrames(clip.anim, resolveTokens(clip.text, project.vars), clipDuration(clip), project.fps);
+  const n = introFrames(clip.anim, clip.text, clipDuration(clip), project.fps);
   const rasters: TextRaster[] = [];
-  for (let i = 0; i < n; i++) rasters.push(introRaster(clip, project.vars, width, height, i / project.fps));
+  for (let i = 0; i < n; i++) rasters.push(introRaster(clip, width, height, i / project.fps));
   rasters.push(settled);
   const x = Math.min(...rasters.map((r) => r.x));
   const y = Math.min(...rasters.map((r) => r.y));
@@ -40,7 +40,7 @@ export function textImagesFor(project: Project, height: number): TextImage[] {
   for (const track of project.tracks) {
     if (track.kind !== 'text' || track.hidden) continue;
     for (const clip of textClips(track)) {
-      const r = rasterizeText(clip, project.vars, width, h, null, 0);
+      const r = rasterizeText(clip, width, h, null, 0);
       out.push({
         clipId: clip.id,
         pngBase64: png(r.canvas),

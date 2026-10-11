@@ -7,7 +7,9 @@ import { _electron } from 'playwright';
 import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
-const { BITTEUL_COLOR, gradePixel } = require('../dist-electron/shared/color.js');
+const { gradePixel } = require('../dist-electron/shared/color.js');
+/** A grade that moves every control, so the preview LUT is checked end to end. */
+const GRADE = { brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 };
 const { importMedia } = require('../dist-electron/electron/media.js');
 
 const root = resolve(import.meta.dirname, '..');
@@ -188,7 +190,7 @@ try {
   const textCount = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text').flatMap((t) => t.clips).length);
   const before = await textCount();
   await win.locator('[data-tab="text"]').click();
-  await win.locator('[data-preset="aside"]').click();
+  await win.locator('[data-preset="basic"]').click();
   check('preset button adds a text clip', (await textCount()) === before + 1, `text clips ${await textCount()}`);
   await win.locator('[data-testid="text-input"]').fill('(바뀐 딴지)');
   const edited = await win.evaluate(() => {
@@ -220,67 +222,30 @@ try {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] });
   }, srtPath);
 
-  // Conti import from the real operations board (read only).
-  await win.evaluate(() => window.__cutdesk.load({ ...window.__cutdesk.state().project, tracks: window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'text') }));
-  await win.locator('[data-tab="conti"]').click();
-  await win.locator('[data-testid="board-load"]').click();
-  await win.locator('[data-post="p001"]').click();
-  const conti = await win.evaluate(() => {
+  // SRT round trip: dialogue out (boxed badges left out), then back in on a new track.
+  await win.evaluate((id) => {
     const p = window.__cutdesk.state().project;
-    const texts = p.tracks.filter((t) => t.kind === 'text');
-    return { tracks: texts.map((t) => t.clips.length), first: texts[0]?.clips[0], markers: p.markers.length, vars: p.vars };
-  });
-  check('conti p001 -> 11 subtitles + 4 asides', conti.tracks.join() === '11,4', conti.tracks.join());
-  check('conti markers per row', conti.markers === 12, String(conti.markers));
-  check('hook is first cut 0-3s', conti.first?.preset === 'hook' && conti.first.start === 0 && conti.first.out === 3,
-    `${conti.first?.preset} ${conti.first?.start}+${conti.first?.out}`);
-  check('upload date from board', conti.vars.uploadDate === '2026-10-03', conti.vars.uploadDate);
-
+    const base = p.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
+    const cue = (cid, start, out, text, background) => ({ ...base, id: cid, start, in: 0, out, text, style: { ...base.style, background } });
+    const tracks = p.tracks.filter((t) => t.kind !== 'text');
+    tracks.unshift({ id: 't-srt', kind: 'text', muted: false, hidden: false, clips: [
+      cue('s1', 0, 3, '첫 줄 자막', null), cue('s3', 3, 2, '둘째 줄 자막', null),
+    ] });
+    tracks.unshift({ id: 't-badge', kind: 'text', muted: false, hidden: false, clips: [cue('s2', 1, 1, '배지', '#000000')] });
+    window.__cutdesk.load({ ...p, tracks });
+  }, copiedId);
   await win.locator('[data-tab="text"]').click();
   await win.locator('.button-row button', { hasText: '내보내기' }).click();
   await win.waitForTimeout(500);
   const srt = readFileSync(srtPath, 'utf8');
   const cues = srt.trim().split(/\n\s*\n/);
-  check('SRT has resolved D-333 hook at 0-3s', cues[0] === '1\n00:00:00,000 --> 00:00:03,000\nD-333 저한테 최저임금 못 주면 복학합니다',
-    cues[0].replaceAll('\n', ' | '));
-  check('SRT has 15 cues', cues.length === 15, String(cues.length));
+  check('SRT starts with the first line at 0-3s', cues[0] === '1\n00:00:00,000 --> 00:00:03,000\n첫 줄 자막', cues[0].replaceAll('\n', ' | '));
+  check('SRT leaves the boxed badge out', cues.length === 2, String(cues.length));
   const beforeImport = await textCount();
   await win.locator('.button-row button', { hasText: '가져오기' }).click();
   await win.waitForTimeout(300);
-  check('SRT import adds 15 clips on a new track', (await textCount()) === beforeImport + 15, `${beforeImport} -> ${await textCount()}`);
+  check('SRT import adds 2 clips on a new track', (await textCount()) === beforeImport + 2, `${beforeImport} -> ${await textCount()}`);
 
-  // Conti rule checks (CONTI_RULES.md section numbers).
-  const issuesNow = () =>
-    win.evaluate(() => [...document.querySelectorAll('[data-rule]')].map((b) => `${b.dataset.rule}@${b.dataset.issueClip}`));
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
-  await win.locator('[data-tab="check"]').click();
-  const clean = await issuesNow();
-  check('fixture only breaks the 15-35s length rule', clean.join() === '2-7-1@', clean.join());
-  await win.evaluate((p) => {
-    const sub = { font: 'black', size: 68, color: '#FFFFFF', strokeColor: '#13293D', strokeWidth: 5, background: null,
-      align: 'center', highlight: '', highlightColor: '#FFD166', highlightDigits: false };
-    const t = (id, start, out, text, y, preset) => ({ id, start, in: 0, out, text, preset, style: sub, x: 0.5, y, anim: 'none' });
-    const tracks = p.tracks.map((tr) => {
-      if (tr.id === 'v-main') {
-        return { ...tr, muted: true, clips: tr.clips.map((c) => (c.id === 'c2' ? { ...c, out: 1.5 } : c.id === 'c3' ? { ...c, transform: { scale: 0.5, x: 0, y: 0 } } : c)) };
-      }
-      return { ...tr, muted: true };
-    });
-    tracks.unshift({ id: 't-rules', kind: 'text', muted: false, hidden: false, clips: [
-      t('r-long', 0, 2, '하나 둘 셋 넷 다섯 여섯 일곱 여덟 아홉 열 열하나 열둘 열셋 열넷 열다섯', 0.5, 'sub'),
-      t('r-top', 2, 1, '위험', 0.05, 'sub'),
-      t('r-aside', 3, 4, '(딴지는 길어져서 여러 줄로 넘어가도 줄 수 검사에서는 빠져요)', 0.5, 'aside'),
-    ] });
-    window.__cutdesk.load({ ...p, tracks });
-  }, project);
-  const broken = new Set(await issuesNow());
-  for (const want of ['2-7-1@', '2-2-1@c2', '2-4-3@', '2-5-1@c3', '2-4-1@r-long', '2-4-2@r-long', '2-4-4@r-top', '2-4-2@r-aside', '2-7-2@']) {
-    check(`rule ${want} reported`, broken.has(want), [...broken].join(' '));
-  }
-  check('aside is exempt from the two-line rule', !broken.has('2-4-1@r-aside'));
-  await win.locator('[data-rule="2-2-1"]').click();
-  const jumped = await win.evaluate(() => ({ t: window.__cutdesk.state().playhead, sel: window.__cutdesk.state().selectedClipId }));
-  check('clicking an issue jumps to the clip', jumped.sel === 'c2' && Math.abs(jumped.t - 3) < 1e-6, JSON.stringify(jumped));
   check('safe-zone guide shown', await win.locator('[data-testid="safe-zone"]').isVisible());
 
   // Speed, volume and fades: timeline ripple and the preview element's rate and gain.
@@ -326,13 +291,12 @@ try {
       .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
   check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
   // Color correction: preview (WebGL LUT) against the shared pixel function and the ffmpeg lut3d export.
-  await win.evaluate(({ p, swatchId }) => {
+  await win.evaluate(({ p, swatchId, grade }) => {
     const main = p.tracks.find((t) => t.id === 'v-main');
-    const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1 };
+    const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color: grade };
     window.__cutdesk.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
-  }, { p: project, swatchId: fx.swatch.id });
+  }, { p: project, swatchId: fx.swatch.id, grade: GRADE });
   await win.locator('[data-clip="g1"]').click();
-  await win.locator('[data-color-preset="빛뜰 보정"]').click();
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(400);
   const graded = join(dir, 'graded.mp4');
@@ -340,7 +304,7 @@ try {
   for (const [i, src] of SWATCHES.entries()) {
     const at = { x: 540, y: i * 480 + 236 };
     const shown = await readCanvas(at);
-    const want = gradePixel(src.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+    const want = gradePixel(src.map((v) => v / 255), GRADE).map((v) => Math.round(v * 255));
     const made = samplePixel(graded, 0.5, at.x, at.y);
     const off = (a, b) => Math.max(...a.map((v, k) => Math.abs(v - b[k])));
     check(`graded preview ${src.join(',')} matches pixel function and export`, off(shown, want) <= 4 && off(shown, made) <= 6,
@@ -361,9 +325,9 @@ try {
     }
     return last;
   };
-  const plain = await videoPixel({ brightness: 0, contrast: 0, saturation: 0, temperature: 0, look: 0 });
-  const gradedVideo = await videoPixel(BITTEUL_COLOR);
-  const wantVideo = gradePixel(plain.map((v) => v / 255), BITTEUL_COLOR).map((v) => Math.round(v * 255));
+  const plain = await videoPixel({ brightness: 0, contrast: 0, saturation: 0, temperature: 0 });
+  const gradedVideo = await videoPixel(GRADE);
+  const wantVideo = gradePixel(plain.map((v) => v / 255), GRADE).map((v) => Math.round(v * 255));
   check('graded video frame goes through the LUT', Math.max(...gradedVideo.map((v, k) => Math.abs(v - wantVideo[k]))) <= 12,
     `plain ${plain} / graded ${gradedVideo} / function ${wantVideo}`);
 
@@ -388,13 +352,12 @@ try {
   await win.locator('[data-color-preset="e2e 톤"]').click();
   check('preset applies to another clip', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0', await sats());
   await win.locator('[data-clip="c3"]').click();
-  await win.locator('[data-color-preset="빛뜰 보정"]').click();
+  await setRange('[data-color="saturation"]', 20);
   await win.locator('[data-testid="color-all"]').click();
-  check('apply to all sets every video-track clip', (await sats()) === 'c-top:0 c1:0 c2:0 c3:0' &&
-    (await win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video').flatMap((t) => t.clips).every((c) => c.color.look === 1))));
+  check('apply to all sets every video-track clip', (await sats()) === 'c-top:0.2 c1:0.2 c2:0.2 c3:0.2', await sats());
   await win.evaluate(() => document.activeElement.blur());
   await win.keyboard.press('Control+z');
-  check('one undo reverts apply to all', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0', await sats());
+  check('one undo reverts apply to all', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0.2', await sats());
   await win.locator('[data-delete-preset="e2e 톤"]').click();
   check('preset deleted', (await win.locator('[data-color-preset="e2e 톤"]').count()) === 0 &&
     !(await win.evaluate(() => localStorage.getItem('cutdesk.colorPresets'))).includes('e2e'));
@@ -409,8 +372,8 @@ try {
   const byId = (s, id) => s.clips.find((c) => c.id === id);
   await win.evaluate((p) => window.__cutdesk.load(p), project);
   const state = await tool('get_state');
-  check('get_state lists tracks, clips, issues and presets', /v-main \[video main\]/.test(state.text) && /c1 0-3 A1 /.test(state.text) &&
-    /src=0\.5-3\.5/.test(state.text) && state.text.includes('rule issues') && state.text.includes('"빛뜰 보정"'), `${state.text.length} chars`);
+  check('get_state lists tracks, clips and presets', /v-main \[video main\]/.test(state.text) && /c1 0-3 A1 /.test(state.text) &&
+    /src=0\.5-3\.5/.test(state.text) && state.text.includes('color presets:'), `${state.text.length} chars`);
   console.log(state.text.split('\n').map((l) => `      | ${l}`).join('\n'));
 
   const agentBase = await snap();
@@ -429,20 +392,20 @@ try {
 
   const agentDone = await tool('edit', { ops: [
     { op: 'set_clip', clip: 'c1', speed: 2 },
-    { op: 'add_text', preset: 'sub', text: 'Claude 자막', start: 0.5 },
-    { op: 'color', clip: 'c2', preset: '빛뜰 보정' },
+    { op: 'add_text', text: 'Claude 자막', start: 0.5 },
+    { op: 'color', clip: 'c2', values: { saturation: -0.5 } },
     { op: 'seek', t: 1 },
   ] });
   const agentAfter = await snap();
   const added = agentAfter.clips.find((c) => c.text === 'Claude 자막');
   check('batch applies speed ripple, text, color and seek', !agentDone.isError && byId(agentAfter, 'c1').speed === 2 &&
-    byId(agentAfter, 'c2').start === 1.5 && byId(agentAfter, 'c3').start === 3.5 && byId(agentAfter, 'c2').color.look === 1 &&
+    byId(agentAfter, 'c2').start === 1.5 && byId(agentAfter, 'c3').start === 3.5 && byId(agentAfter, 'c2').color.saturation === -0.5 &&
     added?.start === 0.5 && agentAfter.playhead === 1 && agentAfter.past === agentBase.past + 1 && agentDone.text.includes(added?.id), agentDone.text);
   await win.evaluate(() => document.activeElement.blur());
   await win.keyboard.press('Control+z');
   const agentUndone = await snap();
   check('one undo reverts the whole batch', byId(agentUndone, 'c1').speed === 1 && byId(agentUndone, 'c2').start === 3 &&
-    byId(agentUndone, 'c2').color.look === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
+    byId(agentUndone, 'c2').color.saturation === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
 
   const lookEdit = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 0.5, blend: 'multiply' }] });
   const lookTrack = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main'));
@@ -463,10 +426,6 @@ try {
   const clipAbove = await tool('edit', { ops: [{ op: 'track', track: aboveMain, clipped: true }] });
   check('a layer above another can be clipped', !clipAbove.isError &&
     (await win.evaluate((tid) => window.__cutdesk.state().project.tracks.find((t) => t.id === tid).clipped, aboveMain)) === true, clipAbove.text);
-
-  await win.evaluate(() => window.__cutdesk.load({ ...window.__cutdesk.state().project, tracks: window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'text') }));
-  const conti2 = await tool('edit', { ops: [{ op: 'import_conti', post: 'p001' }] });
-  check('import_conti reads the board (read only)', !conti2.isError && (await snap()).texts.join() === '11,4', `${conti2.text.slice(0, 60)} ${(await snap()).texts.join()}`);
 
   const shot = await tool('screenshot', { t: 0.5 });
   const jpeg = Buffer.from(shot.jpegBase64 ?? '', 'base64');
@@ -754,7 +713,7 @@ try {
   check('probe leaves plain video opaque', fx.land.alpha === undefined);
   const pic = fx.pic;
   const MC = { transform: { scale: 1, x: 0, y: 0 }, crop: { l: 0, t: 0, r: 0, b: 0 }, volume: 1, fadeIn: 0, fadeOut: 0, speed: 1,
-    color: { brightness: 0, contrast: 0, saturation: 0, temperature: 0, look: 0 }, dissolve: 0 };
+    color: { brightness: 0, contrast: 0, saturation: 0, temperature: 0 }, dissolve: 0 };
   await win.evaluate((p) => window.__cutdesk.load(p), {
     ...base,
     assets: [pic, motion],
@@ -1011,15 +970,15 @@ try {
     JSON.stringify(made && { text: made.text, effect: made.style.effect, anim: made.anim, rotation: made.rotation, out: made.out }));
   await win.locator('[data-delete-template="테스트 글로우"]').click();
   check('deleting a template removes it', (await win.locator('[data-template="테스트 글로우"]').count()) === 0);
-  await win.locator('[data-delete-template="딴지"]').click();
-  check('deleting a built-in template hides it', (await win.locator('[data-preset="aside"]').count()) === 0);
+  await win.locator('[data-delete-template="기본 텍스트"]').click();
+  check('deleting a built-in template hides it', (await win.locator('[data-preset="basic"]').count()) === 0);
   await win.reload();
   await win.waitForFunction(() => window.__cutdesk !== undefined);
   await win.locator('[data-tab="text"]').click();
-  check('deletions survive a restart', (await win.locator('[data-preset="aside"]').count()) === 0 &&
+  check('deletions survive a restart', (await win.locator('[data-preset="basic"]').count()) === 0 &&
     (await win.locator('[data-template="테스트 글로우"]').count()) === 0);
   await win.locator('[data-testid="template-restore"]').click();
-  check('built-in templates come back', (await win.locator('[data-preset="aside"]').count()) === 1 &&
+  check('built-in templates come back', (await win.locator('[data-preset="basic"]').count()) === 1 &&
     (await win.locator('[data-testid="template-restore"]').count()) === 0);
 
   // Layer actions from the track head: merge, order, duplicate, delete, rename, lock.

@@ -1,18 +1,17 @@
 import { create } from 'zustand';
 import type { ClipColor } from '../shared/color';
-import { BITTEUL_COLOR } from '../shared/color';
 
 export interface ColorPreset {
   id: string;
   name: string;
   color: ClipColor;
-  builtin: boolean;
 }
 
 const KEY = 'cutdesk.colorPresets';
-const COLOR_KEYS: (keyof ClipColor)[] = ['brightness', 'contrast', 'saturation', 'temperature', 'look'];
+const COLOR_KEYS: (keyof ClipColor)[] = ['brightness', 'contrast', 'saturation', 'temperature'];
 
-export const BUILTIN_PRESETS: ColorPreset[] = [{ id: 'bitteul', name: '빛뜰 보정', color: BITTEUL_COLOR, builtin: true }];
+const pickColor = (c: Record<string, unknown>): ClipColor =>
+  Object.fromEntries(COLOR_KEYS.map((k) => [k, c[k]])) as unknown as ClipColor;
 
 function isPreset(v: unknown): v is ColorPreset {
   if (typeof v !== 'object' || v === null) return false;
@@ -34,7 +33,8 @@ function loadUserPresets(): ColorPreset[] {
   try {
     const list: unknown = JSON.parse(raw);
     if (!Array.isArray(list) || !list.every(isPreset)) throw new Error('unexpected shape');
-    return list.map((p) => ({ ...p, builtin: false }));
+    // Presets saved before the Bitteul tone was dropped still carry 'look'; only the known fields are kept.
+    return list.map((p) => ({ id: p.id, name: p.name, color: pickColor(p.color as unknown as Record<string, unknown>) }));
   } catch (err) {
     const backup = `${KEY}.broken-${Date.now()}`;
     localStorage.setItem(backup, raw);
@@ -52,15 +52,14 @@ function persist(user: ColorPreset[]): void {
 }
 
 export function allPresets(): ColorPreset[] {
-  return [...BUILTIN_PRESETS, ...usePresets.getState().user];
+  return usePresets.getState().user;
 }
 
 /** Saves under `name`; an existing user preset with the same name is replaced. */
 export function savePreset(name: string, color: ClipColor): ColorPreset {
   const trimmed = name.trim();
   if (!trimmed) throw new Error('preset name is empty');
-  if (BUILTIN_PRESETS.some((p) => p.name === trimmed)) throw new Error(`"${trimmed}" is a built-in preset name`);
-  const preset: ColorPreset = { id: `u-${crypto.randomUUID().slice(0, 8)}`, name: trimmed, color: { ...color }, builtin: false };
+  const preset: ColorPreset = { id: `u-${crypto.randomUUID().slice(0, 8)}`, name: trimmed, color: { ...color } };
   persist([...usePresets.getState().user.filter((p) => p.name !== trimmed), preset]);
   return preset;
 }

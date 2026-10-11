@@ -19,18 +19,14 @@ import {
   layerOpacity,
   normalizeProject,
   projectDuration,
-  resolveTokens,
   spanIndex,
   validCustomFont,
 } from '../shared/project';
 import { allPresets, savePreset } from './colorPresets';
-import { BOARD_KEY, DEFAULT_BOARD_PATH } from './components/SidePanel';
-import { draftFromRows, parseBoard } from './conti';
 import { compositor, pause } from './engine/player';
 import { fontInstalled } from './engine/text';
 import { textImagesFor } from './exportTexts';
-import { makeTextClip, presetById } from './presets';
-import { checkRules } from './rules';
+import { BASIC_TEXT, makeTextClip } from './presets';
 import {
   commit,
   findClip,
@@ -52,7 +48,6 @@ import {
   withAsset,
   withColorAll,
   withTextClip,
-  withTextTracks,
   withTrack,
 } from './store';
 
@@ -104,8 +99,7 @@ function clipLine(p: Project, c: AnyClip): string {
     if (c.anim !== 'none') extra.push(`anim=${c.anim}`);
     if (c.style.highlight) extra.push(`hl=${q(c.style.highlight)}`);
     if (c.rotation) extra.push(`rot=${n(c.rotation)}`);
-    const text = resolveTokens(c.text, p.vars);
-    for (const sp of c.spans) extra.push(spanText(sp, spanIndex(text, sp.match, sp.nth) !== -1));
+    for (const sp of c.spans) extra.push(spanText(sp, spanIndex(c.text, sp.match, sp.nth) !== -1));
     return `${head} ${extra.join(' ')}`;
   }
   const asset = assetById(p, c.assetId);
@@ -127,10 +121,8 @@ function clipLine(p: Project, c: AnyClip): string {
 /** Whole editor state as compact text; defaults are omitted so Claude reads fewer tokens. */
 export function stateText(): string {
   const { project: p, playhead, selectedClipId } = useEditor.getState();
-  const v = p.vars;
   const lines = [
     `duration=${n(projectDuration(p))}s playhead=${n(playhead)} selected=${selectedClipId ?? '-'} fps=${p.fps}`,
-    `vars uploadDate=${v.uploadDate} ddayTarget=${v.ddayTarget} salary=${v.salary} goal=${v.goal}`,
     'assets:',
     ...p.assets.map(
       (a) =>
@@ -154,9 +146,6 @@ export function stateText(): string {
     for (const c of t.clips) lines.push(`    ${clipLine(p, c)}`);
   }
   if (p.markers.length) lines.push(`markers: ${p.markers.map((m) => `${n(m.t)} ${q(m.label)}`).join('; ')}`);
-  const issues = checkRules(p);
-  lines.push(issues.length ? 'rule issues:' : 'rule issues: none');
-  for (const i of issues) lines.push(`  ${i.rule} @${n(i.t)}${i.clipId ? ` ${i.clipId}` : ''} ${i.message}`);
   lines.push(`color presets: ${allPresets().map((x) => `${q(x.name)}(${colorText(x.color) || 'neutral'})`).join('; ')}`);
   return lines.join('\n');
 }
@@ -208,11 +197,6 @@ function presetColor(name: string): ClipColor {
   const preset = allPresets().find((x) => x.name === name);
   if (!preset) throw new OpError(`no color preset ${q(name)}; have ${allPresets().map((x) => q(x.name)).join(', ')}`);
   return preset.color;
-}
-
-async function readBoard() {
-  const path = localStorage.getItem(BOARD_KEY) ?? DEFAULT_BOARD_PATH;
-  return parseBoard(JSON.parse(await window.api.readTextFile(path)));
 }
 
 interface Draft {
@@ -293,11 +277,10 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
       return;
     }
     case 'add_text': {
-      const preset = presetById(op.preset);
       const over: Partial<TextClip> = {};
       if (op.text !== undefined) over.text = op.text;
       if (op.dur !== undefined) over.out = op.dur;
-      d.p = withTextClip(p, makeTextClip(preset, uid('c'), frameSnap(op.start, p.fps), over));
+      d.p = withTextClip(p, makeTextClip(BASIC_TEXT, uid('c'), frameSnap(op.start, p.fps), over));
       return;
     }
     case 'set_text': {
@@ -335,7 +318,7 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
         d.p = updateTextClip(p, op.clip, (c) => ({ ...c, spans: c.spans.filter((sp) => !key(sp)) }));
         return;
       }
-      if (spanIndex(resolveTokens(clip.text, p.vars), op.match, op.nth) === -1) {
+      if (spanIndex(clip.text, op.match, op.nth) === -1) {
         throw new OpError(`span ${op.clip}: occurrence #${op.nth} of ${q(op.match)} is not in the text`);
       }
       const prev = clip.spans.find(key) ?? { match: op.match, nth: op.nth };
@@ -395,7 +378,6 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
     }
     case 'save_color_preset': {
       const color = needMedia(p, op.clip).color;
-      if (allPresets().some((x) => x.builtin && x.name === op.name.trim())) throw new OpError(`${q(op.name)} is a built-in preset name`);
       d.after.push(() => savePreset(op.name, color));
       return;
     }
@@ -420,28 +402,6 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
           ...(clipped ? { clipped } : {}),
         };
       });
-      return;
-    }
-    case 'vars': {
-      const v = p.vars;
-      d.p = {
-        ...p,
-        vars: {
-          uploadDate: op.uploadDate ?? v.uploadDate,
-          ddayTarget: op.ddayTarget ?? v.ddayTarget,
-          salary: op.salary ?? v.salary,
-          goal: op.goal ?? v.goal,
-        },
-      };
-      return;
-    }
-    case 'import_conti': {
-      const board = await readBoard();
-      const post = board.posts.find((x) => x.id === op.post);
-      if (!post) throw new OpError(`no board post ${op.post}; have ${board.posts.map((x) => x.id).join(', ')}`);
-      const draft = draftFromRows(post.rows, () => uid('c'));
-      const next = withTextTracks(p, [draft.mains, draft.asides]);
-      d.p = { ...next, markers: draft.markers, vars: { ...board.vars, uploadDate: post.date || p.vars.uploadDate } };
       return;
     }
   }

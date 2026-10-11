@@ -815,7 +815,3 @@ export function withTextTracks(p: Project, groups: TextClip[][]): Project {
   const fresh = groups.filter((g) => g.length > 0).map((g) => newTextTrack(sortClips(g)));
   return { ...p, tracks: [...fresh, ...p.tracks] };
 }
-
-export function setVars(patch: Partial<Project['vars']>): void {
-  commit((p) => ({ ...p, vars: { ...p.vars, ...patch } }));
-}

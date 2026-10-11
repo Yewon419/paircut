@@ -27,7 +27,6 @@ import {
   isMediaClip,
   isTextClip,
   projectDuration,
-  resolveTokens,
   shiftKeys,
 } from '../../shared/project';
 import { compositor, pause, seek } from '../engine/player';
@@ -844,7 +843,7 @@ function ClipView({ project, clip, zoom, selected, dim, dissolve, onDown }: Clip
   let label: string;
   if (isTextClip(clip)) {
     kind = 'text';
-    label = resolveTokens(clip.text, project.vars).replaceAll('\n', ' ');
+    label = clip.text.replaceAll('\n', ' ');
   } else {
     const asset = assetById(project, clip.assetId);
     kind = asset.kind;

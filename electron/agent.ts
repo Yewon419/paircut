@@ -16,7 +16,7 @@ const RENDERER_TIMEOUT_MS = 30_000;
 const EXPORT_TIMEOUT_MS = 20 * 60_000;
 const APP_SHOT_WIDTH = 800;
 
-const SYSTEM_PROMPT = `You operate cutdesk, a 1080x1920 reels editor for the Instagram account 빛뜰. Reply in Korean, briefly, as plain text without markdown.
+const SYSTEM_PROMPT = `You operate cutdesk, a 1080x1920 short-form video editor. Reply in Korean, briefly, as plain text without markdown.
 Times are timeline seconds. Use ids from get_state; call it before editing unless you already know the state.
 Put related changes into one edit call: it is one undo step and all-or-nothing.
 screenshot shows the preview frame; use screenshot_app only when you need the editor UI itself.
@@ -95,7 +95,7 @@ async function buildServer() {
     version: '1',
     alwaysLoad: true,
     tools: [
-      tool('get_state', 'Editor state as compact text: assets, tracks top to bottom with clips (id start-end ...), playhead, rule issues, color presets. Default values are omitted.', {}, run('get_state')),
+      tool('get_state', 'Editor state as compact text: assets, tracks top to bottom with clips (id start-end ...), playhead, color presets. Default values are omitted.', {}, run('get_state')),
       tool(
         'edit',
         'Apply ops in order as one undo step. If any op fails nothing changes and the error names the op. Returns ids of clips the ops created.',

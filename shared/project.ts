@@ -353,13 +353,6 @@ export function canClip(project: Project, trackId: string): boolean {
   return i !== -1 && i < visual.length - 1;
 }
 
-export interface ProjectVars {
-  uploadDate: string;
-  ddayTarget: string;
-  salary: number;
-  goal: number;
-}
-
 export interface Marker {
   t: number;
   label: string;
@@ -372,7 +365,6 @@ export interface Project {
   fps: number;
   assets: MediaAsset[];
   tracks: Track[];
-  vars: ProjectVars;
   markers: Marker[];
 }
 
@@ -490,50 +482,26 @@ export function introProgress(anim: 'blur' | 'track' | 'wipe', text: string, dur
   return 1 - (1 - p) ** 3;
 }
 
-export const DEFAULT_VARS: ProjectVars = {
-  uploadDate: '',
-  ddayTarget: '2027-09-01',
-  salary: 0,
-  goal: 2236300,
-};
-
-export function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-/** Days from the upload date to the target date (2026-10-03 -> 2027-09-01 is 333). */
-export function ddayOf(vars: ProjectVars): number {
-  const from = Date.parse(`${vars.uploadDate || todayIso()}T00:00:00Z`);
-  const to = Date.parse(`${vars.ddayTarget}T00:00:00Z`);
-  if (Number.isNaN(from) || Number.isNaN(to)) return 0;
-  return Math.round((to - from) / 86400000);
-}
-
-export function formatWon(n: number): string {
-  return Math.round(n).toLocaleString('en-US');
-}
-
-/** Replaces {D}, {월급}, {목표} tokens so hook, voice line and badge always show the same numbers. */
-export function resolveTokens(text: string, vars: ProjectVars): string {
-  return text
-    .replaceAll('{D}', String(ddayOf(vars)))
-    .replaceAll('{월급}', formatWon(vars.salary))
-    .replaceAll('{목표}', formatWon(vars.goal));
+/** Keeps only the color fields the editor has; older files carry 'look' (the dropped Bitteul tone). */
+function pickColor(c: ClipColor): ClipColor {
+  return { brightness: c.brightness, contrast: c.contrast, saturation: c.saturation, temperature: c.temperature };
 }
 
 /** Fills fields added after the first project format so older files still open. */
 export function normalizeProject(p: Project): Project {
+  // Badge numbers ('vars') were dropped with the Bitteul-only features.
   return {
-    ...p,
+    ...(Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'vars')) as unknown as Project),
     // Subject masks belonged to the dropped 'behind' text effect.
     assets: p.assets.map((a) => ('matte' in a ? (Object.fromEntries(Object.entries(a).filter(([k]) => k !== 'matte')) as MediaAsset) : a)),
-    vars: { ...DEFAULT_VARS, ...(p.vars ?? {}) },
     markers: p.markers ?? [],
     tracks: p.tracks.map((t) => ({
       ...t,
       clips: t.clips.map((c) => {
-        if (isMediaClip(c)) return { ...MEDIA_CLIP_DEFAULTS, ...c };
+        if (isMediaClip(c)) {
+          const full = { ...MEDIA_CLIP_DEFAULTS, ...c };
+          return { ...full, color: pickColor({ ...NEUTRAL_COLOR, ...full.color }) };
+        }
         const style = { ...TEXT_STYLE_DEFAULTS, ...c.style };
         // 'behind' (the subject drawn over the letters) was dropped for a subject layer moved above the text.
         if ((style.effect as string) === 'behind') style.effect = 'none';
@@ -559,7 +527,6 @@ export function emptyProject(): Project {
       { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [] },
       { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] },
     ],
-    vars: { ...DEFAULT_VARS, uploadDate: todayIso() },
     markers: [],
   };
 }
