@@ -4,6 +4,7 @@ import {
   ArrowRightToLine,
   Bookmark,
   Copy,
+  LayersPlus,
   Magnet,
   Redo2,
   Scissors,
@@ -32,6 +33,7 @@ import {
 import { compositor, pause, seek } from '../engine/player';
 import { formatTime } from '../format';
 import {
+  addLayer,
   beginGesture,
   commit,
   deleteSelected,
@@ -55,6 +57,7 @@ import {
   placeAsset,
   redo,
   renameTrack,
+  selectTrack,
   splitAtPlayhead,
   tidyTracks,
   toggleMarker,
@@ -146,6 +149,7 @@ export function Timeline() {
   const zoom = useEditor((s) => s.zoom);
   const snap = useEditor((s) => s.snap);
   const selectedClipId = useEditor((s) => s.selectedClipId);
+  const selectedTrackId = useEditor((s) => s.selectedTrackId);
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -352,7 +356,7 @@ export function Timeline() {
     const up = () => {
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
-      useEditor.setState((s) => ({ project: tidyTracks(s.project) }));
+      useEditor.setState((s) => ({ project: tidyTracks(s.gestureBase ?? s.project, s.project) }));
       endGesture();
     };
     el.addEventListener('pointermove', move);
@@ -409,6 +413,7 @@ export function Timeline() {
         <ToolButton icon={Trash2} label="삭제 (Delete)" onClick={deleteSelected} disabled={!selectedClipId} testId="tl-delete" />
         <span className="sep" />
         <ToolButton icon={Bookmark} label="북마크 넣기/빼기 (M)" onClick={toggleMarker} testId="tl-bookmark" />
+        <AddLayerButton />
         <span className="sep" />
         <ToolButton icon={Undo2} label="실행 취소 (Ctrl+Z)" onClick={undo} disabled={!canUndo} testId="tl-undo" />
         <ToolButton icon={Redo2} label="다시 실행 (Ctrl+Shift+Z)" onClick={redo} disabled={!canRedo} testId="tl-redo" />
@@ -447,6 +452,7 @@ export function Timeline() {
                 key={rowKey(row)}
                 project={project}
                 track={row.track}
+                selected={row.track.id === selectedTrackId}
                 dragging={layerDrag?.id === row.track.id}
                 dropLine={dropLineFor(row.track)}
                 onDrag={onLayerDrag}
@@ -518,7 +524,7 @@ export function Timeline() {
                 <div
                   key={key}
                   data-row={key}
-                  className={`tl-track kind-${row.track.kind}${dropRow === key ? ' drop' : ''}${row.track.locked ? ' locked' : ''}`}
+                  className={`tl-track kind-${row.track.kind}${dropRow === key ? ' drop' : ''}${row.track.locked ? ' locked' : ''}${row.track.id === selectedTrackId ? ' selected' : ''}`}
                   style={{ height: TRACK_H[row.track.kind] }}
                   onDragOver={(e) => onDragOverRow(e, key)}
                   onDragLeave={() => setDropRow(null)}
@@ -561,6 +567,42 @@ function ToolButton({ icon: Icon, label, onClick, disabled = false, on = false, 
     <button className={on ? 'icon on' : 'icon'} onClick={onClick} disabled={disabled} title={label} aria-label={label} data-testid={testId}>
       <Icon />
     </button>
+  );
+}
+
+/** Adds an empty video, text or audio layer above the selected one. */
+function AddLayerButton() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('pointerdown', away, true);
+    return () => window.removeEventListener('pointerdown', away, true);
+  }, [open]);
+  const add = (kind: TrackKind) => () => {
+    addLayer(kind);
+    setOpen(false);
+  };
+  return (
+    <span className="tl-add-layer" ref={ref}>
+      <ToolButton icon={LayersPlus} label="선택한 레이어 위에 레이어 추가" onClick={() => setOpen(!open)} on={open} testId="tl-add-layer" />
+      {open && (
+        <div className="tl-menu tl-add-menu">
+          <button onClick={add('video')} data-add-layer="video">
+            영상 레이어
+          </button>
+          <button onClick={add('text')} data-add-layer="text">
+            글자 레이어
+          </button>
+          <button onClick={add('audio')} data-add-layer="audio">
+            오디오 레이어
+          </button>
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -623,15 +665,16 @@ interface LayerCardProps {
   track: Track;
   /** Gap the dragged card would drop into, shown as a line above (or below, for the last card) this one. */
   dropLine: 'before' | 'after' | null;
+  selected: boolean;
   dragging: boolean;
   onDrag: (trackId: string, clientY: number, drop: boolean) => void;
 }
 
 /**
  * A layer as a card, like a drawing app's layer list: thumbnail, name, what it holds, a visibility (or sound) check.
- * Tap it for the layer menu, drag it up or down to restack.
+ * Tap it to select the layer (new clips go there), tap the selected one for its menu, drag it up or down to restack.
  */
-function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProps) {
+function LayerCard({ project, track, dropLine, selected, dragging, onDrag }: LayerCardProps) {
   const [menuAt, setMenuAt] = useState<React.CSSProperties | null>(null);
   const [editing, setEditing] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -666,6 +709,10 @@ function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProp
         onDrag(track.id, ev.clientY, true);
         return;
       }
+      if (!selected) {
+        selectTrack(track.id);
+        return;
+      }
       const box = cardRef.current?.getBoundingClientRect();
       if (!box) return;
       const top = Math.min(box.top, window.innerHeight - MENU_H - 8);
@@ -678,7 +725,7 @@ function LayerCard({ project, track, dropLine, dragging, onDrag }: LayerCardProp
   return (
     <div
       ref={cardRef}
-      className={`tl-head layer-card${track.kind === 'text' ? ' short' : ''}${track.clipped && track.kind !== 'audio' ? ' clipped' : ''}${shown ? '' : ' off'}${menuAt ? ' open' : ''}${dragging ? ' dragging' : ''}${dropLine ? ` drop-${dropLine}` : ''}`}
+      className={`tl-head layer-card${selected ? ' selected' : ''}${track.kind === 'text' ? ' short' : ''}${track.clipped && track.kind !== 'audio' ? ' clipped' : ''}${shown ? '' : ' off'}${menuAt ? ' open' : ''}${dragging ? ' dragging' : ''}${dropLine ? ` drop-${dropLine}` : ''}`}
       data-head={track.id}
       style={{ height: TRACK_H[track.kind] }}
       onPointerDown={onDown}

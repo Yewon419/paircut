@@ -26,6 +26,8 @@ export interface EditorState {
   filePath: string | null;
   dirty: boolean;
   selectedClipId: string | null;
+  /** The layer new clips go to (paste, text templates, the media bin's add button); follows the selected clip. */
+  selectedTrackId: string | null;
   playhead: number;
   playing: boolean;
   zoom: number;
@@ -42,6 +44,7 @@ export const useEditor = create<EditorState>(() => ({
   filePath: null,
   dirty: false,
   selectedClipId: null,
+  selectedTrackId: null,
   playhead: 0,
   playing: false,
   zoom: 80,
@@ -101,8 +104,20 @@ export function redo(): void {
 }
 
 function pruneSelection(): void {
-  const { selectedClipId, project } = get();
+  const { selectedClipId, selectedTrackId, project } = get();
   if (selectedClipId && !findClip(project, selectedClipId)) set({ selectedClipId: null });
+  if (selectedTrackId && !project.tracks.some((t) => t.id === selectedTrackId)) set({ selectedTrackId: null });
+}
+
+// Selecting a clip selects its layer, also after the clip moves to another layer.
+useEditor.subscribe((s) => {
+  if (!s.selectedClipId) return;
+  const found = findClip(s.project, s.selectedClipId);
+  if (found && found.track.id !== s.selectedTrackId) set({ selectedTrackId: found.track.id });
+});
+
+export function selectTrack(trackId: string): void {
+  set({ selectedTrackId: trackId, selectedClipId: null });
 }
 
 export function loadProject(project: Project, filePath: string | null): void {
@@ -114,6 +129,7 @@ export function loadProject(project: Project, filePath: string | null): void {
     filePath,
     dirty: false,
     selectedClipId: null,
+    selectedTrackId: null,
     playhead: 0,
     playing: false,
   });
@@ -149,11 +165,15 @@ export function withTrack(project: Project, trackId: string, update: (t: Track) 
   return { ...project, tracks: project.tracks.map((t) => (t.id === trackId ? update(t) : t)) };
 }
 
-/** Removes empty tracks, but always keeps one text, one video and one audio track. */
-export function tidyTracks(project: Project): Project {
+/**
+ * Removes the tracks an edit emptied, but always keeps one text, one video and one audio track. Layers that were
+ * already empty (added on purpose to put clips on) stay.
+ */
+export function tidyTracks(before: Project, project: Project): Project {
+  const had = new Set(before.tracks.filter((t) => t.clips.length > 0).map((t) => t.id));
   const keep = (kind: TrackKind): Track | undefined => project.tracks.filter((t) => t.kind === kind).at(-1);
   const kept = new Set([keep('text'), keep('video'), keep('audio')]);
-  const tracks = project.tracks.filter((t) => t.clips.length > 0 || kept.has(t));
+  const tracks = project.tracks.filter((t) => t.clips.length > 0 || !had.has(t.id) || kept.has(t));
   return tracks.length === project.tracks.length ? project : { ...project, tracks };
 }
 
@@ -231,6 +251,59 @@ function clampTrackInsert(p: Project, kind: TrackKind, index: number): number {
     return clamp(0, lastText !== -1 ? lastText + 1 : firstPicture === -1 ? len : firstPicture);
   }
   return clamp(at('video') !== -1 ? at('video') : lastText + 1, firstAudio);
+}
+
+/**
+ * Where a new layer of `kind` goes: right above the selected layer when it is on the same side of the picture/audio
+ * split, else at the edge of that split; with no layer selected, where a dropped clip's new track would go.
+ */
+export function layerInsertIndex(p: Project, kind: TrackKind, selectedId: string | null): number {
+  const i = selectedId ? p.tracks.findIndex((t) => t.id === selectedId) : -1;
+  if (i === -1) return clampTrackInsert(p, kind, 0);
+  const firstAudio = p.tracks.findIndex((t) => t.kind === 'audio');
+  const split = firstAudio === -1 ? p.tracks.length : firstAudio;
+  if (kind === 'audio') return i >= split ? i : split;
+  return i < split ? i : split;
+}
+
+/** Adds an empty layer above the selected one and selects it. */
+export function addLayer(kind: TrackKind): void {
+  const track: Track = { id: uid(kind[0]), kind, muted: false, hidden: false, clips: [] };
+  commit((p) => {
+    const tracks = [...p.tracks];
+    tracks.splice(layerInsertIndex(p, kind, get().selectedTrackId), 0, track);
+    return { ...p, tracks };
+  });
+  set({ selectedTrackId: track.id, selectedClipId: null });
+}
+
+/**
+ * Puts a new clip on the selected layer at its start; when that spot is taken, or the layer is locked or of another
+ * kind, on a new layer right above it. Null when no layer is selected, so callers keep their usual place.
+ */
+export function withClipOnLayer(p: Project, clip: AnyClip, kind: TrackKind, layerId: string | null): Project | null {
+  const layer = layerId ? p.tracks.find((t) => t.id === layerId) : undefined;
+  if (!layer) return null;
+  if (layer.kind === kind && !layer.locked && !overlaps(layer, clip.start, clipEnd(clip), null)) {
+    return withTrack(p, layer.id, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+  }
+  const track: Track = { id: uid(kind[0]), kind, muted: false, hidden: false, clips: [clip] };
+  const tracks = [...p.tracks];
+  tracks.splice(layerInsertIndex(p, kind, layer.id), 0, track);
+  return { ...p, tracks };
+}
+
+/** The media bin's add button: at the playhead on the selected layer, else at the end of the main track. */
+export function addAssetToTimeline(asset: MediaAsset): void {
+  const { project, playhead, selectedTrackId } = get();
+  const clip = makeClip(asset, frameSnap(playhead, project.fps));
+  const placed = withClipOnLayer(project, clip, trackKindFor(asset), selectedTrackId);
+  if (!placed) {
+    appendToMain(asset);
+    return;
+  }
+  commit(() => placed);
+  set({ selectedClipId: clip.id });
 }
 
 export function moveClip(base: Project, clipId: string, toTrackId: string, start: number): Project | null {
@@ -550,7 +623,7 @@ export function clearKeys(clipId: string): void {
 export function deleteSelected(): void {
   const { project, selectedClipId } = get();
   if (!selectedClipId || findClip(project, selectedClipId)?.track.locked) return;
-  commit((p) => tidyTracks({ ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.id !== selectedClipId) })) }));
+  commit((p) => tidyTracks(p, { ...p, tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => c.id !== selectedClipId) })) }));
   set({ selectedClipId: null });
 }
 
@@ -772,15 +845,19 @@ export function deleteTrack(trackId: string): void {
     only ? withTrack(p, trackId, (t) => ({ ...t, clips: [] })) : { ...p, tracks: p.tracks.filter((t) => t.id !== trackId) },
   );
   if (selectedClipId && track.clips.some((c) => c.id === selectedClipId)) set({ selectedClipId: null });
+  pruneSelection();
 }
 
 function newTextTrack(clips: AnyClip[]): Track {
   return { id: uid('t'), kind: 'text', muted: false, hidden: false, clips };
 }
 
-/** Adds a text clip at the playhead on the first text track with room, else on a new top text track. */
+/**
+ * Adds a text clip on the selected layer (or a new text layer right above it when there is no room); with no layer
+ * selected, on the first text track with room, else on a new top text track.
+ */
 export function addTextClip(clip: TextClip): void {
-  commit((p) => withTextClip(p, clip));
+  commit((p) => withClipOnLayer(p, clip, 'text', get().selectedTrackId) ?? withTextClip(p, clip));
   set({ selectedClipId: clip.id });
 }
 
@@ -793,7 +870,7 @@ export function copySelectedText(): void {
   if (found && isTextClip(found.clip)) copiedText = structuredClone(found.clip);
 }
 
-/** A fresh copy of the last copied text clip at the playhead, placed like addTextClip. */
+/** A fresh copy of the last copied text clip at the playhead, on the selected layer like addTextClip. */
 export function pasteText(): void {
   if (!copiedText) return;
   const { project, playhead } = get();
@@ -808,7 +885,7 @@ export function withTextClip(p: Project, clip: TextClip): Project {
 
 /** Puts each group of text clips on its own new text track, above existing tracks. */
 export function addTextTracks(groups: TextClip[][], update: (p: Project) => Project = (p) => p): void {
-  commit((p) => tidyTracks(update(withTextTracks(p, groups))));
+  commit((p) => tidyTracks(p, update(withTextTracks(p, groups))));
 }
 
 export function withTextTracks(p: Project, groups: TextClip[][]): Project {

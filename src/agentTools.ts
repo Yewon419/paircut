@@ -131,9 +131,9 @@ function clipLine(p: Project, c: AnyClip): string {
 
 /** Whole editor state as compact text; defaults are omitted so Claude reads fewer tokens. */
 export function stateText(): string {
-  const { project: p, playhead, selectedClipId } = useEditor.getState();
+  const { project: p, playhead, selectedClipId, selectedTrackId } = useEditor.getState();
   const lines = [
-    `duration=${n(projectDuration(p))}s playhead=${n(playhead)} selected=${selectedClipId ?? '-'} fps=${p.fps}`,
+    `duration=${n(projectDuration(p))}s playhead=${n(playhead)} selected=${selectedClipId ?? '-'} layer=${selectedTrackId ?? '-'} fps=${p.fps}`,
     'assets:',
     ...p.assets.map(
       (a) =>
@@ -441,7 +441,7 @@ export async function applyEdit(input: unknown): Promise<AgentToolResult> {
     if (added.length) notes.push(`#${i} ${op.op} -> ${added.length > 6 ? `${added.length} clips, see get_state` : added.join(' ')}`);
   }
   if (d.p !== state.project) {
-    const next = tidyTracks(d.p);
+    const next = tidyTracks(state.project, d.p);
     commit(() => next);
   }
   for (const run of d.after) run();

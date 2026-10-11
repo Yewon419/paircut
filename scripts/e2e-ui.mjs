@@ -996,7 +996,10 @@ try {
   const textTracks = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text')
     .map((t) => ({ id: t.id, name: t.name, locked: t.locked, clips: t.clips.map((c) => ({ id: c.id, start: c.start })) })));
   const menu = async (trackId, item) => {
-    if ((await win.locator(`[data-menu="${trackId}"]`).count()) === 0) await win.locator(`[data-head="${trackId}"] .layer-thumb`).click();
+    // The first tap selects the layer, a tap on the selected layer opens its menu.
+    for (let i = 0; i < 2 && (await win.locator(`[data-menu="${trackId}"]`).count()) === 0; i++) {
+      await win.locator(`[data-head="${trackId}"] .layer-thumb`).click();
+    }
     return win.locator(`[data-menu="${trackId}"]`).getByRole('button', { name: item, exact: true });
   };
   await (await menu('t-a', '아래 레이어와 병합')).click();
@@ -1173,7 +1176,7 @@ try {
     ],
   });
   await win.evaluate((p) => window.__cutdesk.load(p), lookProject({}));
-  await win.locator('[data-head="v-hi"] .layer-thumb').click();
+  await menu('v-hi', '이름 바꾸기');
   await win.locator('[data-menu="v-hi"] [data-testid="layer-blend"]').selectOption('multiply');
   await win.locator('[data-menu="v-hi"] [data-testid="layer-opacity"]').fill('50');
   const looked = await win.evaluate(() => window.__cutdesk.state().project.tracks[0]);
@@ -1385,6 +1388,75 @@ try {
   check('the clip shows its keyframes', (await win.locator('[data-clip="fa"] .tl-key').count()) === 3);
   await win.locator('[data-testid="key-clear"]').click();
   check('clearing keyframes leaves a plain transform', (await keysOf('fa')).length === 0);
+
+  // Layer selection: new clips (templates, paste, the media bin's add button) go to the selected layer.
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    tracks: [
+      layerTrack('t-a', [{ ...text('la', 0, 2, 'A', layerStyle, 0.5, 0.3, 'none'), rotation: 0, spans: [] }]),
+      layerTrack('t-b', [{ ...text('lb', 3, 2, 'B', layerStyle, 0.5, 0.5, 'none'), rotation: 0, spans: [] }]),
+      ...base.tracks.filter((t) => t.kind !== 'text'),
+    ],
+  });
+  const sel = () => win.evaluate(() => {
+    const s = window.__cutdesk.state();
+    return { clip: s.selectedClipId, layer: s.selectedTrackId, ids: s.project.tracks.map((t) => t.id),
+      clips: Object.fromEntries(s.project.tracks.map((t) => [t.id, t.clips.map((c) => `${c.id === s.selectedClipId ? '*' : ''}${c.start}`)])) };
+  });
+  await win.locator('[data-head="t-b"] .layer-thumb').click();
+  check('tapping a layer card selects the layer without opening its menu', (await sel()).layer === 't-b' &&
+    (await win.locator('[data-menu="t-b"]').count()) === 0);
+  check('the selected layer is marked', (await win.locator('[data-head="t-b"].selected').count()) === 1 &&
+    (await win.locator('[data-row="t-b"].selected').count()) === 1);
+  await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
+  check('selecting a clip selects its layer', (await sel()).layer === 't-a');
+  await win.locator('[data-head="t-b"] .layer-thumb').click();
+  await win.evaluate(() => window.__cutdesk.seek(0));
+  await win.locator('[data-tab="text"]').click();
+  await win.locator('[data-preset="basic"]').click();
+  let ls = await sel();
+  check('a template goes to the selected layer at the playhead', ls.clips['t-b'].join() === '*0,3' && ls.layer === 't-b', JSON.stringify(ls.clips));
+  await win.evaluate(() => window.__cutdesk.seek(3.5));
+  await win.locator('[data-preset="basic"]').click();
+  ls = await sel();
+  const above = ls.ids[ls.ids.indexOf('t-b') - 1];
+  check('where the selected layer is taken, a new layer right above it gets the clip', ls.ids.slice(0, 3).join() === `t-a,${above},t-b` &&
+    ls.clips[above]?.join() === '*3.5' && ls.layer === above, JSON.stringify(ls));
+  await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
+  await win.evaluate(() => window.__cutdesk.seek(2.5));
+  await win.keyboard.press('Control+KeyC');
+  await win.keyboard.press('Control+KeyV');
+  ls = await sel();
+  check('paste goes to the copied clip\'s layer, not the top', ls.clips['t-a'].join() === '0,*2.5', JSON.stringify(ls.clips));
+
+  // The pasted clip keeps t-a selected (tapping its card now would open the layer menu).
+  await win.locator('[data-testid="tl-add-layer"]').click();
+  await win.locator('[data-add-layer="video"]').click();
+  ls = await sel();
+  const vNew = ls.ids[0];
+  check('an added video layer goes right above the selected layer and is selected', vNew.startsWith('v-') && ls.ids[1] === 't-a' &&
+    ls.layer === vNew && ls.clips[vNew].length === 0, ls.ids.join());
+  await win.locator('[data-testid="tl-add-layer"]').click();
+  await win.locator('[data-add-layer="audio"]').click();
+  ls = await sel();
+  const aNew = ls.layer;
+  check('an audio layer added above a picture layer goes on top of the audio layers', aNew.startsWith('a-') &&
+    ls.ids.indexOf(aNew) === ls.ids.findIndex((id) => id.startsWith('a-')), ls.ids.join());
+  await win.locator(`[data-head="${vNew}"] .layer-thumb`).click();
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.locator('[data-tab="media"]').click();
+  await win.locator('li.asset[title$="pic.png"] button[title^="선택한 레이어"]').click();
+  ls = await sel();
+  check('the media bin adds to the selected layer at the playhead', ls.clips[vNew].join() === '*1' && ls.layer === vNew, JSON.stringify(ls.clips));
+  await win.locator('[data-clip="lb"]').click({ position: { x: 4, y: 10 } });
+  await win.keyboard.press('Delete');
+  check('an empty layer added on purpose survives other deletes', (await sel()).ids.includes(aNew));
+  check('get_state names the selected layer', (await tool('get_state')).text.includes(`layer=${(await sel()).layer}`));
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+KeyZ');
+  await win.keyboard.press('Control+KeyZ');
+  await win.keyboard.press('Control+KeyZ');
+  check('undo takes the added layer back', !(await sel()).ids.includes(aNew));
 
   // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
   const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);

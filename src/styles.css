@@ -1840,3 +1840,24 @@ input[type='range'] {
   border-radius: 4px;
   padding: 6px;
 }
+
+.layer-card.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.tl-track.selected {
+  background: rgba(22, 169, 243, 0.06);
+}
+
+.tl-add-layer {
+  position: relative;
+  display: inline-flex;
+}
+
+.tl-add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+}

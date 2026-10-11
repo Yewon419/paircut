@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import type { SfxEntry } from '../../shared/api';
 import type { MediaAsset } from '../../shared/project';
 import { formatSeconds } from '../format';
-import { addAssets, appendToMain, useEditor } from '../store';
+import { addAssets, addAssetToTimeline, useEditor } from '../store';
 
 export const ASSET_MIME = 'application/x-cutdesk-asset';
 
@@ -165,7 +165,7 @@ export function MediaBin() {
                   {a.kind !== 'audio' ? ` · ${a.width}×${a.height}` : ''}
                 </div>
               </div>
-              <button className="icon" title="타임라인 끝에 추가" onClick={() => appendToMain(a)}>
+              <button className="icon" title="선택한 레이어의 재생 헤드에 추가 (레이어를 안 골랐으면 타임라인 끝)" onClick={() => addAssetToTimeline(a)}>
                 +
               </button>
             </li>
