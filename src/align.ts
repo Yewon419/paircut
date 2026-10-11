@@ -57,6 +57,20 @@ export function layerBox(project: Project, clip: AnyClip, t: number): Box | null
   return toBox({ x: placed.x + kept.x, y: placed.y + kept.y, w: kept.w, h: kept.h }, w, h);
 }
 
+/** Clips on screen at t whose box holds the point (fractions of the frame), top layer first. */
+export function clipsAtPoint(project: Project, t: number, x: number, y: number): string[] {
+  const hits: string[] = [];
+  for (const track of project.tracks) {
+    if (track.kind === 'audio' || track.hidden) continue;
+    for (const clip of track.clips) {
+      if (t < clip.start || t >= clipEnd(clip)) continue;
+      const box = layerBox(project, clip, t);
+      if (box && x >= box.l && x <= box.r && y >= box.t && y <= box.b) hits.push(clip.id);
+    }
+  }
+  return hits;
+}
+
 /** The frame's edges and center, the safe-zone lines, and the edges and centers of the other layers on screen at t. */
 export function snapTargets(project: Project, t: number, movingClipId: string): SnapTargets {
   const xs = [0, 0.5, 1, SAFE_ZONE.side, 1 - SAFE_ZONE.side];

@@ -1558,6 +1558,66 @@ try {
   check('a paste into another project brings the media along', other.assets.some((a) => a.id === c2asset) &&
     other.tracks.find((t) => t.id === 'v-main').clips[0]?.assetId === c2asset, JSON.stringify(other.tracks.map((t) => t.clips.length)));
 
+  // Picking in the preview: the top layer under the pointer, tapping again goes down the stack, the timeline follows.
+  const halfSize = { scale: 0.5, x: 0, y: 0 };
+  await win.evaluate((p) => window.__cutdesk.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid, redSolid],
+    tracks: [
+      layerTrack('t-x', [
+        { ...text('px', 0, 2, 'X', { ...layerStyle, background: '#FFFFFF' }, 0.5, 0.5, 'none'), rotation: 0, spans: [] },
+        { ...text('pz', 4, 2, 'Z', layerStyle, 0.5, 0.5, 'none'), rotation: 0, spans: [] },
+      ]),
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vb', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: halfSize }] },
+      { id: 'v-bg', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'vr', assetId: redSolid.id, start: 0, in: 0, out: 2, transform: halfSize }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  const picked = () => win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  await win.locator('[data-clip="pz"]').click({ position: { x: 4, y: 10 } });
+  await win.evaluate(() => window.__cutdesk.seek(1));
+  const pStage = await win.locator('.stage').boundingBox();
+  const mid = { x: pStage.x + pStage.width / 2, y: pStage.y + pStage.height / 2 };
+  const cycle = [];
+  for (let i = 0; i < 4; i++) {
+    await win.mouse.click(mid.x, mid.y);
+    cycle.push(await picked());
+  }
+  check('a press in the preview picks the top layer there, each tap the next one down, then the top again',
+    cycle.join() === 'px,vb,vr,px', cycle.join());
+  const pastBefore = await win.evaluate(() => window.__cutdesk.state().past.length);
+  check('a tap leaves no undo step', pastBefore === 0, String(pastBefore));
+  await win.mouse.click(pStage.x + 5, pStage.y + 5);
+  check('a press on an empty spot drops the selection', (await picked()) === null);
+
+  await win.locator('[data-testid="tl-zoom-in"]').click();
+  await win.locator('[data-testid="tl-zoom-in"]').click();
+  await win.locator('[data-testid="tl-zoom-in"]').click();
+  await win.evaluate(() => {
+    const el = document.querySelector('.tl-scroll');
+    el.scrollLeft = el.scrollWidth;
+  });
+  const offBefore = await win.evaluate(() =>
+    document.querySelector('[data-clip="px"]').getBoundingClientRect().right <= document.querySelector('.tl-scroll').getBoundingClientRect().left);
+  const pxY0 = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  await win.mouse.move(mid.x, mid.y);
+  await win.mouse.down();
+  await win.mouse.move(mid.x, mid.y + 20, { steps: 5 });
+  await win.mouse.up();
+  const pxY1 = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  check('pressing an unselected layer picks it and drags it in the same press', (await picked()) === 'px' &&
+    Math.abs(pxY1 - pxY0 - 20 / pStage.height) < 0.003, `${pxY0} -> ${pxY1}`);
+  await win.waitForTimeout(100);
+  const inView = await win.evaluate(() => {
+    const c = document.querySelector('[data-clip="px"]').getBoundingClientRect();
+    const s = document.querySelector('.tl-scroll').getBoundingClientRect();
+    const b = document.querySelector('.tl-body').getBoundingClientRect();
+    return { ok: c.right > s.left && c.left < s.right && c.top >= b.top - 1 && c.bottom <= b.bottom + 1, c: [c.left, c.right, c.top, c.bottom], s: [s.left, s.right, b.top, b.bottom] };
+  });
+  check('a clip picked in the preview is scrolled into view on the timeline', offBefore && inView.ok, `${offBefore} ${JSON.stringify(inView)}`);
+  await win.keyboard.press('Control+KeyZ');
+  check('one undo takes the preview drag back', Math.abs((await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y)) - pxY0) < 1e-9);
+
   // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
   const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);
   const fileState = () => win.evaluate(() => {

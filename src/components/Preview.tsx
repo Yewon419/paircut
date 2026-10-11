@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { Maximize, Minimize, Pause, Play, ScanLine, SkipBack, SkipForward } from 'lucide-react';
 import type { Project } from '../../shared/project';
 import { assetById, clipEnd, isMediaClip, isTextClip, placeVisual, projectDuration, transformAt } from '../../shared/project';
-import { layerBox, previewSize, snapMove, snapTargets } from '../align';
+import { clipsAtPoint, layerBox, previewSize, snapMove, snapTargets } from '../align';
 import { compositor, pause, seek, togglePlay } from '../engine/player';
 import { formatTime } from '../format';
 import { SAFE_ZONE } from '../safeZone';
@@ -11,6 +11,8 @@ import { beginGesture, endGesture, findClip, frameSnap, updateGesture, updateMed
 
 /** How close, in screen pixels, a dragged layer has to come to a line before it sticks. */
 const SNAP_PX = 6;
+/** A press that moves less than this, in screen pixels, is a tap, not a drag. */
+const TAP_PX = 3;
 
 /** Preview zoom choices: 0 fits the frame in the panel, the rest are fractions of the project's pixel size. */
 const ZOOMS: { value: number; label: string }[] = [
@@ -54,7 +56,12 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
    * Drags the selected layer. With the magnet on, its edges and center stick to the frame, the safe-zone lines and
    * the other layers on screen, and the line it stuck to is drawn.
    */
-  const dragWith = (e: React.PointerEvent, clipId: string, apply: (dx: number, dy: number) => (base: Project) => Project | null) => {
+  const dragWith = (
+    e: React.PointerEvent,
+    clipId: string,
+    apply: (dx: number, dy: number) => (base: Project) => Project | null,
+    onTap: () => void,
+  ) => {
     if (!stageRef.current) return;
     e.preventDefault();
     const el = e.currentTarget as HTMLElement;
@@ -66,8 +73,11 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
     const start = findClip(p0, clipId);
     const box = start ? layerBox(p0, start.clip, t0) : null;
     const targets = snapTargets(p0, t0, clipId);
+    let moved = false;
     beginGesture();
     const move = (ev: PointerEvent) => {
+      if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < TAP_PX) return;
+      moved = true;
       const dx = (ev.clientX - x0) / stage.width;
       const dy = (ev.clientY - y0) / stage.height;
       const s = box && useEditor.getState().snap && !ev.altKey
@@ -81,30 +91,58 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
       el.removeEventListener('pointerup', up);
       setSnapLines({ x: null, y: null });
       endGesture();
+      if (!moved) onTap();
     };
     el.addEventListener('pointermove', move);
     el.addEventListener('pointerup', up);
   };
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (media) {
-      const local = playhead - media.start;
-      const origin = transformAt(media, local);
-      const id = media.id;
+  /** Moves the clip with the pointer; a press that does not move calls onTap instead. */
+  const dragClip = (e: React.PointerEvent, id: string, onTap: () => void) => {
+    const { project: p, playhead: t } = useEditor.getState();
+    const f = findClip(p, id);
+    if (!f) return;
+    const c = f.clip;
+    if (isMediaClip(c)) {
+      const local = t - c.start;
+      const origin = transformAt(c, local);
       dragWith(e, id, (dx, dy) => {
         const x = origin.x + dx;
         const y = origin.y + dy;
-        return (base) => updateMediaClip(base, id, (c) => withTransformAt(c, local, { x, y }, base.fps));
-      });
-    } else if (text) {
-      const ox = text.x;
-      const oy = text.y;
-      const id = text.id;
+        return (base) => updateMediaClip(base, id, (m) => withTransformAt(m, local, { x, y }, base.fps));
+      }, onTap);
+    } else if (isTextClip(c)) {
+      const ox = c.x;
+      const oy = c.y;
       dragWith(e, id, (dx, dy) => {
         const x = ox + dx;
         const y = oy + dy;
-        return (base) => updateTextClip(base, id, (c) => ({ ...c, x, y }));
+        return (base) => updateTextClip(base, id, (m) => ({ ...m, x, y }));
+      }, onTap);
+    }
+  };
+
+  /**
+   * Pressing the picture picks the top layer under the pointer and drags it in the same press. Pressing the selected
+   * layer drags it; tapping it without moving picks the next layer down under the same point, wrapping to the top.
+   * An empty spot drops the selection.
+   */
+  const onStageDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || !stageRef.current) return;
+    const r = stageRef.current.getBoundingClientRect();
+    const { project: p, playhead: t, selectedClipId: sel } = useEditor.getState();
+    const hits = clipsAtPoint(p, t, (e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height);
+    const pick = (id: string) => useEditor.setState({ selectedClipId: id, selectedIds: [id] });
+    const i = sel ? hits.indexOf(sel) : -1;
+    if (sel && i !== -1) {
+      dragClip(e, sel, () => {
+        if (hits.length > 1) pick(hits[(i + 1) % hits.length]);
       });
+    } else if (hits.length > 0) {
+      pick(hits[0]);
+      dragClip(e, hits[0], () => {});
+    } else {
+      useEditor.setState({ selectedClipId: null });
     }
   };
 
@@ -165,7 +203,7 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
   return (
     <section className="panel preview">
       <div className={zoom > 0 ? 'stage-wrap zoomed' : 'stage-wrap'}>
-        <div className="stage" ref={stageRef} style={stageStyle} onWheel={onWheel}>
+        <div className="stage" ref={stageRef} style={stageStyle} onWheel={onWheel} onPointerDown={onStageDown}>
           <canvas ref={canvasRef} width={cw} height={ch} data-testid="preview-canvas" />
           {guides && (
             <div className="safe-zone" data-testid="safe-zone">
@@ -190,7 +228,6 @@ export function Preview({ big, onToggleBig }: { big: boolean; onToggleBig: () =>
                 width: `${(rect.w / cw) * 100}%`,
                 height: `${(rect.h / ch) * 100}%`,
               }}
-              onPointerDown={onPointerDown}
             />
           )}
           {snapLines.x !== null && <div className="snap-line v" style={{ left: `${snapLines.x * 100}%` }} data-testid="snap-x" />}

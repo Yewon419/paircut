@@ -155,6 +155,7 @@ export function Timeline() {
   const canUndo = useEditor((s) => s.past.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [dropRow, setDropRow] = useState<string | null>(null);
   const [viewWidth, setViewWidth] = useState(1000);
   const [freezing, setFreezing] = useState(false);
@@ -178,6 +179,32 @@ export function Timeline() {
         // edge-scrolling scrub (which clamps to the visible edge) is never snapped away.
         const margin = s.playing ? 40 : -1;
         if (x > el.scrollLeft + el.clientWidth - margin || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 80);
+      }),
+    [],
+  );
+
+  // A clip selected elsewhere (the preview) that is off-screen here is scrolled into view, sideways and up or down.
+  useEffect(
+    () =>
+      useEditor.subscribe((s, prev) => {
+        const id = s.selectedClipId;
+        if (!id || id === prev.selectedClipId) return;
+        requestAnimationFrame(() => {
+          const scroll = scrollRef.current;
+          const body = bodyRef.current;
+          const f = findClip(useEditor.getState().project, id);
+          if (!scroll || !body || !f) return;
+          const z = useEditor.getState().zoom;
+          const l = f.clip.start * z;
+          const r = clipEnd(f.clip) * z;
+          if (r < scroll.scrollLeft || l > scroll.scrollLeft + scroll.clientWidth) scroll.scrollLeft = Math.max(0, l - 40);
+          const el = body.querySelector<HTMLElement>(`[data-clip="${id}"]`);
+          if (!el) return;
+          const box = el.getBoundingClientRect();
+          const view = body.getBoundingClientRect();
+          if (box.top < view.top) body.scrollTop -= view.top - box.top;
+          else if (box.bottom > view.bottom) body.scrollTop += box.bottom - view.bottom;
+        });
       }),
     [],
   );
@@ -449,7 +476,7 @@ export function Timeline() {
         </label>
         <ToolButton icon={ZoomIn} label="확대" onClick={() => setZoom(zoom * 1.25)} testId="tl-zoom-in" />
       </div>
-      <div className="tl-body">
+      <div className="tl-body" ref={bodyRef}>
         <div className="tl-heads">
           <div className="tl-heads-ruler" style={{ height: RULER_H }} />
           {rows.map((row) =>
