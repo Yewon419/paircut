@@ -161,7 +161,7 @@ async function bridgeTool(name: ToolName, input: unknown): Promise<AgentToolResu
     if (problem) return { text: problem, isError: true };
     return callRendererTool(name, input);
   }
-  if (name === 'load_project' || name === 'export') return callRendererTool(name, input);
+  if (name === 'load_project' || name === 'export' || name === 'contact_sheet') return callRendererTool(name, input);
   return callTool(name, input);
 }
 

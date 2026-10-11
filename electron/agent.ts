@@ -14,6 +14,8 @@ import { AGENT_TOOLS, EditOp } from '../shared/agentOps';
 const SERVER = 'cutdesk';
 const RENDERER_TIMEOUT_MS = 30_000;
 const EXPORT_TIMEOUT_MS = 20 * 60_000;
+/** Up to 24 frames, each waiting up to 3s for video seeks. */
+const SHEET_TIMEOUT_MS = 2 * 60_000;
 const APP_SHOT_WIDTH = 800;
 
 const SYSTEM_PROMPT = `You operate cutdesk, a 1080x1920 short-form video editor. Reply in Korean, briefly, as plain text without markdown.
@@ -73,7 +75,7 @@ export async function callTool(name: AgentToolName, input: unknown): Promise<Age
 
 /** Bridge-only tools that need the editor window; export waits for the whole render. */
 export function callRendererTool(name: Exclude<ToolName, 'screenshot_app' | 'probe_media'>, input: unknown): Promise<AgentToolResult> {
-  return callRenderer(name, input, name === 'export' ? EXPORT_TIMEOUT_MS : RENDERER_TIMEOUT_MS);
+  return callRenderer(name, input, name === 'export' ? EXPORT_TIMEOUT_MS : name === 'contact_sheet' ? SHEET_TIMEOUT_MS : RENDERER_TIMEOUT_MS);
 }
 
 function reply(result: AgentToolResult): ToolReply {

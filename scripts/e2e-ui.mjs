@@ -1415,6 +1415,21 @@ try {
   check('new_project will not replace an existing file without overwrite', taken.isError && (await fileState()).filePath === fileB, taken.text);
   await win.evaluate((p) => window.__cutdesk.load(p), project);
 
+  await win.evaluate(() => window.__cutdesk.seek(2.5));
+  const sheet = await bridge('contact_sheet', { times: [0.5, 1.5, 4], cols: 2, cellW: 200 });
+  const sheetJpeg = Buffer.from(sheet.jpegBase64 ?? '', 'base64');
+  const sheetSof = sheetJpeg.indexOf(Buffer.from([0xff, 0xc0]));
+  const sheetDims = sheetSof > 0 ? `${sheetJpeg.readUInt16BE(sheetSof + 7)}x${sheetJpeg.readUInt16BE(sheetSof + 5)}` : '?';
+  check('contact_sheet lays frames in a labeled grid', !sheet.isError && sheetDims === '400x752', `${sheetDims} ${sheet.text}`);
+  check('contact_sheet lists the clips at each time', /#1 0\.5s: .*x-sub"미리보기와 내보내기" c1$/m.test(sheet.text) &&
+    / c-top c1$/m.test(sheet.text) && /#3 4s: .*x-pop"팝 등장" c2 c4$/m.test(sheet.text), sheet.text.replaceAll('\n', ' | '));
+  check('contact_sheet puts the playhead back', (await win.evaluate(() => window.__cutdesk.state().playhead)) === 2.5);
+  const sheetRange = await bridge('contact_sheet', { from: 0, to: 2, step: 0.5 });
+  check('contact_sheet from/to/step includes both ends', !sheetRange.isError && sheetRange.text.includes('5 frames') && sheetRange.text.includes('#5 2s'),
+    sheetRange.text.split('\n')[0]);
+  const sheetBig = await bridge('contact_sheet', { from: 0, to: 7, step: 0.1 });
+  check('contact_sheet refuses more than 24 frames', sheetBig.isError && sheetBig.text.includes('at most 24'), sheetBig.text);
+
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

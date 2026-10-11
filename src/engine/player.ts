@@ -200,15 +200,21 @@ class Compositor {
 
   /** Draws the frame at t and returns it scaled to w x h as base64 JPEG (no selection or guide overlays). */
   snapshot(project: Project, t: number, w: number, h: number): string {
-    if (!this.canvas) throw new Error('preview canvas is not mounted');
-    this.draw(project, t);
+    const frame = this.frame(project, t);
     const out = document.createElement('canvas');
     out.width = w;
     out.height = h;
     const ctx = out.getContext('2d');
     if (!ctx) throw new Error('2d context unavailable');
-    ctx.drawImage(this.canvas, 0, 0, w, h);
+    ctx.drawImage(frame, 0, 0, w, h);
     return out.toDataURL('image/jpeg', 0.8).replace(/^data:image\/jpeg;base64,/, '');
+  }
+
+  /** Draws the frame at t on the preview canvas and returns that canvas (no overlays). */
+  frame(project: Project, t: number): HTMLCanvasElement {
+    if (!this.canvas) throw new Error('preview canvas is not mounted');
+    this.draw(project, t);
+    return this.canvas;
   }
 
   requestDraw(): void {

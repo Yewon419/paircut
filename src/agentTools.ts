@@ -60,6 +60,17 @@ const ShotInput = z.object({ t: z.number().min(0).optional() });
 const ExportInput = z.object({ outPath: z.string().min(1), height: z.number().int().positive().default(1920) });
 const NewProjectInput = z.object({ path: z.string().min(1).optional(), discard: z.boolean().default(false) });
 const SaveProjectInput = z.object({ path: z.string().min(1).optional() });
+const SHEET_MAX = 24;
+const SheetInput = z
+  .object({
+    times: z.array(z.number().min(0)).min(1).optional(),
+    from: z.number().min(0).optional(),
+    to: z.number().min(0).optional(),
+    step: z.number().positive().optional(),
+    cols: z.number().int().min(1).max(8).default(4),
+    cellW: z.number().int().min(90).max(540).default(270),
+  })
+  .refine((v) => (v.times !== undefined) !== (v.step !== undefined), 'give either times or from/to/step');
 
 const n = (x: number): string => String(Math.round(x * 100) / 100);
 const q = (s: string): string => JSON.stringify(s.length > 40 ? `${s.slice(0, 40)}…` : s);
@@ -456,6 +467,61 @@ export async function screenshot(input: unknown): Promise<AgentToolResult> {
   return { text: `preview at ${n(playhead)}s (${SHOT_W}x${SHOT_H})`, jpegBase64 };
 }
 
+/** Clip ids on screen (or heard) at t, top track first, with a short text for text clips. */
+function activeAt(project: Project, t: number): string {
+  const ids = project.tracks
+    .filter((tr) => !tr.hidden)
+    .flatMap((tr) => tr.clips.filter((c) => c.start <= t && t < clipEnd(c)))
+    .map((c) => (isTextClip(c) ? `${c.id}${q(c.text.replaceAll('\n', ' ').slice(0, 16))}` : c.id));
+  return ids.length ? ids.join(' ') : '(empty)';
+}
+
+/**
+ * Bridge: several preview frames in one grid JPEG, each labeled with its time and the clips on screen. For checking
+ * timing and motion without exporting; frames come from the same compositor as the preview and screenshot.
+ */
+async function contactSheetTool(input: unknown): Promise<AgentToolResult> {
+  const { times: given, from = 0, to, step, cols, cellW } = SheetInput.parse(input);
+  const { project, playhead: before } = useEditor.getState();
+  const end = to ?? projectDuration(project);
+  const times = given ?? Array.from({ length: Math.floor((end - from) / (step ?? 1) + 1e-6) + 1 }, (_, i) => from + i * (step ?? 1));
+  if (times.length > SHEET_MAX) {
+    return { text: `contact_sheet: ${times.length} frames asked, at most ${SHEET_MAX}; widen step or narrow from/to`, isError: true };
+  }
+  const cellH = Math.round((cellW * project.height) / project.width);
+  const LABEL = 20;
+  const rows = Math.ceil(times.length / Math.min(cols, times.length));
+  const used = Math.min(cols, times.length);
+  const sheet = document.createElement('canvas');
+  sheet.width = used * cellW;
+  sheet.height = rows * (cellH + LABEL);
+  const ctx = sheet.getContext('2d');
+  if (!ctx) throw new Error('2d context unavailable');
+  ctx.fillStyle = '#202020';
+  ctx.fillRect(0, 0, sheet.width, sheet.height);
+  ctx.font = '13px sans-serif';
+  ctx.textBaseline = 'middle';
+  const lines: string[] = [];
+  pause();
+  try {
+    for (const [i, t] of times.entries()) {
+      setPlayhead(t);
+      compositor.sync(project, t, false);
+      await compositor.settled(project, t);
+      const x = (i % used) * cellW;
+      const y = Math.floor(i / used) * (cellH + LABEL);
+      ctx.drawImage(compositor.frame(project, t), x, y, cellW, cellH);
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(`#${i + 1} ${n(t)}s`, x + 6, y + cellH + LABEL / 2, cellW - 12);
+      lines.push(`#${i + 1} ${n(t)}s: ${activeAt(project, t)}`);
+    }
+  } finally {
+    setPlayhead(before);
+  }
+  const jpegBase64 = sheet.toDataURL('image/jpeg', 0.8).replace(/^data:image\/jpeg;base64,/, '');
+  return { text: `contact sheet ${sheet.width}x${sheet.height}, ${times.length} frames\n${lines.join('\n')}`, jpegBase64 };
+}
+
 /** Bridge: replaces the whole project as one undo step, keeping the open file path. */
 function loadProjectTool(input: unknown): AgentToolResult {
   const project = (input as { project?: Project }).project;
@@ -530,6 +596,7 @@ export async function runAgentTool(name: ToolName, input: unknown): Promise<Agen
     if (name === 'export') return await exportTool(input);
     if (name === 'new_project') return await newProjectTool(input);
     if (name === 'save_project') return await saveProjectTool(input);
+    if (name === 'contact_sheet') return await contactSheetTool(input);
     return { text: `${name} is handled by the main process`, isError: true };
   } catch (err) {
     console.error(`[agent] ${name} failed`, err);
