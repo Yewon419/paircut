@@ -90,6 +90,11 @@ interface Run {
   width: number;
 }
 
+/** CSS family and weight a font id draws with, for showing the font in the UI. */
+export function fontFace(id: FontId): { family: string; weight: number } {
+  return FONTS[id];
+}
+
 function fontString(id: FontId, customFont: string, px: number): string {
   const f = FONTS[id];
   // Regular weight so a single-face installed font is not synthetically bolded.

@@ -516,7 +516,47 @@ try {
   await win.locator('[data-tab="media"]').click();
   await win.evaluate(() => window.__cutdesk.seek(0.5));
   await win.locator('[data-clip="x-sub"]').click();
-  await win.locator('[data-testid="font-select"]').selectOption('__pc');
+  const pickFont = async (testId, value) => {
+    await win.locator(`[data-testid="${testId}"]`).click();
+    await win.locator(`[data-testid="${testId}-option"][data-value="${value}"]`).click();
+  };
+  const fontRows = () => win.locator('[data-testid="font-select-option"]');
+  const subStyle = () => win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').style);
+  await win.locator('[data-testid="font-select"]').click();
+  const rowCount = await fontRows().count();
+  const previews = await win.evaluate(() => [...document.querySelectorAll('[data-testid="font-select-option"]')].slice(0, 12).map((b) => {
+    const s = b.querySelector('.font-sample');
+    return { value: b.dataset.value, text: s.textContent, family: getComputedStyle(s).fontFamily, weight: getComputedStyle(s).fontWeight };
+  }));
+  const subLine = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').text)).split('\n')[0].trim();
+  check('font list previews the clip text in each font', rowCount > 20 &&
+    previews.find((r) => r.value === 'thin').weight === '100' && previews.find((r) => r.value === 'black').weight === '900' &&
+    previews.find((r) => r.value === 'serif').family.includes('Cutdesk Serif') && previews.every((r) => subLine.startsWith(r.text.replace('…', ''))),
+    JSON.stringify(previews.slice(0, 3)));
+  await win.locator('[data-testid="font-select-search"]').fill('명조');
+  check('font search narrows the list', (await fontRows().count()) === 1 && (await fontRows().first().getAttribute('data-value')) === 'serif');
+  await win.locator('[data-testid="font-select-search"]').fill('프리텐다드');
+  check('font search finds a family by its Korean name', (await fontRows().count()) === 9);
+  await win.locator('[data-testid="font-select-search"]').fill('montserrat');
+  await win.keyboard.press('ArrowDown');
+  await win.keyboard.press('Enter');
+  check('arrow keys and Enter pick from the search results', (await win.locator('[data-testid="font-select-popup"]').count()) === 0 &&
+    (await subStyle()).font === 'montserrat-medium');
+  await win.locator('[data-testid="font-select"]').click();
+  await win.locator('[data-testid="font-select-search"]').fill('zzqq');
+  check('a search with no match says so', (await fontRows().count()) === 0 && (await win.locator('.font-empty').count()) === 1);
+  await win.keyboard.press('Escape');
+  check('Escape closes the font list without a change', (await win.locator('[data-testid="font-select-popup"]').count()) === 0 &&
+    (await subStyle()).font === 'montserrat-medium');
+  await win.locator('[data-testid="font-select"]').click();
+  await win.locator('[data-testid="font-select-search"]').fill('Malgun Gothic');
+  check('searching an installed PC font name offers it', (await fontRows().count()) === 1 &&
+    (await fontRows().first().getAttribute('data-value')) === 'pc:Malgun Gothic');
+  await win.keyboard.press('Enter');
+  check('picking the offered PC font sets it', (await subStyle()).customFont === 'Malgun Gothic' &&
+    (await win.locator('[data-testid="pc-font"]').inputValue()) === 'Malgun Gothic');
+  await pickFont('font-select', 'black');
+  await pickFont('font-select', '__pc');
   await win.locator('[data-testid="pc-font"]').fill('Malgun Gothic');
   await win.locator('[data-testid="pc-font"]').press('Enter');
   const styleOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i).style, id);
@@ -533,7 +573,7 @@ try {
   await win.locator('[data-testid="pc-font"]').press('Enter');
   check('missing PC font warns and falls back to the bundled font', (await subWidth()) === plainWidth &&
     (await win.locator('[data-testid="pc-font-status"]').textContent()).includes('찾을 수 없어서'));
-  await win.locator('[data-testid="font-select"]').selectOption('bold');
+  await pickFont('font-select', 'bold');
   check('picking a bundled font clears the PC font', (await styleOf('x-sub')).customFont === '' && (await styleOf('x-sub')).font === 'bold');
   const pcMissing = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', customFont: 'No Such Font 7f3' }] });
   check('Claude cannot set a font this PC lacks', pcMissing.isError === true, pcMissing.text);
@@ -615,11 +655,11 @@ try {
   await win.locator('[data-testid="span-scale"]').fill('150');
   await win.locator('[data-testid="span-rotate"]').fill('10');
   await win.locator('[data-testid="span-color-on"]').check();
-  await win.locator('[data-testid="span-font"]').selectOption('thin');
+  await pickFont('span-font', 'thin');
   const sp = (await clipOf('x-sub')).spans[0];
   check('inspector sets size, turn, color and weight of the part', sp.scale === 1.5 && sp.rotate === 10 && sp.color === '#FFD166' && sp.font === 'thin', JSON.stringify(sp));
   check('inspector styling changes the drawn text', (await layerOf('x-sub')).w > flat.w);
-  await win.locator('[data-testid="span-font"]').selectOption('');
+  await pickFont('span-font', '');
   check('back to the clip font drops the part font', !('font' in (await clipOf('x-sub')).spans[0]));
   await pick(0, 2);
   await win.locator('[data-testid="span-add"]').click();

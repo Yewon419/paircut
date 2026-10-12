@@ -27,7 +27,9 @@ import type { AlignTo } from '../align';
 import { alignShift, layerBox } from '../align';
 import { allPresets, deletePreset, savePreset, usePresets } from '../colorPresets';
 import { formatSeconds, formatTime } from '../format';
-import { fontInstalled } from '../engine/text';
+import { fontFace, fontInstalled } from '../engine/text';
+import type { FontItem } from './FontPicker';
+import { FontPicker } from './FontPicker';
 import { DEFAULT_BACKGROUND } from '../presets';
 import { allTemplates, useTemplates } from '../textTemplates';
 import {
@@ -51,32 +53,46 @@ import {
 } from '../store';
 import { pause, seek } from '../engine/player';
 
-const FONTS: { id: FontId; label: string }[] = [
-  { id: 'black', label: 'Black' },
-  { id: 'extrabold', label: 'ExtraBold' },
-  { id: 'bold', label: 'Bold' },
-  { id: 'semibold', label: 'SemiBold' },
-  { id: 'medium', label: 'Medium' },
-  { id: 'regular', label: 'Regular' },
-  { id: 'light', label: 'Light' },
-  { id: 'extralight', label: 'ExtraLight' },
-  { id: 'thin', label: 'Thin' },
-  { id: 'serif', label: '명조' },
-  { id: 'pres-bold', label: '프레젠테이션' },
-  { id: 'pres-black', label: '프레젠테이션 Black' },
-  { id: 'hand', label: '손글씨' },
-  { id: 'josefin', label: 'Josefin Sans Bold' },
-  { id: 'josefin-light', label: 'Josefin Sans Light' },
-  { id: 'josefin-slab', label: 'Josefin Slab Bold' },
-  { id: 'montserrat', label: 'Montserrat ExtraBold (Gotham 대체)' },
-  { id: 'montserrat-medium', label: 'Montserrat Medium' },
-  { id: 'inter', label: 'Inter Bold (Helvetica 대체)' },
-  { id: 'inter-regular', label: 'Inter Regular' },
-  { id: 'scratch', label: '긁힌 손글씨 (Rock Salt)' },
-  { id: 'instrument-italic', label: 'Instrument Serif Italic' },
+const FONTS: { id: FontId; label: string; tags: string }[] = [
+  { id: 'black', label: 'Black', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'extrabold', label: 'ExtraBold', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'bold', label: 'Bold', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'semibold', label: 'SemiBold', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'medium', label: 'Medium', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'regular', label: 'Regular', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'light', label: 'Light', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'extralight', label: 'ExtraLight', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'thin', label: 'Thin', tags: 'pretendard 프리텐다드 고딕' },
+  { id: 'serif', label: '명조', tags: 'serif 세리프 바탕' },
+  { id: 'pres-bold', label: '프레젠테이션', tags: 'freesentation 프리젠테이션 고딕' },
+  { id: 'pres-black', label: '프레젠테이션 Black', tags: 'freesentation 프리젠테이션 고딕' },
+  { id: 'hand', label: '손글씨', tags: 'handwriting 손글씨' },
+  { id: 'josefin', label: 'Josefin Sans Bold', tags: '영문 조세핀' },
+  { id: 'josefin-light', label: 'Josefin Sans Light', tags: '영문 조세핀' },
+  { id: 'josefin-slab', label: 'Josefin Slab Bold', tags: '영문 조세핀 세리프 slab' },
+  { id: 'montserrat', label: 'Montserrat ExtraBold (Gotham 대체)', tags: '영문 몬세라트 gotham' },
+  { id: 'montserrat-medium', label: 'Montserrat Medium', tags: '영문 몬세라트 gotham' },
+  { id: 'inter', label: 'Inter Bold (Helvetica 대체)', tags: '영문 인터 helvetica' },
+  { id: 'inter-regular', label: 'Inter Regular', tags: '영문 인터 helvetica' },
+  { id: 'scratch', label: '긁힌 손글씨 (Rock Salt)', tags: '영문 rocksalt marker 마커' },
+  { id: 'instrument-italic', label: 'Instrument Serif Italic', tags: '영문 인스트루먼트 serif 세리프 이탤릭 italic' },
 ];
 
+function fontItem(f: { id: FontId; label: string; tags: string }): FontItem {
+  const face = fontFace(f.id);
+  return { value: f.id, label: f.label, family: `"${face.family}"`, weight: face.weight, tags: `${face.family} ${f.tags}` };
+}
+
+const FONT_ITEMS = FONTS.map(fontItem);
+
 const PC_FONT = '__pc';
+const MAIN_FONT_ITEMS: FontItem[] = [...FONT_ITEMS, { value: PC_FONT, label: 'PC 설치 폰트...', family: '', weight: 400, tags: 'pc 설치 windows 윈도우' }];
+const SPAN_FONT_ITEMS: FontItem[] = [{ value: '', label: '자막과 같게', family: '', weight: 400, tags: 'same 기본' }, ...FONT_ITEMS];
+
+function customFontItem(style: TextStyle): FontItem {
+  const face = fontFace(style.font);
+  return { value: PC_FONT, label: style.customFont, family: `"${style.customFont}", "${face.family}"`, weight: 400, tags: '' };
+}
 
 const ALIGNS: { to: AlignTo; label: string }[] = [
   { to: 'left', label: '왼쪽' },
@@ -309,29 +325,26 @@ function TextPanel({ project, clip }: { project: Project; clip: TextClip }) {
         <div className="row">
           <label>
             <span>글꼴</span>
-            <select
+            <FontPicker
+              items={MAIN_FONT_ITEMS}
               value={pc ? PC_FONT : style.font}
-              data-testid="font-select"
-              onChange={(e) => {
-                if (e.target.value === PC_FONT) return setPcMode(true);
+              current={style.customFont ? customFontItem(style) : undefined}
+              sample={clip.text}
+              testId="font-select"
+              onPick={(value) => {
+                if (value === PC_FONT) return setPcMode(true);
                 setPcMode(false);
-                setStyle({ font: e.target.value as FontId, customFont: '' });
+                setStyle({ font: value as FontId, customFont: '' });
               }}
-            >
-              {FONTS.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.label}
-                </option>
-              ))}
-              <option value={PC_FONT}>PC 설치 폰트...</option>
-            </select>
+              onPcFont={(customFont) => setStyle({ customFont })}
+            />
           </label>
           <label>
             <span>크기</span>
             <input type="number" min={12} max={300} value={style.size} onChange={(e) => setStyle({ size: Number(e.target.value) })} />
           </label>
         </div>
-        {pc && <PcFontInput key={id} style={style} onSet={(customFont) => setStyle({ customFont })} />}
+        {pc && <PcFontInput key={`${id}:${style.customFont}`} style={style} onSet={(customFont) => setStyle({ customFont })} />}
         <div className="row">
           <label>
             <span>글자색</span>
@@ -545,18 +558,13 @@ function SpanControls({
             <div className="row">
               <label>
                 <span>두께·글꼴</span>
-                <select
+                <FontPicker
+                  items={SPAN_FONT_ITEMS}
                   value={sp.font ?? ''}
-                  data-testid="span-font"
-                  onChange={(e) => update(i, (x) => withSpanValue(x, 'font', e.target.value ? (e.target.value as FontId) : undefined))}
-                >
-                  <option value="">자막과 같게</option>
-                  {FONTS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
+                  sample={sp.match}
+                  testId="span-font"
+                  onPick={(value) => update(i, (x) => withSpanValue(x, 'font', value ? (value as FontId) : undefined))}
+                />
               </label>
               <label>
                 <span>글자색</span>
