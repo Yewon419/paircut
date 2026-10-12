@@ -248,6 +248,10 @@ export function App() {
     <div className={big ? 'app big' : 'app'} style={layout}>
       <header className="topbar">
         <div className="brand" title="paircut">
+          <svg className="brand-mark" viewBox="150 150 724 724" aria-hidden="true">
+            <path d="M494 172 A320 320 0 0 0 494 812 Z" fill="#f0585c" />
+            <path d="M530 212 A320 320 0 0 1 530 852 Z" fill="#4b3ff0" />
+          </svg>
           paircut.
         </div>
         <div className="doc-title" title={filePath ?? undefined}>

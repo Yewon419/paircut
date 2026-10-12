@@ -89,8 +89,9 @@ function createWindow(): void {
     height: 960,
     minWidth: 1100,
     minHeight: 700,
-    backgroundColor: '#141416',
+    backgroundColor: '#dde3ec',
     title: 'paircut',
+    icon: join(__dirname, '..', '..', 'brand', 'icon.ico'),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
