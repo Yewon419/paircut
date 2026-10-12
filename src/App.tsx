@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Download, FilePlus, FolderOpen, Save } from 'lucide-react';
+import { Download, FilePlus, FolderOpen, Moon, Save, Sun } from 'lucide-react';
 import type { Project } from '../shared/project';
 import { emptyProject } from '../shared/project';
 import { copySelection, cutSelection, pasteAttributes, pasteClipboard } from './clipboard';
@@ -9,6 +9,8 @@ import { ExportDialog } from './components/ExportDialog';
 import { Inspector } from './components/Inspector';
 import { SidePanel } from './components/SidePanel';
 import { textImagesFor } from './exportTexts';
+import type { Theme } from './theme';
+import { applyTheme, initialTheme, saveTheme } from './theme';
 import { Preview } from './components/Preview';
 import { Timeline } from './components/Timeline';
 import { compositor, pause, seek, startPausedSync, togglePlay } from './engine/player';
@@ -70,6 +72,14 @@ export function App() {
   const [timelineHeight, setTimelineHeight] = useState(storedTimelineHeight);
   const [leftWidth, setLeftWidth] = useState(() => storedColumn('left'));
   const [rightWidth, setRightWidth] = useState(() => storedColumn('right'));
+  const [theme, setTheme] = useState<Theme>(initialTheme);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    saveTheme(next);
+    setTheme(next);
+  };
 
   const dragColumn = (side: keyof typeof COLUMN_KEYS) => (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -275,6 +285,14 @@ export function App() {
             다른 이름으로
           </button>
         </nav>
+        <button
+          className="icon theme-toggle"
+          data-testid="theme-toggle"
+          onClick={toggleTheme}
+          title={theme === 'dark' ? '라이트 모드로' : '다크 모드로'}
+        >
+          {theme === 'dark' ? <Sun /> : <Moon />}
+        </button>
         <button className="primary" onClick={() => setExportOpen(true)}>
           <Download />
           내보내기

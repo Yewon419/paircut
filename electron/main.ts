@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join } from 'node:path';
@@ -89,7 +89,7 @@ function createWindow(): void {
     height: 960,
     minWidth: 1100,
     minHeight: 700,
-    backgroundColor: '#dde3ec',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1f27' : '#dde3ec',
     title: 'paircut',
     icon: join(__dirname, '..', '..', 'brand', 'icon.ico'),
     webPreferences: {

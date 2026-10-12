@@ -156,12 +156,55 @@
   --image: #d98d93;
   --audio: #a497ee;
   --text-clip: #f4b4ae;
+  --accent-fill: #4b3ff0;
+  --accent-fill-hover: #3a2fd6;
+  --accent-faint: rgba(75, 63, 240, 0.05);
+  --brand-ink: #6f7787;
+  --checker-a: #e8ecf2;
+  --checker-b: #cfd6e0;
+  --stripe: rgba(59, 66, 80, 0.06);
+  --clip-edge: rgba(59, 66, 80, 0.2);
+  --shadow: rgba(40, 50, 70, 0.2);
+  --backdrop: rgba(59, 66, 80, 0.32);
   --radius: 0;
   --radius-sm: 0;
   font-family: 'Pretendard', 'Segoe UI', 'Malgun Gothic', sans-serif;
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
+}
+
+/* Dark: the same slate family at night. Violet is lifted so it reads as text on the dark ground;
+   buttons that carry white text keep a deeper violet fill. */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #1b1f27;
+  --panel: #1b1f27;
+  --panel-2: #242a34;
+  --line: #323947;
+  --line-strong: #465062;
+  --text: #d8dde6;
+  --dim: #8790a1;
+  --accent: #8a80ff;
+  --accent-strong: #8a80ff;
+  --sky: #8a80ff;
+  --accent-soft: rgba(138, 128, 255, 0.16);
+  --coral: #ff6669;
+  --danger: #ff6b6e;
+  --video: #2c3340;
+  --image: #a8616a;
+  --audio: #6f62c8;
+  --text-clip: #f4b4ae;
+  --accent-fill: #5b4ff2;
+  --accent-fill-hover: #6a5ff5;
+  --accent-faint: rgba(138, 128, 255, 0.07);
+  --brand-ink: #aab2c1;
+  --checker-a: #2a303b;
+  --checker-b: #353c49;
+  --stripe: rgba(255, 255, 255, 0.05);
+  --clip-edge: rgba(255, 255, 255, 0.12);
+  --shadow: rgba(0, 0, 0, 0.45);
+  --backdrop: rgba(5, 8, 14, 0.55);
 }
 
 * {
@@ -199,15 +242,15 @@ button:disabled {
 }
 
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
   color: #fff;
   font-weight: 600;
 }
 
 button.primary:hover:not(:disabled) {
-  background: #3a2fd6;
-  border-color: #3a2fd6;
+  background: var(--accent-fill-hover);
+  border-color: var(--accent-fill-hover);
 }
 
 button.toggle.on {
@@ -345,7 +388,7 @@ input[type='range'] {
   gap: 9px;
   padding: 0 26px 0 20px;
   border-right: 1px solid var(--line);
-  color: #6f7787;
+  color: var(--brand-ink);
   font-weight: 700;
   font-size: 23px;
   letter-spacing: -0.03em;
@@ -381,6 +424,12 @@ input[type='range'] {
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+.topbar > .theme-toggle {
+  align-self: center;
+  margin-right: 10px;
+  color: var(--dim);
 }
 
 .topbar > button.primary {
@@ -956,8 +1005,8 @@ input[type='range'] {
   width: calc(48px * var(--thumb-w, 0.5625));
   height: calc(48px * var(--thumb-h, 1));
   border: 1px solid var(--line-strong);
-  background-color: #e8ecf2;
-  background-image: conic-gradient(#cfd6e0 25%, transparent 0 50%, #cfd6e0 0 75%, transparent 0);
+  background-color: var(--checker-a);
+  background-image: conic-gradient(var(--checker-b) 25%, transparent 0 50%, var(--checker-b) 0 75%, transparent 0);
   background-size: 8px 8px;
 }
 
@@ -1016,7 +1065,7 @@ input[type='range'] {
 }
 
 .tl-track.locked {
-  background-image: repeating-linear-gradient(135deg, transparent 0 10px, rgba(59, 66, 80, 0.06) 10px 20px);
+  background-image: repeating-linear-gradient(135deg, transparent 0 10px, var(--stripe) 10px 20px);
 }
 
 .tl-track.locked .tl-clip {
@@ -1033,7 +1082,7 @@ input[type='range'] {
   background: var(--panel-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 10px 28px rgba(40, 50, 70, 0.18);
+  box-shadow: 0 10px 28px var(--shadow);
 }
 
 .tl-menu button {
@@ -1085,7 +1134,7 @@ input[type='range'] {
   background: var(--panel-2);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 10px 28px rgba(40, 50, 70, 0.18);
+  box-shadow: 0 10px 28px var(--shadow);
   overflow: hidden;
 }
 
@@ -1267,7 +1316,7 @@ input[type='range'] {
   border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: grab;
-  border: 1px solid rgba(59, 66, 80, 0.2);
+  border: 1px solid var(--clip-edge);
 }
 
 .tl-clip.kind-video {
@@ -1370,7 +1419,7 @@ input[type='range'] {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(59, 66, 80, 0.32);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1383,7 +1432,7 @@ input[type='range'] {
   background: var(--panel);
   border: 1px solid var(--line-strong);
   padding: 24px 26px;
-  box-shadow: 0 16px 40px rgba(40, 50, 70, 0.22);
+  box-shadow: 0 16px 40px var(--shadow);
 }
 
 .modal h2 {
@@ -1988,7 +2037,7 @@ input[type='range'] {
 }
 
 .tl-track.selected {
-  background: rgba(75, 63, 240, 0.05);
+  background: var(--accent-faint);
 }
 
 .tl-add-layer {
