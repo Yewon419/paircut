@@ -631,27 +631,7 @@ input[type='range'] {
 }
 
 .preview {
-  position: relative;
   background: var(--panel);
-}
-
-/* Pale vertical wordmark in the empty margin beside the frame, like the 日本 glyphs in the reference.
-   The stage paints over it whenever a wide frame reaches that far. */
-.preview::before {
-  content: '페\A어\A컷';
-  position: absolute;
-  top: 22px;
-  left: 26px;
-  white-space: pre;
-  font-size: 64px;
-  font-weight: 300;
-  line-height: 1.05;
-  color: rgba(59, 66, 80, 0.09);
-  pointer-events: none;
-}
-
-.stage-wrap {
-  position: relative;
 }
 
 .stage-wrap {
