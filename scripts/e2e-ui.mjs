@@ -40,13 +40,13 @@ const project = {
     ...base.tracks,
   ],
 };
-const vTop = () => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-top').clips[0];
+const vTop = () => window.__paircut.state().project.tracks.find((t) => t.id === 'v-top').clips[0];
 
-const app = await _electron.launch({ args: ['.'], cwd: root, env: { ...process.env, CUTDESK_TEST: '1' } });
+const app = await _electron.launch({ args: ['.'], cwd: root, env: { ...process.env, PAIRCUT_TEST: '1' } });
 try {
   const win = await app.firstWindow();
-  await win.waitForFunction(() => '__cutdesk' in window, null, { timeout: 15000 });
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.waitForFunction(() => '__paircut' in window, null, { timeout: 15000 });
+  await win.evaluate((p) => window.__paircut.load(p), project);
   await win.evaluate(() => {
     const fill = CanvasRenderingContext2D.prototype.fillRect;
     window.__draws = 0;
@@ -69,29 +69,29 @@ try {
             rej(new Error(ev.message));
           }
         });
-        void window.api.startExport(window.__cutdesk.state().project, { outPath, height: 1920 }, window.__cutdesk.texts(1920));
+        void window.api.startExport(window.__paircut.state().project, { outPath, height: 1920 }, window.__paircut.texts(1920));
       }),
     target,
   );
   const out = join(dir, 'out.mp4');
   await exportTo(out);
   check('export via IPC finished', true);
-  const layers = Object.fromEntries((await win.evaluate(() => window.__cutdesk.texts(1920))).map((l) => [l.clipId, l]));
+  const layers = Object.fromEntries((await win.evaluate(() => window.__paircut.texts(1920))).map((l) => [l.clipId, l]));
   const badge = layers['x-badge'];
   const sub = layers['x-sub'];
   const pop = layers['x-pop'];
   const title = layers['x-title'];
   check('old-format style gets tracking/shadow defaults', await win.evaluate(() => {
-    const s = window.__cutdesk.state().project.tracks[1].clips[0].style;
+    const s = window.__paircut.state().project.tracks[1].clips[0].style;
     return s.tracking === 0 && s.shadow === 0;
   }));
-  check('serif font loaded', await win.evaluate(() => document.fonts.check('800 40px "Cutdesk Serif"', '판돈')));
-  for (const face of ['700 40px "Cutdesk Presentation"', '900 40px "Cutdesk Presentation"', '400 40px "Cutdesk Hand"']) {
+  check('serif font loaded', await win.evaluate(() => document.fonts.check('800 40px "Paircut Serif"', '판돈')));
+  for (const face of ['700 40px "Paircut Presentation"', '900 40px "Paircut Presentation"', '400 40px "Paircut Hand"']) {
     check(`bundled font loaded: ${face}`, await win.evaluate((f) => [...document.fonts].some((ff) => ff.status === 'loaded' &&
       `${ff.weight} 40px "${ff.family.replace(/"/g, '')}"` === f), face));
   }
   check('badge shows D-333 for 2026-10-03', await win.evaluate(() => {
-    const c = window.__cutdesk.state().project.tracks[0].clips[0];
+    const c = window.__paircut.state().project.tracks[0].clips[0];
     return c.text;
   }) === '복학까지 D-{D}' && badge.w > 100, `badge ${badge.w}x${badge.h}`);
 
@@ -133,7 +133,7 @@ try {
     // keep the previous frame; wait for a redraw after the seek, then for three identical reads.
     const drawsBefore = await win.evaluate((t) => {
       const n = window.__draws;
-      window.__cutdesk.seek(t);
+      window.__paircut.seek(t);
       return n;
     }, p.t);
     const t0 = Date.now();
@@ -159,17 +159,17 @@ try {
   }
 
   // Editing interactions through the real UI.
-  await win.evaluate(() => window.__cutdesk.seek(1.0));
+  await win.evaluate(() => window.__paircut.seek(1.0));
   const firstClip = win.locator('[data-clip="c1"]');
   await firstClip.click({ position: { x: 20, y: 30 } });
   await win.keyboard.press('KeyS');
-  const afterSplit = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.length);
+  const afterSplit = await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips.length);
   check('S splits selected clip at playhead', afterSplit === 4, `main clips ${afterSplit}`);
   await win.keyboard.press('Control+KeyZ');
-  const afterUndo = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.length);
+  const afterUndo = await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips.length);
   check('Ctrl+Z undoes split', afterUndo === 3, `main clips ${afterUndo}`);
 
-  const zoom = await win.evaluate(() => window.__cutdesk.state().zoom);
+  const zoom = await win.evaluate(() => window.__paircut.state().zoom);
   const topClip = win.locator('[data-clip="c-top"]');
   const box = await topClip.boundingBox();
   await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -188,26 +188,26 @@ try {
   check('right handle extends image clip by 1s', Math.abs(trimmed - 2) < 0.05, `duration ${trimmed}`);
 
   // Text preset panel and inline editing.
-  const textCount = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text').flatMap((t) => t.clips).length);
+  const textCount = () => win.evaluate(() => window.__paircut.state().project.tracks.filter((t) => t.kind === 'text').flatMap((t) => t.clips).length);
   const before = await textCount();
   await win.locator('[data-tab="text"]').click();
   await win.locator('[data-preset="basic"]').click();
   check('preset button adds a text clip', (await textCount()) === before + 1, `text clips ${await textCount()}`);
   await win.locator('[data-testid="text-input"]').fill('(바뀐 딴지)');
   const edited = await win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     return s.project.tracks.flatMap((t) => t.clips).find((c) => c.id === s.selectedClipId)?.text;
   });
   check('inspector edits selected text', edited === '(바뀐 딴지)', edited);
 
-  const copiedId = await win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  const copiedId = await win.evaluate(() => window.__paircut.state().selectedClipId);
   await win.locator(`[data-clip="${copiedId}"]`).click({ position: { x: 4, y: 10 } });
-  await win.evaluate(() => window.__cutdesk.seek(4));
+  await win.evaluate(() => window.__paircut.seek(4));
   const beforePaste = await textCount();
   await win.keyboard.press('Control+KeyC');
   await win.keyboard.press('Control+KeyV');
   const pasted = await win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     return s.project.tracks.flatMap((t) => t.clips).find((c) => c.id === s.selectedClipId);
   });
   check('Ctrl+C, Ctrl+V pastes the text clip at the playhead', (await textCount()) === beforePaste + 1 &&
@@ -225,7 +225,7 @@ try {
 
   // SRT round trip: dialogue out (boxed badges left out), then back in on a new track.
   await win.evaluate((id) => {
-    const p = window.__cutdesk.state().project;
+    const p = window.__paircut.state().project;
     const base = p.tracks.flatMap((t) => t.clips).find((c) => c.id === id);
     const cue = (cid, start, out, text, background) => ({ ...base, id: cid, start, in: 0, out, text, style: { ...base.style, background } });
     const tracks = p.tracks.filter((t) => t.kind !== 'text');
@@ -233,7 +233,7 @@ try {
       cue('s1', 0, 3, '첫 줄 자막', null), cue('s3', 3, 2, '둘째 줄 자막', null),
     ] });
     tracks.unshift({ id: 't-badge', kind: 'text', muted: false, hidden: false, clips: [cue('s2', 1, 1, '배지', '#000000')] });
-    window.__cutdesk.load({ ...p, tracks });
+    window.__paircut.load({ ...p, tracks });
   }, copiedId);
   await win.locator('[data-tab="text"]').click();
   await win.locator('.button-row button', { hasText: '내보내기' }).click();
@@ -250,15 +250,15 @@ try {
   check('safe-zone guide shown', await win.locator('[data-testid="safe-zone"]').isVisible());
 
   // Speed, volume and fades: timeline ripple and the preview element's rate and gain.
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate((p) => window.__paircut.load(p), project);
   await win.locator('[data-clip="c1"]').click();
   await win.locator('[data-speed="2"]').click();
   const sped = await win.evaluate(() =>
-    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}`).join(' '));
+    window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}`).join(' '));
   check('2x halves c1 and pulls later clips in', sped === 'c1:0:2 c2:1.5:1 c3:3.5:1', sped);
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.waitForTimeout(200);
-  const rate = await win.evaluate(() => window.__cutdesk.audio('c1'));
+  const rate = await win.evaluate(() => window.__paircut.audio('c1'));
   check('preview plays c1 at 2x', rate?.rate === 2 && Math.abs(rate.level - 1) < 1e-6, JSON.stringify(rate));
   await win.evaluate(() => {
     const el = document.querySelector('[data-testid="volume"]');
@@ -270,8 +270,8 @@ try {
   await win.locator('[data-testid="fade-in"]').fill('1');
   await win.waitForTimeout(200);
   const gain = await win.evaluate(() => {
-    const c = window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips[0];
-    return { volume: c.volume, fadeIn: c.fadeIn, level: window.__cutdesk.audio('c1')?.level };
+    const c = window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips[0];
+    return { volume: c.volume, fadeIn: c.fadeIn, level: window.__paircut.audio('c1')?.level };
   });
   check('volume 150% and 1s fade in give gain 0.75 at 0.5s', gain.volume === 1.5 && gain.fadeIn === 1 && Math.abs(gain.level - 0.75) < 1e-6,
     JSON.stringify(gain));
@@ -280,25 +280,25 @@ try {
   await win.keyboard.press('Control+z');
   await win.keyboard.press('Control+z');
   const undone = await win.evaluate(() =>
-    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}:${c.volume}`).join(' '));
+    window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips.map((c) => `${c.id}:${c.start}:${c.speed}:${c.volume}`).join(' '));
   check('undo restores speed and volume', undone === 'c1:0:1:1 c2:3:1:1 c3:5:1:1', undone);
-  await win.evaluate((p) => window.__cutdesk.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
+  await win.evaluate((p) => window.__paircut.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
     clips: t.clips.map((c) => (c.id === 'c1' ? { ...c, speed: 2, fadeIn: 1, fadeOut: 1 } : c)) })) }), project);
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   await win.locator('[data-clip="c1"]').click({ position: { x: 20, y: 30 } });
   await win.keyboard.press('KeyS');
   const halves = await win.evaluate(() =>
-    window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main').clips.slice(0, 2)
+    window.__paircut.state().project.tracks.find((t) => t.id === 'v-main').clips.slice(0, 2)
       .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
   check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
   // Color correction: preview (WebGL LUT) against the shared pixel function and the ffmpeg lut3d export.
   await win.evaluate(({ p, swatchId, grade }) => {
     const main = p.tracks.find((t) => t.id === 'v-main');
     const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color: grade };
-    window.__cutdesk.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
+    window.__paircut.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
   }, { p: project, swatchId: fx.swatch.id, grade: GRADE });
   await win.locator('[data-clip="g1"]').click();
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.waitForTimeout(400);
   const graded = join(dir, 'graded.mp4');
   await exportTo(graded);
@@ -312,10 +312,10 @@ try {
       `preview ${shown} / function ${want} / export ${made}`);
   }
   const videoPixel = async (color) => {
-    await win.evaluate(({ p, c }) => window.__cutdesk.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
+    await win.evaluate(({ p, c }) => window.__paircut.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
       clips: t.clips.map((k) => (k.id === 'c1' ? { ...k, color: c } : k)) })) }), { p: project, c: color });
     const before = await win.evaluate(() => window.__draws);
-    await win.evaluate(() => window.__cutdesk.seek(0.5));
+    await win.evaluate(() => window.__paircut.seek(0.5));
     await win.waitForFunction((n) => window.__draws > n, before);
     let last = null;
     for (let i = 0; i < 50; i++) {
@@ -340,14 +340,14 @@ try {
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
   }, { selector, value });
-  const sats = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video')
+  const sats = () => win.evaluate(() => window.__paircut.state().project.tracks.filter((t) => t.kind === 'video')
     .flatMap((t) => t.clips).map((c) => `${c.id}:${c.color.saturation}`).sort().join(' '));
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate((p) => window.__paircut.load(p), project);
   await win.locator('[data-clip="c1"]').click();
   await setRange('[data-color="saturation"]', -40);
   await win.locator('[data-testid="preset-name"]').fill('e2e 톤');
   await win.locator('[data-testid="preset-save"]').click();
-  const stored = await win.evaluate(() => JSON.parse(localStorage.getItem('cutdesk.colorPresets')).map((p) => `${p.name}:${p.color.saturation}`).join());
+  const stored = await win.evaluate(() => JSON.parse(localStorage.getItem('paircut.colorPresets')).map((p) => `${p.name}:${p.color.saturation}`).join());
   check('preset saved with current values', stored.includes('e2e 톤:-0.4'), stored);
   await win.locator('[data-clip="c2"]').click();
   await win.locator('[data-color-preset="e2e 톤"]').click();
@@ -361,17 +361,17 @@ try {
   check('one undo reverts apply to all', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0.2', await sats());
   await win.locator('[data-delete-preset="e2e 톤"]').click();
   check('preset deleted', (await win.locator('[data-color-preset="e2e 톤"]').count()) === 0 &&
-    !(await win.evaluate(() => localStorage.getItem('cutdesk.colorPresets'))).includes('e2e'));
+    !(await win.evaluate(() => localStorage.getItem('paircut.colorPresets'))).includes('e2e'));
 
   // In-app Claude tools, called through the main process exactly as the Agent SDK would (no model call).
-  const tool = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskAgent.callTool(n, i), [name, input]);
+  const tool = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__paircutAgent.callTool(n, i), [name, input]);
   const snap = () => win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     const clips = s.project.tracks.flatMap((t) => t.clips);
     return { clips, past: s.past.length, playhead: s.playhead, texts: s.project.tracks.filter((t) => t.kind === 'text').map((t) => t.clips.length) };
   });
   const byId = (s, id) => s.clips.find((c) => c.id === id);
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate((p) => window.__paircut.load(p), project);
   const state = await tool('get_state');
   check('get_state lists tracks, clips and presets', /v-main \[video main\]/.test(state.text) && /c1 0-3 A1 /.test(state.text) &&
     /src=0\.5-3\.5/.test(state.text) && state.text.includes('color presets:'), `${state.text.length} chars`);
@@ -409,24 +409,24 @@ try {
     byId(agentUndone, 'c2').color.saturation === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
 
   const lookEdit = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 0.5, blend: 'multiply' }] });
-  const lookTrack = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main'));
+  const lookTrack = await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-main'));
   const lookState = await tool('get_state');
   check('track sets layer opacity and blend mode, and get_state shows them', !lookEdit.isError && lookTrack.opacity === 0.5 &&
     lookTrack.blend === 'multiply' && /v-main \[video main multiply opacity=0\.5\]/.test(lookState.text), lookEdit.text);
   const backToNormal = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 1, blend: 'normal' }] });
-  const plainTrack = await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-main'));
+  const plainTrack = await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-main'));
   check('track back to full opacity and normal drops the fields', !backToNormal.isError && !('opacity' in plainTrack) && !('blend' in plainTrack));
   const clipBottom = await tool('edit', { ops: [{ op: 'track', track: 'v-main', clipped: true }] });
   check('the bottom picture layer cannot be clipped', clipBottom.isError && clipBottom.text.includes('nothing under it'), clipBottom.text);
   const audioLook = await tool('edit', { ops: [{ op: 'track', track: 'a-1', opacity: 0.5 }] });
   check('audio tracks take no layer look', audioLook.isError && audioLook.text.includes('not audio'), audioLook.text);
   const aboveMain = await win.evaluate(() => {
-    const ts = window.__cutdesk.state().project.tracks.filter((t) => t.kind !== 'audio');
+    const ts = window.__paircut.state().project.tracks.filter((t) => t.kind !== 'audio');
     return ts[ts.findIndex((t) => t.id === 'v-main') - 1]?.id;
   });
   const clipAbove = await tool('edit', { ops: [{ op: 'track', track: aboveMain, clipped: true }] });
   check('a layer above another can be clipped', !clipAbove.isError &&
-    (await win.evaluate((tid) => window.__cutdesk.state().project.tracks.find((t) => t.id === tid).clipped, aboveMain)) === true, clipAbove.text);
+    (await win.evaluate((tid) => window.__paircut.state().project.tracks.find((t) => t.id === tid).clipped, aboveMain)) === true, clipAbove.text);
 
   const shot = await tool('screenshot', { t: 0.5 });
   const jpeg = Buffer.from(shot.jpegBase64 ?? '', 'base64');
@@ -444,7 +444,7 @@ try {
   // Cross dissolve: preview against export across both cuts, inspector buttons, timeline mark, split.
   const split = await importMedia(f('split.mp4'), join(dir, 'cache'));
   const dproj = dissolveProject(base, split);
-  await win.evaluate((p) => window.__cutdesk.load(p), dproj);
+  await win.evaluate((p) => window.__paircut.load(p), dproj);
   const dissolved = join(dir, 'dissolve.mp4');
   await exportTo(dissolved);
   for (const [t] of DISSOLVE_SAMPLES) {
@@ -454,7 +454,7 @@ try {
     const off = Math.max(...shown.map((v, k) => Math.abs(v - made[k])));
     check(`dissolve preview matches export at ${t}s`, off <= 20, `preview ${shown} / export ${made}`);
   }
-  const dissolveOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.dissolve, id);
+  const dissolveOf = (id) => win.evaluate((i) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.dissolve, id);
   await win.locator('[data-tab="media"]').click();
   await win.locator('[data-clip="dx"]').click();
   check('first clip cannot dissolve', await win.locator('[data-dissolve="0.5"]').isDisabled());
@@ -462,7 +462,7 @@ try {
   check('second clip shows its 1s dissolve', (await win.locator('[data-dissolve="1"]').getAttribute('class')) === 'on');
   await win.locator('[data-dissolve="0.5"]').click();
   const mark = await win.locator('[data-clip="dy"] [data-dissolve-mark]').boundingBox();
-  const zoomNow = await win.evaluate(() => window.__cutdesk.state().zoom);
+  const zoomNow = await win.evaluate(() => window.__paircut.state().zoom);
   check('dissolve set from the inspector and marked on the timeline', (await dissolveOf('dy')) === 0.5 &&
     Math.abs(mark.width - 0.25 * zoomNow) < 2, `mark ${mark?.width}px at zoom ${zoomNow}`);
   await win.evaluate(() => document.activeElement.blur());
@@ -475,12 +475,12 @@ try {
   check('Claude can set a dissolve and reads it back', !viaClaude.isError && (await tool('get_state')).text.includes('dissolve=0.3'), viaClaude.text);
 
   // Crop: preview against export on an image and a rotated phone clip, inspector sliders, Claude op.
-  const cropOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.crop, id);
+  const cropOf = (id) => win.evaluate((i) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.crop, id);
   const cproj = { ...base, tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
     { ...base.tracks[1].clips[1], id: 'k1', assetId: fx.swatch.id, start: 0, in: 0, out: 1, crop: { l: 0.1, t: 0.25, r: 0.2, b: 0.25 } },
     { ...base.tracks[1].clips[2], id: 'k2', assetId: fx.rot.id, start: 1, in: 0, out: 2, crop: { l: 0.3, t: 0.1, r: 0, b: 0.4 } },
   ] }] };
-  await win.evaluate((p) => window.__cutdesk.load(p), cproj);
+  await win.evaluate((p) => window.__paircut.load(p), cproj);
   const cropped = join(dir, 'crop.mp4');
   await exportTo(cropped);
   const cropProbes = [
@@ -510,28 +510,28 @@ try {
   check('Claude crop past 95% across is rejected', cropBad.isError === true && (await cropOf('k2')).l === 0.3, cropBad.text);
 
   // Installed (PC) fonts: Malgun Gothic ships with Windows; the made-up name must fall back to the bundled font.
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
-  const subWidth = () => win.evaluate(() => window.__cutdesk.texts(1920).find((l) => l.clipId === 'x-sub').w);
+  await win.evaluate((p) => window.__paircut.load(p), project);
+  const subWidth = () => win.evaluate(() => window.__paircut.texts(1920).find((l) => l.clipId === 'x-sub').w);
   const plainWidth = await subWidth();
   await win.locator('[data-tab="media"]').click();
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.locator('[data-clip="x-sub"]').click();
   const pickFont = async (testId, value) => {
     await win.locator(`[data-testid="${testId}"]`).click();
     await win.locator(`[data-testid="${testId}-option"][data-value="${value}"]`).click();
   };
   const fontRows = () => win.locator('[data-testid="font-select-option"]');
-  const subStyle = () => win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').style);
+  const subStyle = () => win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').style);
   await win.locator('[data-testid="font-select"]').click();
   const rowCount = await fontRows().count();
   const previews = await win.evaluate(() => [...document.querySelectorAll('[data-testid="font-select-option"]')].slice(0, 12).map((b) => {
     const s = b.querySelector('.font-sample');
     return { value: b.dataset.value, text: s.textContent, family: getComputedStyle(s).fontFamily, weight: getComputedStyle(s).fontWeight };
   }));
-  const subLine = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').text)).split('\n')[0].trim();
+  const subLine = (await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'x-sub').text)).split('\n')[0].trim();
   check('font list previews the clip text in each font', rowCount > 20 &&
     previews.find((r) => r.value === 'thin').weight === '100' && previews.find((r) => r.value === 'black').weight === '900' &&
-    previews.find((r) => r.value === 'serif').family.includes('Cutdesk Serif') && previews.every((r) => subLine.startsWith(r.text.replace('…', ''))),
+    previews.find((r) => r.value === 'serif').family.includes('Paircut Serif') && previews.every((r) => subLine.startsWith(r.text.replace('…', ''))),
     JSON.stringify(previews.slice(0, 3)));
   await win.locator('[data-testid="font-select-search"]').fill('명조');
   check('font search narrows the list', (await fontRows().count()) === 1 && (await fontRows().first().getAttribute('data-value')) === 'serif');
@@ -559,7 +559,7 @@ try {
   await pickFont('font-select', '__pc');
   await win.locator('[data-testid="pc-font"]').fill('Malgun Gothic');
   await win.locator('[data-testid="pc-font"]').press('Enter');
-  const styleOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i).style, id);
+  const styleOf = (id) => win.evaluate((i) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i).style, id);
   check('PC font set from the inspector', (await styleOf('x-sub')).customFont === 'Malgun Gothic' &&
     (await win.locator('[data-testid="pc-font-status"]').textContent()).includes('설치된'));
   const pcWidth = await subWidth();
@@ -583,8 +583,8 @@ try {
   check('Claude sets a PC font and reads it back', !pcOk.isError && (await tool('get_state')).text.includes('pcFont="Malgun Gothic"'), pcOk.text);
 
   // Typography: whole-text rotation and styled parts, drawn by the same rasterizer for preview and export.
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
-  const layerOf = (id) => win.evaluate((i) => window.__cutdesk.texts(1920).find((l) => l.clipId === i), id);
+  await win.evaluate((p) => window.__paircut.load(p), project);
+  const layerOf = (id) => win.evaluate((i) => window.__paircut.texts(1920).find((l) => l.clipId === i), id);
   const flat = await layerOf('x-sub');
   const rotOk = await tool('edit', { ops: [{ op: 'set_text', clip: 'x-sub', rotation: 90 }] });
   const turned = await layerOf('x-sub');
@@ -631,10 +631,10 @@ try {
   check('removed spans are gone', !(await tool('get_state')).text.includes('span('));
 
   // The same typography from the inspector: pick letters in the text box, then style the picked part.
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.evaluate((p) => window.__paircut.load(p), project);
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.locator('[data-clip="x-sub"]').click();
-  const clipOf = (id) => win.evaluate((i) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i), id);
+  const clipOf = (id) => win.evaluate((i) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i), id);
   await win.locator('[data-testid="text-rotation"]').fill('-8');
   check('rotation set from the inspector', (await clipOf('x-sub')).rotation === -8);
   await win.locator('[data-testid="text-rotation"]').fill('0');
@@ -702,12 +702,12 @@ try {
   check('fit goes back to the panel size', Math.abs((await stageHeight()) - stage0) <= 2);
 
   // Solid color backgrounds: made as a frame-size PNG, so preview and export treat them like any picture.
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate((p) => window.__paircut.load(p), project);
   await win.locator('[data-tab="media"]').click();
   await win.locator('[data-testid="solid-color"]').fill('#3366cc');
   await win.locator('[data-testid="solid-add"]').click();
-  await win.waitForFunction(() => window.__cutdesk.state().project.assets.some((a) => a.solid), null, { timeout: 15000 });
-  const solidAsset = await win.evaluate(() => window.__cutdesk.state().project.assets.find((a) => a.solid));
+  await win.waitForFunction(() => window.__paircut.state().project.assets.some((a) => a.solid), null, { timeout: 15000 });
+  const solidAsset = await win.evaluate(() => window.__paircut.state().project.assets.find((a) => a.solid));
   check('solid button adds a frame-size picture', solidAsset.solid === '#3366CC' && solidAsset.kind === 'image' &&
     solidAsset.width === 1080 && solidAsset.height === 1920 && solidAsset.name === '단색 #3366CC', JSON.stringify(solidAsset));
   const solidVia = await tool('edit', { ops: [{ op: 'add_solid', color: '#00c853', start: 0, dur: 1, track: 'new' }] });
@@ -737,13 +737,13 @@ try {
   await win.locator('[data-testid="solid-recolor"]').fill('#ff8800');
   await win.locator('[data-testid="solid-apply"]').click();
   await win.waitForFunction((cid) => {
-    const p = window.__cutdesk.state().project;
+    const p = window.__paircut.state().project;
     const c = p.tracks.flatMap((t) => t.clips).find((x) => x.id === cid);
     return p.assets.find((a) => a.id === c.assetId)?.solid === '#FF8800';
   }, solidId, { timeout: 15000 });
   check('inspector recolors a solid clip', true);
   const reuse = await tool('edit', { ops: [{ op: 'add_solid', color: '#FF8800', start: 3, dur: 1, track: 'new' }] });
-  const solidCount = await win.evaluate(() => window.__cutdesk.state().project.assets.filter((a) => a.solid === '#FF8800').length);
+  const solidCount = await win.evaluate(() => window.__paircut.state().project.assets.filter((a) => a.solid === '#FF8800').length);
   check('the same color reuses its asset', !reuse.isError && solidCount === 1, reuse.text);
   const badColor = await tool('edit', { ops: [{ op: 'add_solid', color: 'red' }] });
   check('a solid color that is not #RRGGBB is rejected', badColor.isError === true, badColor.text);
@@ -755,7 +755,7 @@ try {
   const pic = fx.pic;
   const MC = { transform: { scale: 1, x: 0, y: 0 }, crop: { l: 0, t: 0, r: 0, b: 0 }, volume: 1, fadeIn: 0, fadeOut: 0, speed: 1,
     color: { brightness: 0, contrast: 0, saturation: 0, temperature: 0 }, dissolve: 0 };
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [pic, motion],
     tracks: [
@@ -764,7 +764,7 @@ try {
     ],
   });
   check('get_state marks the motion graphic', (await tool('get_state')).text.includes('transparent'));
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   let mgEdge = null;
   let mgMid = null;
   for (let i = 0; i < 30; i++) {
@@ -794,7 +794,7 @@ try {
       { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'bg', assetId: pic.id, start: 0, in: 0, out: 2 }] },
     ],
   });
-  await win.evaluate((p) => window.__cutdesk.load(p), fxProject('none', 'none'));
+  await win.evaluate((p) => window.__paircut.load(p), fxProject('none', 'none'));
   const glyph = await layerOf('fx');
   // A 24px block fully inside the letter, found on the plain raster; centered text keeps the letter in place for every effect.
   const inside = await win.evaluate(async (b64) => {
@@ -825,7 +825,7 @@ try {
   const inP = { x: glyph.x + inside.x, y: glyph.y + inside.y, s: 24 };
   const besideP = { x: glyph.x + glyph.w + 30, y: glyph.y + inside.y, s: 24 };
   const settled = async (t, p) => {
-    await win.evaluate((at) => window.__cutdesk.seek(at), t);
+    await win.evaluate((at) => window.__paircut.seek(at), t);
     let last = null;
     for (let i = 0; i < 20; i++) {
       await win.waitForTimeout(120);
@@ -846,7 +846,7 @@ try {
     { effect: 'invert', anim: 'none', t: 1, at: besideP, want: [255, 0, 0] },
   ];
   for (const e of effects) {
-    await win.evaluate((p) => window.__cutdesk.load(p), fxProject(e.effect, e.anim));
+    await win.evaluate((p) => window.__paircut.load(p), fxProject(e.effect, e.anim));
     const shown = await settled(e.t, e.at);
     const out = join(dir, `fx-${e.effect}-${e.anim}.mp4`);
     await exportTo(out);
@@ -856,7 +856,7 @@ try {
     check(`${e.effect}${e.anim === 'fade' ? ' mid fade' : ''} ${where} the letter: export`, close(made, e.want, 8), `${made} want ${e.want}`);
   }
   // Frost over a real picture: the blur reads neighbours, so compare preview with export rather than a formula.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...fxProject('frost', 'none'),
     assets: [fx.land],
     tracks: [
@@ -871,7 +871,7 @@ try {
   check('frost over footage: preview matches export', close(frostShown, frostMade, 14), `preview ${frostShown} / export ${frostMade}`);
   // Glow, chroma and glitch are baked into the text images, so preview and export are compared pixel for pixel.
   const atBoth = async (effect, t, p, size) => {
-    await win.evaluate((pr) => window.__cutdesk.load(pr), fxProject(effect, 'none'));
+    await win.evaluate((pr) => window.__paircut.load(pr), fxProject(effect, 'none'));
     const shown = await settled(t, p);
     const out = join(dir, `fx-${effect}-${t}.mp4`);
     await exportTo(out);
@@ -885,7 +885,7 @@ try {
   const chromaAt = await atBoth('chroma', 1, fringeP, 6);
   check('chroma puts a cyan fringe right of the letter: preview', close(chromaAt.shown, [0, 229, 255], 30), String(chromaAt.shown));
   check('chroma: preview matches export', close(chromaAt.shown, chromaAt.made, 20), `${chromaAt.shown} / ${chromaAt.made}`);
-  await win.evaluate((pr) => window.__cutdesk.load(pr), fxProject('glitch', 'none'));
+  await win.evaluate((pr) => window.__paircut.load(pr), fxProject('glitch', 'none'));
   const gl = await layerOf('fx');
   check('glitch makes three distinct frames', gl.variants.length === 3 && new Set([gl.pngBase64, ...gl.variants]).size === 4);
   const plainAt = await atBoth('glitch', 1, inP, 24);
@@ -907,13 +907,13 @@ try {
     pr.tracks[0].clips = [{ ...fxClip('none', anim), text: 'I I' }];
     return pr;
   };
-  await win.evaluate((pr) => window.__cutdesk.load(pr), introProject('none'));
+  await win.evaluate((pr) => window.__paircut.load(pr), introProject('none'));
   const pair = await layerOf('fx');
   check('a plain text has no intro frames', pair.intro === null);
   const rightP = { x: pair.x + pair.w - 100, y: pair.y + Math.round(pair.h / 2) - 50, s: 100 };
   const pairSettled = await settled(1, rightP);
   for (const [anim, t] of [['type', 0], ['word', 0.1], ['letters', 0.1], ['blur', 0.3], ['track', 0.3], ['wipe', 0.3]]) {
-    await win.evaluate((pr) => window.__cutdesk.load(pr), introProject(anim));
+    await win.evaluate((pr) => window.__paircut.load(pr), introProject(anim));
     const lay = await layerOf('fx');
     check(`${anim}: exports intro frames`, lay.intro !== null && lay.intro.frames.length > 1, String(lay.intro?.frames.length));
     const mid = await settled(t, rightP);
@@ -929,18 +929,18 @@ try {
   }
 
   // The effect from the inspector and from Claude.
-  await win.evaluate((p) => window.__cutdesk.load(p), fxProject('none', 'none'));
+  await win.evaluate((p) => window.__paircut.load(p), fxProject('none', 'none'));
   await win.locator('[data-clip="fx"]').click();
   await win.locator('[data-testid="text-effect"]').selectOption('mono');
   check('inspector sets the text effect', (await clipOf('fx')).style.effect === 'mono');
   const fxOp = await tool('edit', { ops: [{ op: 'set_text', clip: 'fx', effect: 'frost' }] });
   check('Claude sets the text effect and reads it back', !fxOp.isError && (await tool('get_state')).text.includes('fx=frost'), fxOp.text);
   const oldStyle = await win.evaluate(() => {
-    const p = structuredClone(window.__cutdesk.state().project);
+    const p = structuredClone(window.__paircut.state().project);
     delete p.tracks[0].clips[0].style.effect;
     return p;
   });
-  await win.evaluate((p) => window.__cutdesk.load(p), oldStyle);
+  await win.evaluate((p) => window.__paircut.load(p), oldStyle);
   check('a project saved before effects opens with none', (await clipOf('fx')).style.effect === 'none');
 
   // The dropped 'behind' effect: older files open with no effect and without their subject masks.
@@ -948,8 +948,8 @@ try {
   const behindProject = fxProject('behind', 'none');
   behindProject.assets = [{ ...boxAsset, matte: { dir: join(dir, 'old-masks'), from: 0, to: 2, fps: 30, count: 61 } }];
   behindProject.tracks[1].clips = [{ ...MC, id: 'bg', assetId: boxAsset.id, start: 0, in: 0, out: 2 }];
-  await win.evaluate((p) => window.__cutdesk.load(p), behindProject);
-  const opened = await win.evaluate(() => window.__cutdesk.state().project);
+  await win.evaluate((p) => window.__paircut.load(p), behindProject);
+  const opened = await win.evaluate(() => window.__paircut.state().project);
   check('a file with a behind text opens with no effect and no masks', opened.tracks[0].clips[0].style.effect === 'none' &&
     !('matte' in opened.assets[0]), JSON.stringify({ effect: opened.tracks[0].clips[0].style.effect, keys: Object.keys(opened.assets[0]) }));
 
@@ -959,11 +959,11 @@ try {
   layerProject.assets = [boxAsset];
   layerProject.tracks[0].clips = [];
   layerProject.tracks[1].clips = [{ ...MC, id: 'bg', assetId: boxAsset.id, start: 0, in: 0, out: 2 }];
-  await win.evaluate((p) => window.__cutdesk.load(p), layerProject);
+  await win.evaluate((p) => window.__paircut.load(p), layerProject);
   await win.locator('[data-clip="bg"]').click();
   await win.locator('[data-testid="subject-layer"]').click();
-  await win.waitForFunction(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'video').length === 2, null, { timeout: 300000 });
-  const layered = await win.evaluate(() => window.__cutdesk.state().project);
+  await win.waitForFunction(() => window.__paircut.state().project.tracks.filter((t) => t.kind === 'video').length === 2, null, { timeout: 300000 });
+  const layered = await win.evaluate(() => window.__paircut.state().project);
   const subj = layered.tracks[1].clips[0];
   const subjAsset = layered.assets.find((a) => a.id === subj.assetId);
   check('subject goes on a new track right above its clip', layered.tracks[2].clips[0].id === 'bg' &&
@@ -972,7 +972,7 @@ try {
   await win.evaluate(([p, b]) => {
     const tracks = [...p.tracks];
     tracks.splice(2, 0, { id: 'v-blue', kind: 'video', muted: false, hidden: false, clips: [{ ...p.tracks[2].clips[0], id: 'blue', assetId: b.id, in: 0, out: 2, speed: 1 }] });
-    window.__cutdesk.load({ ...p, assets: [...p.assets, b], tracks });
+    window.__paircut.load({ ...p, assets: [...p.assets, b], tracks });
   }, [layered, blue]);
   const boxP = { x: 528, y: 948, s: 24 };
   const sideP = { x: 880, y: 948, s: 24 };
@@ -993,7 +993,7 @@ try {
   // Text templates: save the selected text, add it back, delete it; built-ins hide and come back.
   const tplProject = fxProject('none', 'none');
   tplProject.tracks[0].clips = [{ ...fxClip('glow', 'pop'), rotation: 12, spans: [{ match: 'I', nth: 0, color: '#FFD166' }] }];
-  await win.evaluate((p) => window.__cutdesk.load(p), tplProject);
+  await win.evaluate((p) => window.__paircut.load(p), tplProject);
   await win.locator('[data-tab="text"]').click();
   check('template save waits for a selected text', await win.locator('[data-testid="template-save"]').isDisabled());
   await win.locator('[data-clip="fx"]').click();
@@ -1001,10 +1001,10 @@ try {
   await win.locator('[data-testid="template-save"]').click();
   await win.locator('[data-template="테스트 글로우"]').waitFor({ timeout: 5000 });
   check('a saved template shows in the text tab', true);
-  const idsBefore = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips))).map((c) => c.id);
-  await win.evaluate(() => window.__cutdesk.seek(3));
+  const idsBefore = (await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips))).map((c) => c.id);
+  await win.evaluate(() => window.__paircut.seek(3));
   await win.locator('[data-template="테스트 글로우"]').click();
-  const made = (await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips))).find((c) => !idsBefore.includes(c.id));
+  const made = (await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips))).find((c) => !idsBefore.includes(c.id));
   check('a template adds the saved text, look, motion and spans',
     made?.text === 'I' && made.style.effect === 'glow' && made.anim === 'pop' && made.rotation === 12 &&
       made.spans[0]?.color === '#FFD166' && Math.abs(made.out - 2) < 1e-6 && made.preset.startsWith('u-'),
@@ -1014,7 +1014,7 @@ try {
   await win.locator('[data-delete-template="기본 텍스트"]').click();
   check('deleting a built-in template hides it', (await win.locator('[data-preset="basic"]').count()) === 0);
   await win.reload();
-  await win.waitForFunction(() => window.__cutdesk !== undefined);
+  await win.waitForFunction(() => window.__paircut !== undefined);
   await win.locator('[data-tab="text"]').click();
   check('deletions survive a restart', (await win.locator('[data-preset="basic"]').count()) === 0 &&
     (await win.locator('[data-template="테스트 글로우"]').count()) === 0);
@@ -1025,7 +1025,7 @@ try {
   // Layer actions from the track head: merge, order, duplicate, delete, rename, lock.
   const layerStyle = { ...outlined(60, 'bold'), strokeWidth: 0 };
   const layerTrack = (id, clips) => ({ id, kind: 'text', muted: false, hidden: false, clips });
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     tracks: [
       layerTrack('t-a', [{ ...text('la', 0, 2, 'A', layerStyle, 0.5, 0.3, 'none'), rotation: 0, spans: [] }]),
@@ -1034,7 +1034,7 @@ try {
       ...base.tracks.filter((t) => t.kind !== 'text'),
     ],
   });
-  const textTracks = () => win.evaluate(() => window.__cutdesk.state().project.tracks.filter((t) => t.kind === 'text')
+  const textTracks = () => win.evaluate(() => window.__paircut.state().project.tracks.filter((t) => t.kind === 'text')
     .map((t) => ({ id: t.id, name: t.name, locked: t.locked, clips: t.clips.map((c) => ({ id: c.id, start: c.start })) })));
   const menu = async (trackId, item) => {
     // The first tap selects the layer, a tap on the selected layer opens its menu.
@@ -1076,7 +1076,7 @@ try {
   await win.mouse.move(lockedBox.x + lockedBox.width / 2 + 120, lockedBox.y + lockedBox.height / 2, { steps: 5 });
   await win.mouse.up();
   await win.keyboard.press('Delete');
-  await win.evaluate(() => window.__cutdesk.seek(4));
+  await win.evaluate(() => window.__paircut.seek(4));
   await win.keyboard.press('KeyS');
   const lockedTrack = (await textTracks()).find((t) => t.id === 't-b');
   check('a locked layer keeps its clips: no drag, delete or split', lockedTrack.locked === true &&
@@ -1088,7 +1088,7 @@ try {
   // A picture layer moves in front of a text layer: a blue picture over a white plate, red at the bottom.
   const [blueSolid, redSolid] = await win.evaluate(async () =>
     [await window.api.makeSolid('#0000FF', 1080, 1920), await window.api.makeSolid('#FF0000', 1080, 1920)]);
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [...base.assets, blueSolid, redSolid],
     tracks: [
@@ -1103,7 +1103,7 @@ try {
   check('audio layers do not swap with pictures', await (await menu('v-bg', '뒤로 (아래로)')).isDisabled());
   await win.locator('[data-head="v-bg"] .layer-thumb').click();
   await (await menu('v-top', '앞으로 (위로)')).click();
-  const stack = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  const stack = await win.evaluate(() => window.__paircut.state().project.tracks.map((t) => t.id));
   check('a picture layer moves in front of a text layer', stack.slice(0, 3).join() === 'v-top,t-x,v-bg', stack.join());
   check('the picture in front covers the text: preview', close(await settled(1, plateP), [0, 0, 255], 12));
   {
@@ -1132,7 +1132,7 @@ try {
   await win.mouse.move(from.x + from.width / 2, top.y + 4, { steps: 8 });
   check('a dragged card shows where it will land', (await win.locator('[data-head="v-top"].drop-before').count()) === 1);
   await win.mouse.up();
-  const dragged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  const dragged = await win.evaluate(() => window.__paircut.state().project.tracks.map((t) => t.id));
   check('dragging a card to the top restacks the layer', dragged.slice(0, 3).join() === 'v-bg,v-top,t-x', dragged.join());
   check('the dragged layer is in front: preview', close(await settled(1, plateP), [255, 0, 0], 12));
   check('a drag does not open the layer menu', (await win.locator('[data-menu="v-bg"]').count()) === 0);
@@ -1142,17 +1142,17 @@ try {
   await win.mouse.down();
   await win.mouse.move(topNow.x + topNow.width / 2, audioHead.y + audioHead.height - 2, { steps: 8 });
   await win.mouse.up();
-  const kept = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  const kept = await win.evaluate(() => window.__paircut.state().project.tracks.map((t) => t.id));
   check('a picture layer cannot be dragged below the audio', kept.slice(0, 3).join() === 'v-bg,v-top,t-x', kept.join());
   await win.keyboard.press('Control+KeyZ');
-  const unDragged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => t.id));
+  const unDragged = await win.evaluate(() => window.__paircut.state().project.tracks.map((t) => t.id));
   check('undo puts a dragged layer back', unDragged.slice(0, 3).join() === 'v-top,t-x,v-bg', unDragged.join());
   await win.locator('[data-head="v-top"] .layer-check').click();
-  check('the card check hides the layer', (await win.evaluate(() => window.__cutdesk.state().project.tracks.find((t) => t.id === 'v-top').hidden)) === true &&
+  check('the card check hides the layer', (await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-top').hidden)) === true &&
     close(await settled(1, plateP), [255, 255, 255], 12) && (await win.locator('[data-menu="v-top"]').count()) === 0);
 
   // Placement: a dragged layer sticks to the frame's center line (not with Alt), and the align buttons put it on an edge.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [...base.assets, blueSolid, redSolid],
     tracks: [
@@ -1163,9 +1163,9 @@ try {
     ],
   });
   await win.locator('[data-clip="vb"]').click();
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   const clipX = (id) => win.evaluate((cid) => {
-    const c = window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((k) => k.id === cid);
+    const c = window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((k) => k.id === cid);
     return c.transform ? c.transform.x : c.x;
   }, id);
   const stageBox = await win.locator('.stage').boundingBox();
@@ -1196,12 +1196,12 @@ try {
   check('align left shows the background on the right: preview', close(await settled(1, { x: 1000, y: 960, s: 8 }), [255, 0, 0], 12) &&
     close(await settled(1, { x: 80, y: 960, s: 8 }), [0, 0, 255], 12));
   await win.locator('[data-clip="lx"]').click();
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   await win.locator('[data-align="top"]').click();
   const topBox = await win.locator('.transform-box').boundingBox();
   check('align top puts the text on the frame top', Math.abs(topBox.y - stageBox.y) < 2, `${topBox.y} vs ${stageBox.y}`);
   await win.keyboard.press('Control+KeyZ');
-  const undoneY = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  const undoneY = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].y);
   check('undo takes an align back', Math.abs(undoneY - 0.7) < 1e-9, String(undoneY));
 
   // Layer opacity and blend modes: a #4080C0 layer over #804020, the same in preview and export.
@@ -1216,17 +1216,17 @@ try {
       ...base.tracks.filter((t) => t.kind === 'audio'),
     ],
   });
-  await win.evaluate((p) => window.__cutdesk.load(p), lookProject({}));
+  await win.evaluate((p) => window.__paircut.load(p), lookProject({}));
   await menu('v-hi', '이름 바꾸기');
   await win.locator('[data-menu="v-hi"] [data-testid="layer-blend"]').selectOption('multiply');
   await win.locator('[data-menu="v-hi"] [data-testid="layer-opacity"]').fill('50');
-  const looked = await win.evaluate(() => window.__cutdesk.state().project.tracks[0]);
+  const looked = await win.evaluate(() => window.__paircut.state().project.tracks[0]);
   check('the layer menu sets blend mode and opacity', looked.blend === 'multiply' && looked.opacity === 0.5, JSON.stringify({ b: looked.blend, o: looked.opacity }));
   check('the card shows the blend mode and opacity', (await win.locator('[data-head="v-hi"] .layer-notes').textContent()).includes('곱하기 · 50%'));
   check('layers that mix differently do not merge', await win.locator('[data-menu="v-hi"] button', { hasText: '아래 레이어와 병합' }).isDisabled());
   await win.locator('[data-head="v-hi"] .layer-thumb').click();
   await win.keyboard.press('Control+KeyZ');
-  check('undo takes the opacity back', (await win.evaluate(() => window.__cutdesk.state().project.tracks[0].opacity)) === undefined);
+  check('undo takes the opacity back', (await win.evaluate(() => window.__paircut.state().project.tracks[0].opacity)) === undefined);
   const looks = [
     { name: 'multiply', look: { blend: 'multiply' }, want: [32, 32, 24] },
     { name: 'overlay', look: { blend: 'overlay' }, want: [65, 64, 48] },
@@ -1235,7 +1235,7 @@ try {
   ];
   const lookP = { x: 540, y: 960, s: 8 };
   for (const l of looks) {
-    await win.evaluate((p) => window.__cutdesk.load(p), lookProject(l.look));
+    await win.evaluate((p) => window.__paircut.load(p), lookProject(l.look));
     const shown = await settled(1, lookP);
     check(`layer ${l.name}: preview`, close(shown, l.want, 6), `${shown} want ${l.want}`);
     const out = join(dir, `look-${l.name.replace(/\W+/g, '-')}.mp4`);
@@ -1255,11 +1255,11 @@ try {
       ...base.tracks.filter((t) => t.kind === 'audio'),
     ],
   });
-  await win.evaluate((p) => window.__cutdesk.load(p), clipProject({}, {}));
+  await win.evaluate((p) => window.__paircut.load(p), clipProject({}, {}));
   check('the bottom layer cannot be clipped', await (await menu('v-base', '클리핑 마스크')).isDisabled());
   await win.locator('[data-head="v-base"] .layer-thumb').click();
   await (await menu('v-clip', '클리핑 마스크')).click();
-  check('the menu turns the clipping mask on', (await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clipped)) === true &&
+  check('the menu turns the clipping mask on', (await win.evaluate(() => window.__paircut.state().project.tracks[0].clipped)) === true &&
     (await win.locator('[data-head="v-clip"].clipped').count()) === 1);
   const clipInP = { x: 540, y: 960, s: 8 };
   const clipOutP = { x: 100, y: 300, s: 8 };
@@ -1269,7 +1269,7 @@ try {
     { name: 'on a half-opacity base', top: { clipped: true }, bottom: { opacity: 0.5 }, inside: [32, 64, 96] },
   ];
   for (const c of clips) {
-    await win.evaluate((p) => window.__cutdesk.load(p), clipProject(c.top, c.bottom));
+    await win.evaluate((p) => window.__paircut.load(p), clipProject(c.top, c.bottom));
     const shownIn = await settled(1, clipInP);
     const shownOut = await settled(1, clipOutP);
     check(`clipping ${c.name}: preview`, close(shownIn, c.inside, 6) && close(shownOut, [0, 0, 0], 6), `${shownIn} / ${shownOut} want ${c.inside}`);
@@ -1279,11 +1279,11 @@ try {
     const madeOut = samplePixel(out, 1, clipOutP.x, clipOutP.y, 8);
     check(`clipping ${c.name}: export`, close(madeIn, c.inside, 10) && close(madeOut, [0, 0, 0], 10), `${madeIn} / ${madeOut} want ${c.inside}`);
   }
-  await win.evaluate((p) => window.__cutdesk.load(p), clipProject({ clipped: true }, { hidden: true }));
+  await win.evaluate((p) => window.__paircut.load(p), clipProject({ clipped: true }, { hidden: true }));
   check('hiding the base hides its clipping masks', close(await settled(1, clipInP), [0, 0, 0], 6));
 
   // Merging video layers whose clips overlap: the overlap is baked into one see-through clip that looks the same.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [...base.assets, blueSolid, redSolid],
     tracks: [
@@ -1299,11 +1299,11 @@ try {
     (await win.locator('[data-menu="v-up"] .tl-menu-note').textContent()).includes('구워서'));
   await (await menu('v-up', '아래 레이어와 병합')).click();
   await win.waitForFunction(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     return s.layerJob === null && !s.project.tracks.some((t) => t.id === 'v-up');
   }, null, { timeout: 120000 }).catch(() => {});
   const mergedState = await win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     const t = s.project.tracks.find((tr) => tr.id === 'v-dn');
     return { job: s.layerJob, ids: s.project.tracks.map((tr) => tr.id), clips: t.clips.map((c) => `${c.start}-${c.start + (c.out - c.in) / c.speed}`),
       baked: s.project.assets.find((a) => a.name.startsWith('병합')) };
@@ -1327,11 +1327,11 @@ try {
   }
   await win.evaluate(() => document.activeElement.blur());
   await win.keyboard.press('Control+KeyZ');
-  const unmerged = await win.evaluate(() => window.__cutdesk.state().project.tracks.map((t) => `${t.id}:${t.clips.length}`));
+  const unmerged = await win.evaluate(() => window.__paircut.state().project.tracks.map((t) => `${t.id}:${t.clips.length}`));
   check('undo takes a baked merge back', unmerged.slice(0, 2).join() === 'v-up:1,v-dn:1', unmerged.join());
 
   // Clips butt exactly against a neighbour whose end is off the frame grid, when moved and when trimmed.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [pic],
     tracks: [
@@ -1344,9 +1344,9 @@ try {
       { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] },
     ],
   });
-  const fitClips = () => win.evaluate(() => Object.fromEntries(window.__cutdesk.state().project.tracks
+  const fitClips = () => win.evaluate(() => Object.fromEntries(window.__paircut.state().project.tracks
     .find((t) => t.id === 'v-fit').clips.map((c) => [c.id, { start: c.start, end: c.start + (c.out - c.in) / c.speed }])));
-  const pxPerSec = await win.evaluate(() => window.__cutdesk.state().zoom);
+  const pxPerSec = await win.evaluate(() => window.__paircut.state().zoom);
   const drag = async (sel, fromX, dx) => {
     const box = await win.locator(sel).boundingBox();
     const y = box.y + box.height / 2;
@@ -1363,13 +1363,13 @@ try {
   check('a trimmed end stops exactly at the next clip', Math.abs(fit.fb.end - fit.fc.start) < 1e-9, JSON.stringify(fit));
 
   // Playhead: empty-space clicks and the grip move it, the magnet catches clip edges, picking a block jumps to it.
-  const playheadNow = () => win.evaluate(() => window.__cutdesk.state().playhead);
+  const playheadNow = () => win.evaluate(() => window.__paircut.state().playhead);
   const ruler = await win.locator('.tl-ruler').boundingBox();
   const xAt = (t) => ruler.x + t * pxPerSec;
   const trackBox = await win.locator('[data-row="t-1"]').boundingBox();
   await win.mouse.click(xAt(3.3), trackBox.y + trackBox.height / 2);
   check('clicking empty track space moves the playhead and drops the selection',
-    Math.abs((await playheadNow()) - 3.3) < 0.05 && (await win.evaluate(() => window.__cutdesk.state().selectedClipId)) === null,
+    Math.abs((await playheadNow()) - 3.3) < 0.05 && (await win.evaluate(() => window.__paircut.state().selectedClipId)) === null,
     String(await playheadNow()));
   const grip = await win.locator('.tl-playhead-grip').boundingBox();
   await win.mouse.move(grip.x + grip.width / 2, grip.y + 8);
@@ -1382,14 +1382,14 @@ try {
   await win.locator('[data-clip="fc"]').click();
   check('picking a block the playhead is not over jumps to its start', Math.abs((await playheadNow()) - 6) < 1e-9,
     String(await playheadNow()));
-  await win.evaluate(() => window.__cutdesk.seek(6.5));
+  await win.evaluate(() => window.__paircut.seek(6.5));
   await win.locator('[data-clip="fc"]').click();
   check('picking the block under the playhead leaves it where it is', Math.abs((await playheadNow()) - 6.5) < 1e-9,
     String(await playheadNow()));
 
   // OpenCut-style tools: bookmarks, duplicate, trim before the playhead, position keyframes.
-  const markers = () => win.evaluate(() => window.__cutdesk.state().project.markers.map((m) => m.t));
-  await win.evaluate(() => window.__cutdesk.seek(2));
+  const markers = () => win.evaluate(() => window.__paircut.state().project.markers.map((m) => m.t));
+  await win.evaluate(() => window.__paircut.seek(2));
   await win.evaluate(() => document.activeElement.blur());
   await win.keyboard.press('m');
   check('M puts a bookmark at the playhead', JSON.stringify(await markers()) === '[2]', JSON.stringify(await markers()));
@@ -1399,29 +1399,29 @@ try {
   await win.locator('[data-clip="fc"]').click();
   await win.keyboard.press('Control+d');
   fit = await fitClips();
-  const copyId = await win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  const copyId = await win.evaluate(() => window.__paircut.state().selectedClipId);
   check('Ctrl+D puts a copy right after the clip and picks it',
     copyId !== 'fc' && fit[copyId] && Math.abs(fit[copyId].start - fit.fc.end) < 1e-9, JSON.stringify(fit));
 
-  await win.evaluate(() => window.__cutdesk.seek(6.5));
+  await win.evaluate(() => window.__paircut.seek(6.5));
   await win.locator('[data-clip="fc"]').click();
   await win.locator('[data-testid="tl-trim-before"]').click();
   fit = await fitClips();
   check('trimming before the playhead keeps the clip end and starts it there',
     Math.abs(fit.fc.start - 6.5) < 1e-9 && Math.abs(fit.fc.end - 7) < 1e-9, JSON.stringify(fit.fc));
 
-  const keysOf = (id) => win.evaluate((cid) => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === cid).keys ?? [], id);
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  const keysOf = (id) => win.evaluate((cid) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === cid).keys ?? [], id);
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.locator('[data-clip="fa"]').click();
   await win.locator('[data-testid="key-toggle"]').click();
   let keys = await keysOf('fa');
   check('the first keyframe also pins the start', keys.length === 2 && keys[0].t === 0 && Math.abs(keys[1].t - 0.5) < 1e-9, JSON.stringify(keys));
-  await win.evaluate(() => window.__cutdesk.seek(1.2));
+  await win.evaluate(() => window.__paircut.seek(1.2));
   const boxBefore = await win.locator('.transform-box').boundingBox();
   await win.locator('[data-align="left"]').click();
   keys = await keysOf('fa');
   check('moving the picture with keyframes on adds a keyframe there', keys.length === 3 && Math.abs(keys[2].t - 1.2) < 1e-9, JSON.stringify(keys));
-  await win.evaluate(() => window.__cutdesk.seek(0.25));
+  await win.evaluate(() => window.__paircut.seek(0.25));
   await win.waitForTimeout(100);
   const boxEarly = await win.locator('.transform-box').boundingBox();
   check('before the moved keyframe the picture stays where it was', Math.abs(boxEarly.x - boxBefore.x) < 2,
@@ -1431,7 +1431,7 @@ try {
   check('clearing keyframes leaves a plain transform', (await keysOf('fa')).length === 0);
 
   // Layer selection: new clips (templates, paste, the media bin's add button) go to the selected layer.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     tracks: [
       layerTrack('t-a', [{ ...text('la', 0, 2, 'A', layerStyle, 0.5, 0.3, 'none'), rotation: 0, spans: [] }]),
@@ -1440,7 +1440,7 @@ try {
     ],
   });
   const sel = () => win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     return { clip: s.selectedClipId, layer: s.selectedTrackId, ids: s.project.tracks.map((t) => t.id),
       clips: Object.fromEntries(s.project.tracks.map((t) => [t.id, t.clips.map((c) => `${c.id === s.selectedClipId ? '*' : ''}${c.start}`)])) };
   });
@@ -1452,19 +1452,19 @@ try {
   await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
   check('selecting a clip selects its layer', (await sel()).layer === 't-a');
   await win.locator('[data-head="t-b"] .layer-thumb').click();
-  await win.evaluate(() => window.__cutdesk.seek(0));
+  await win.evaluate(() => window.__paircut.seek(0));
   await win.locator('[data-tab="text"]').click();
   await win.locator('[data-preset="basic"]').click();
   let ls = await sel();
   check('a template goes to the selected layer at the playhead', ls.clips['t-b'].join() === '*0,3' && ls.layer === 't-b', JSON.stringify(ls.clips));
-  await win.evaluate(() => window.__cutdesk.seek(3.5));
+  await win.evaluate(() => window.__paircut.seek(3.5));
   await win.locator('[data-preset="basic"]').click();
   ls = await sel();
   const above = ls.ids[ls.ids.indexOf('t-b') - 1];
   check('where the selected layer is taken, a new layer right above it gets the clip', ls.ids.slice(0, 3).join() === `t-a,${above},t-b` &&
     ls.clips[above]?.join() === '*3.5' && ls.layer === above, JSON.stringify(ls));
   await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
-  await win.evaluate(() => window.__cutdesk.seek(2.5));
+  await win.evaluate(() => window.__paircut.seek(2.5));
   await win.keyboard.press('Control+KeyC');
   await win.keyboard.press('Control+KeyV');
   ls = await sel();
@@ -1484,7 +1484,7 @@ try {
   check('an audio layer added above a picture layer goes on top of the audio layers', aNew.startsWith('a-') &&
     ls.ids.indexOf(aNew) === ls.ids.findIndex((id) => id.startsWith('a-')), ls.ids.join());
   await win.locator(`[data-head="${vNew}"] .layer-thumb`).click();
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   await win.locator('[data-tab="media"]').click();
   await win.locator('li.asset[title$="pic.png"] button[title^="선택한 레이어"]').click();
   ls = await sel();
@@ -1511,10 +1511,10 @@ try {
         : { ...t, clips: t.clips.map((c) => (c.id === 'c2' ? { ...c, ...looked2 } : c)) })),
     ],
   };
-  await win.evaluate((p) => window.__cutdesk.load(p), clipboardProject);
-  const clipsOf = (trackId) => win.evaluate((id) => window.__cutdesk.state().project.tracks.find((t) => t.id === id)?.clips ?? [], trackId);
+  await win.evaluate((p) => window.__paircut.load(p), clipboardProject);
+  const clipsOf = (trackId) => win.evaluate((id) => window.__paircut.state().project.tracks.find((t) => t.id === id)?.clips ?? [], trackId);
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
-  await win.evaluate(() => window.__cutdesk.seek(7));
+  await win.evaluate(() => window.__paircut.seek(7));
   await win.keyboard.press('Control+KeyC');
   await win.keyboard.press('Control+KeyV');
   let vm = await clipsOf('v-main');
@@ -1527,41 +1527,41 @@ try {
   vm = await clipsOf('v-main');
   check('pasting again lines the next copy up after the first', vm.some((c) => Math.abs(c.start - 9) < 1e-6) &&
     Math.abs((await playheadNow()) - 11) < 1e-6, vm.map((c) => c.start).join());
-  await win.evaluate(() => window.__cutdesk.seek(0));
+  await win.evaluate(() => window.__paircut.seek(0));
   await win.keyboard.press('Control+KeyV');
   ls = await sel();
   const vAbove = ls.ids[ls.ids.indexOf('v-main') - 1];
   check('a taken spot sends the paste to a new layer right above', vAbove.startsWith('v-') && vAbove !== 'v-top' &&
     ls.clips[vAbove]?.join() === '*0', ls.ids.join());
   await win.locator('[data-clip="c4"]').click({ position: { x: 4, y: 10 } });
-  await win.evaluate(() => window.__cutdesk.seek(5));
+  await win.evaluate(() => window.__paircut.seek(5));
   await win.keyboard.press('Control+KeyC');
   await win.keyboard.press('Control+KeyV');
   check('an audio clip copies too', (await clipsOf('a-1')).map((c) => c.start).join() === '2,5', (await clipsOf('a-1')).map((c) => c.start).join());
 
   await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
   await win.keyboard.press('Control+KeyX');
-  const afterCut = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').length);
-  await win.evaluate(() => window.__cutdesk.seek(6));
+  const afterCut = await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').length);
+  await win.evaluate(() => window.__paircut.seek(6));
   await win.keyboard.press('Control+KeyV');
-  const afterCutPaste = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').map((c) => c.start));
+  const afterCutPaste = await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.text === 'A').map((c) => c.start));
   check('Ctrl+X removes the clip and Ctrl+V brings it back', afterCut === 0 && afterCutPaste.join() === '6', `${afterCut} / ${afterCutPaste}`);
 
-  await win.evaluate((p) => window.__cutdesk.load(p), clipboardProject);
+  await win.evaluate((p) => window.__paircut.load(p), clipboardProject);
   await win.locator('[data-clip="la"]').click({ position: { x: 4, y: 10 } });
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
   await win.locator('[data-clip="c4"]').click({ position: { x: 4, y: 10 }, modifiers: ['Shift'] });
-  check('Ctrl- and Shift-click add clips to the selection', (await win.evaluate(() => window.__cutdesk.state().selectedIds.join())) === 'la,c2,c4' &&
+  check('Ctrl- and Shift-click add clips to the selection', (await win.evaluate(() => window.__paircut.state().selectedIds.join())) === 'la,c2,c4' &&
     (await win.locator('.tl-clip.selected').count()) === 3);
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
-  check('Ctrl-click on a selected clip takes it out', (await win.evaluate(() => window.__cutdesk.state().selectedIds.join())) === 'la,c4');
+  check('Ctrl-click on a selected clip takes it out', (await win.evaluate(() => window.__paircut.state().selectedIds.join())) === 'la,c4');
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 }, modifiers: ['Control'] });
   await win.keyboard.press('Control+KeyC');
   await win.locator('[data-head="t-a"] .layer-thumb').click();
-  await win.evaluate(() => window.__cutdesk.seek(7));
+  await win.evaluate(() => window.__paircut.seek(7));
   await win.keyboard.press('Control+KeyV');
   const multi = await win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     const at = (id) => s.project.tracks.find((t) => t.id === id).clips.filter((c) => c.start >= 7).map((c) => c.start).join();
     return { ta: at('t-a'), vm: at('v-main'), a1: at('a-1'), sel: s.selectedIds.length, main: s.selectedClipId, layer: s.selectedTrackId, playhead: s.playhead };
   });
@@ -1569,7 +1569,7 @@ try {
   check('the pasted clips stay selected, led by the top layer', multi.sel === 3 && multi.layer === 't-a' && Math.abs(multi.playhead - 12) < 1e-6,
     JSON.stringify(multi));
   await win.keyboard.press('Delete');
-  const leftAfterDelete = await win.evaluate(() => window.__cutdesk.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.start >= 7).length);
+  const leftAfterDelete = await win.evaluate(() => window.__paircut.state().project.tracks.flatMap((t) => t.clips).filter((c) => c.start >= 7).length);
   check('Delete removes every selected clip', leftAfterDelete === 0, String(leftAfterDelete));
 
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
@@ -1591,17 +1591,17 @@ try {
   const c2asset = vm.find((c) => c.id === 'c2').assetId;
   await win.locator('[data-clip="c2"]').click({ position: { x: 4, y: 10 } });
   await win.keyboard.press('Control+KeyC');
-  await win.evaluate(({ p, asset }) => window.__cutdesk.load({ ...p, assets: p.assets.filter((a) => a.id !== asset),
+  await win.evaluate(({ p, asset }) => window.__paircut.load({ ...p, assets: p.assets.filter((a) => a.id !== asset),
     tracks: [{ id: 't-1', kind: 'text', muted: false, hidden: false, clips: [] }, { id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [] },
       { id: 'a-1', kind: 'audio', muted: false, hidden: false, clips: [] }] }), { p: base, asset: c2asset });
   await win.keyboard.press('Control+KeyV');
-  const other = await win.evaluate(() => window.__cutdesk.state().project);
+  const other = await win.evaluate(() => window.__paircut.state().project);
   check('a paste into another project brings the media along', other.assets.some((a) => a.id === c2asset) &&
     other.tracks.find((t) => t.id === 'v-main').clips[0]?.assetId === c2asset, JSON.stringify(other.tracks.map((t) => t.clips.length)));
 
   // Picking in the preview: the top layer under the pointer, tapping again goes down the stack, the timeline follows.
   const halfSize = { scale: 0.5, x: 0, y: 0 };
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [...base.assets, blueSolid, redSolid],
     tracks: [
@@ -1614,9 +1614,9 @@ try {
       ...base.tracks.filter((t) => t.kind === 'audio'),
     ],
   });
-  const picked = () => win.evaluate(() => window.__cutdesk.state().selectedClipId);
+  const picked = () => win.evaluate(() => window.__paircut.state().selectedClipId);
   await win.locator('[data-clip="pz"]').click({ position: { x: 4, y: 10 } });
-  await win.evaluate(() => window.__cutdesk.seek(1));
+  await win.evaluate(() => window.__paircut.seek(1));
   const pStage = await win.locator('.stage').boundingBox();
   const mid = { x: pStage.x + pStage.width / 2, y: pStage.y + pStage.height / 2 };
   const cycle = [];
@@ -1626,7 +1626,7 @@ try {
   }
   check('a press in the preview picks the top layer there, each tap the next one down, then the top again',
     cycle.join() === 'px,vb,vr,px', cycle.join());
-  const pastBefore = await win.evaluate(() => window.__cutdesk.state().past.length);
+  const pastBefore = await win.evaluate(() => window.__paircut.state().past.length);
   check('a tap leaves no undo step', pastBefore === 0, String(pastBefore));
   await win.mouse.click(pStage.x + 5, pStage.y + 5);
   check('a press on an empty spot drops the selection', (await picked()) === null);
@@ -1640,12 +1640,12 @@ try {
   });
   const offBefore = await win.evaluate(() =>
     document.querySelector('[data-clip="px"]').getBoundingClientRect().right <= document.querySelector('.tl-scroll').getBoundingClientRect().left);
-  const pxY0 = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  const pxY0 = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].y);
   await win.mouse.move(mid.x, mid.y);
   await win.mouse.down();
   await win.mouse.move(mid.x, mid.y + 20, { steps: 5 });
   await win.mouse.up();
-  const pxY1 = await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y);
+  const pxY1 = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].y);
   check('pressing an unselected layer picks it and drags it in the same press', (await picked()) === 'px' &&
     Math.abs(pxY1 - pxY0 - 20 / pStage.height) < 0.003, `${pxY0} -> ${pxY1}`);
   await win.waitForTimeout(100);
@@ -1657,10 +1657,10 @@ try {
   });
   check('a clip picked in the preview is scrolled into view on the timeline', offBefore && inView.ok, `${offBefore} ${JSON.stringify(inView)}`);
   await win.keyboard.press('Control+KeyZ');
-  check('one undo takes the preview drag back', Math.abs((await win.evaluate(() => window.__cutdesk.state().project.tracks[0].clips[0].y)) - pxY0) < 1e-9);
+  check('one undo takes the preview drag back', Math.abs((await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].y)) - pxY0) < 1e-9);
 
   // Frame shape: 16:9 keeps clip placement and text size against the short side; preview and export agree.
-  await win.evaluate((p) => window.__cutdesk.load(p), {
+  await win.evaluate((p) => window.__paircut.load(p), {
     ...base,
     assets: [...base.assets, blueSolid],
     tracks: [
@@ -1671,7 +1671,7 @@ try {
   });
   const textShare = async () => {
     await win.locator('[data-clip="ax"]').click({ position: { x: 4, y: 10 } });
-    await win.evaluate(() => window.__cutdesk.seek(1));
+    await win.evaluate(() => window.__paircut.seek(1));
     const s = await win.locator('.stage').boundingBox();
     const b = await win.locator('.transform-box').boundingBox();
     await win.mouse.click(s.x + 4, s.y + 4);
@@ -1681,7 +1681,7 @@ try {
   check('the project panel names the frame shape', (await win.locator('[data-testid="project-aspect"]').inputValue()) === '9:16');
   await win.locator('[data-testid="project-aspect"]').selectOption('16:9');
   const wide = await win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     const c = document.querySelector('[data-testid="preview-canvas"]');
     return { w: s.project.width, h: s.project.height, cw: c.width, ch: c.height, dirty: s.dirty };
   });
@@ -1698,7 +1698,7 @@ try {
     JSON.stringify(widePreview));
   {
     const out = join(dir, 'wide.mp4');
-    const made = await app.evaluate((_e, i) => globalThis.__cutdeskBridge.callTool('export', i), { outPath: out });
+    const made = await app.evaluate((_e, i) => globalThis.__paircutBridge.callTool('export', i), { outPath: out });
     const stream = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_streams', '-select_streams', 'v', out],
       { encoding: 'utf8' })).streams[0];
     check('export without a height uses the project\'s frame', !made.isError && stream.width === 1920 && stream.height === 1080,
@@ -1709,23 +1709,23 @@ try {
   }
   await win.evaluate(() => document.activeElement.blur());
   await win.keyboard.press('Control+KeyZ');
-  check('undo takes the frame shape back', (await win.evaluate(() => window.__cutdesk.state().project.height)) === 1920);
+  check('undo takes the frame shape back', (await win.evaluate(() => window.__paircut.state().project.height)) === 1920);
   const viaOp = await tool('edit', { ops: [{ op: 'aspect', aspect: '4:5' }] });
   check('the edit tool sets the frame shape, and get_state shows it', !viaOp.isError && (await tool('get_state')).text.includes('size=1080x1350'),
     viaOp.text);
 
   // Bridge-only project tools, called through the main process exactly as scripts/bridge.mjs would.
-  const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__cutdeskBridge.callTool(n, i), [name, input]);
+  const bridge = (name, input = {}) => app.evaluate((_e, [n, i]) => globalThis.__paircutBridge.callTool(n, i), [name, input]);
   const fileState = () => win.evaluate(() => {
-    const s = window.__cutdesk.state();
+    const s = window.__paircut.state();
     return { dirty: s.dirty, filePath: s.filePath, clips: s.project.tracks.flatMap((t) => t.clips).length };
   });
   const fileBefore = await fileState();
   const refused = await bridge('new_project');
   check('new_project refuses to drop unsaved work', fileBefore.dirty && refused.isError && (await fileState()).clips === fileBefore.clips, refused.text);
-  const relative = await bridge('save_project', { path: 'rel.cutdesk.json' });
+  const relative = await bridge('save_project', { path: 'rel.paircut.json' });
   check('save_project needs an absolute .json path', relative.isError && relative.text.includes('absolute'), relative.text);
-  const fileA = join(dir, 'bridge-a.cutdesk.json');
+  const fileA = join(dir, 'bridge-a.paircut.json');
   const savedA = await bridge('save_project', { path: fileA });
   const afterA = await fileState();
   check('save_project with a path saves as and opens that file', !savedA.isError && afterA.filePath === fileA && !afterA.dirty &&
@@ -1734,16 +1734,16 @@ try {
   check('save_project will not replace an existing file without overwrite', again.isError && again.text.includes('overwrite'), again.text);
   const savedOpen = await bridge('save_project');
   check('save_project without a path saves the open file', !savedOpen.isError && savedOpen.text.includes(fileA), savedOpen.text);
-  const fileB = join(dir, 'bridge-b.cutdesk.json');
+  const fileB = join(dir, 'bridge-b.paircut.json');
   const madeB = await bridge('new_project', { path: fileB });
   const afterB = await fileState();
   check('new_project with a path starts empty and saves there', !madeB.isError && afterB.clips === 0 && afterB.filePath === fileB &&
     JSON.parse(readFileSync(fileB, 'utf8')).tracks.flatMap((t) => t.clips).length === 0, madeB.text);
   const taken = await bridge('new_project', { path: fileA });
   check('new_project will not replace an existing file without overwrite', taken.isError && (await fileState()).filePath === fileB, taken.text);
-  await win.evaluate((p) => window.__cutdesk.load(p), project);
+  await win.evaluate((p) => window.__paircut.load(p), project);
 
-  await win.evaluate(() => window.__cutdesk.seek(2.5));
+  await win.evaluate(() => window.__paircut.seek(2.5));
   const sheet = await bridge('contact_sheet', { times: [0.5, 1.5, 4], cols: 2, cellW: 200 });
   const sheetJpeg = Buffer.from(sheet.jpegBase64 ?? '', 'base64');
   const sheetSof = sheetJpeg.indexOf(Buffer.from([0xff, 0xc0]));
@@ -1751,14 +1751,14 @@ try {
   check('contact_sheet lays frames in a labeled grid', !sheet.isError && sheetDims === '400x752', `${sheetDims} ${sheet.text}`);
   check('contact_sheet lists the clips at each time', /#1 0\.5s: .*x-sub"미리보기와 내보내기" c1$/m.test(sheet.text) &&
     / c-top c1$/m.test(sheet.text) && /#3 4s: .*x-pop"팝 등장" c2 c4$/m.test(sheet.text), sheet.text.replaceAll('\n', ' | '));
-  check('contact_sheet puts the playhead back', (await win.evaluate(() => window.__cutdesk.state().playhead)) === 2.5);
+  check('contact_sheet puts the playhead back', (await win.evaluate(() => window.__paircut.state().playhead)) === 2.5);
   const sheetRange = await bridge('contact_sheet', { from: 0, to: 2, step: 0.5 });
   check('contact_sheet from/to/step includes both ends', !sheetRange.isError && sheetRange.text.includes('5 frames') && sheetRange.text.includes('#5 2s'),
     sheetRange.text.split('\n')[0]);
   const sheetBig = await bridge('contact_sheet', { from: 0, to: 7, step: 0.1 });
   check('contact_sheet refuses more than 24 frames', sheetBig.isError && sheetBig.text.includes('at most 24'), sheetBig.text);
 
-  await win.evaluate(() => window.__cutdesk.seek(0.5));
+  await win.evaluate(() => window.__paircut.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });
   console.log(`screenshot: ${join(dir, 'app.png')}`);

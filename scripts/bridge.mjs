@@ -1,16 +1,16 @@
-// Calls a tool on the running cutdesk window through the local bridge (see electron/bridge.ts).
+// Calls a tool on the running paircut window through the local bridge (see electron/bridge.ts).
 //   node scripts/bridge.mjs get_state
 //   node scripts/bridge.mjs edit '{"ops":[{"op":"seek","t":3}]}'
-//   node scripts/bridge.mjs load_project @draft.cutdesk.json   (file holding { "project": ... })
+//   node scripts/bridge.mjs load_project @draft.paircut.json   (file holding { "project": ... })
 //   node scripts/bridge.mjs screenshot '{"t":3}' shot.jpg      (image tools: optional output path)
-//   node scripts/bridge.mjs new_project '{"path":"C:/x/test.cutdesk.json"}'   (discard:true drops unsaved work; aspect "9:16"|"16:9"|"1:1"|"4:5")
+//   node scripts/bridge.mjs new_project '{"path":"C:/x/test.paircut.json"}'   (discard:true drops unsaved work; aspect "9:16"|"16:9"|"1:1"|"4:5")
 //   node scripts/bridge.mjs contact_sheet '{"from":0,"to":6,"step":0.5}' sheet.jpg   (or {"times":[...]}; cols, cellW; max 24 frames)
-//   node scripts/bridge.mjs save_project ['{"path":"C:/x/copy.cutdesk.json","overwrite":true}']   (no path: open file)
+//   node scripts/bridge.mjs save_project ['{"path":"C:/x/copy.paircut.json","overwrite":true}']   (no path: open file)
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const INFO = process.env.CUTDESK_BRIDGE ?? join(process.env.APPDATA ?? '', 'cutdesk', 'bridge.json');
+const INFO = process.env.PAIRCUT_BRIDGE ?? join(process.env.APPDATA ?? '', 'paircut', 'bridge.json');
 
 /** Returns { text, jpegBase64?, isError? }; throws when the app is not running or the call fails. */
 export async function callBridge(name, input = {}) {
@@ -18,7 +18,7 @@ export async function callBridge(name, input = {}) {
   try {
     info = JSON.parse(readFileSync(INFO, 'utf8'));
   } catch (err) {
-    throw new Error(`cutdesk bridge not found at ${INFO} (is the app running outside test mode?): ${err.message}`, { cause: err });
+    throw new Error(`paircut bridge not found at ${INFO} (is the app running outside test mode?): ${err.message}`, { cause: err });
   }
   const res = await fetch(`http://127.0.0.1:${info.port}/tool`, {
     method: 'POST',

@@ -30,10 +30,10 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
   light: { family: 'Pretendard', weight: 300 },
   extralight: { family: 'Pretendard', weight: 200 },
   thin: { family: 'Pretendard', weight: 100 },
-  serif: { family: 'Cutdesk Serif', weight: 800 },
-  'pres-bold': { family: 'Cutdesk Presentation', weight: 700 },
-  'pres-black': { family: 'Cutdesk Presentation', weight: 900 },
-  hand: { family: 'Cutdesk Hand', weight: 400 },
+  serif: { family: 'Paircut Serif', weight: 800 },
+  'pres-bold': { family: 'Paircut Presentation', weight: 700 },
+  'pres-black': { family: 'Paircut Presentation', weight: 900 },
+  hand: { family: 'Paircut Hand', weight: 400 },
   josefin: { family: 'Josefin Sans', weight: 700 },
   'josefin-light': { family: 'Josefin Sans', weight: 300 },
   'josefin-slab': { family: 'Josefin Slab', weight: 700 },
@@ -42,7 +42,7 @@ const FONTS: Record<FontId, { family: string; weight: number }> = {
   inter: { family: 'Inter', weight: 700 },
   'inter-regular': { family: 'Inter', weight: 400 },
   scratch: { family: 'Rock Salt', weight: 400 },
-  'instrument-italic': { family: 'Cutdesk Instrument Italic', weight: 400 },
+  'instrument-italic': { family: 'Paircut Instrument Italic', weight: 400 },
 };
 /** Shadow blur radius as a fraction of the font size. */
 const SHADOW_BLUR = 0.16;

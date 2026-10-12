@@ -440,7 +440,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   };
 }
 
-/** A baked layer: VP9 with alpha in a webm (the format cutdesk reads as see-through), Opus sound when there is any. */
+/** A baked layer: VP9 with alpha in a webm (the format paircut reads as see-through), Opus sound when there is any. */
 export function bakeArgs(plan: ExportPlan, filterScriptPath: string, outPath: string): string[] {
   return [
     '-y',

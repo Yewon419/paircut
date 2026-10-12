@@ -7,7 +7,7 @@ export interface ColorPreset {
   color: ClipColor;
 }
 
-const KEY = 'cutdesk.colorPresets';
+const KEY = 'paircut.colorPresets';
 const COLOR_KEYS: (keyof ClipColor)[] = ['brightness', 'contrast', 'saturation', 'temperature'];
 
 const pickColor = (c: Record<string, unknown>): ClipColor =>

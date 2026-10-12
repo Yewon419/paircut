@@ -8,17 +8,17 @@ import type { AgentEvent, AgentModel, AgentToolName, AgentToolResult, ToolName }
 import { AGENT_TOOLS, EditOp } from '../shared/agentOps';
 
 /**
- * In-app Claude. Runs the Agent SDK on the logged-in Claude Code subscription with only cutdesk's
+ * In-app Claude. Runs the Agent SDK on the logged-in Claude Code subscription with only paircut's
  * own tools: no built-in tools, no settings files, no other MCP servers, so each turn stays small.
  */
-const SERVER = 'cutdesk';
+const SERVER = 'paircut';
 const RENDERER_TIMEOUT_MS = 30_000;
 const EXPORT_TIMEOUT_MS = 20 * 60_000;
 /** Up to 24 frames, each waiting up to 3s for video seeks. */
 const SHEET_TIMEOUT_MS = 2 * 60_000;
 const APP_SHOT_WIDTH = 800;
 
-const SYSTEM_PROMPT = `You operate cutdesk, a short-form video editor (the frame size is in get_state). Reply in Korean, briefly, as plain text without markdown.
+const SYSTEM_PROMPT = `You operate paircut, a short-form video editor (the frame size is in get_state). Reply in Korean, briefly, as plain text without markdown.
 Times are timeline seconds. Use ids from get_state; call it before editing unless you already know the state.
 Put related changes into one edit call: it is one undo step and all-or-nothing.
 screenshot shows the preview frame; use screenshot_app only when you need the editor UI itself.
@@ -206,5 +206,5 @@ export function registerAgent(window: BrowserWindow, isTest: boolean): void {
     running?.abort();
     sessionId = null;
   });
-  if (isTest) (globalThis as { __cutdeskAgent?: object }).__cutdeskAgent = { callTool };
+  if (isTest) (globalThis as { __paircutAgent?: object }).__paircutAgent = { callTool };
 }

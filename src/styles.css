@@ -21,7 +21,7 @@
 
 /* Noto Serif KR ExtraBold, subset (see fonts/NotoSerifKR-LICENSE.txt); own name so the system copy never stands in */
 @font-face {
-  font-family: 'Cutdesk Serif';
+  font-family: 'Paircut Serif';
   font-weight: 800;
   font-style: normal;
   src: url('./fonts/NotoSerifKR-ExtraBold-KS.woff2') format('woff2');
@@ -29,14 +29,14 @@
 
 /* Freesentation 7 Bold / 9 Black and Clova Nanum handwriting OeHalmeoni, subsets (see fonts/*-LICENSE.txt) */
 @font-face {
-  font-family: 'Cutdesk Presentation';
+  font-family: 'Paircut Presentation';
   font-weight: 700;
   font-style: normal;
   src: url('./fonts/Freesentation-Bold-KS.woff2') format('woff2');
 }
 
 @font-face {
-  font-family: 'Cutdesk Presentation';
+  font-family: 'Paircut Presentation';
   font-weight: 900;
   font-style: normal;
   src: url('./fonts/Freesentation-Black-KS.woff2') format('woff2');
@@ -79,7 +79,7 @@
 
 /* Instrument Serif Italic, Latin subset (see fonts/InstrumentSerif-OFL.txt); own name and normal style so the plain font string picks it */
 @font-face {
-  font-family: 'Cutdesk Instrument Italic';
+  font-family: 'Paircut Instrument Italic';
   font-weight: 400;
   font-style: normal;
   font-display: block;
@@ -87,7 +87,7 @@
 }
 
 @font-face {
-  font-family: 'Cutdesk Hand';
+  font-family: 'Paircut Hand';
   font-weight: 400;
   font-style: normal;
   src: url('./fonts/NanumHandOeHalmeoni-KS.woff2') format('woff2');
@@ -136,26 +136,28 @@
 }
 
 :root {
-  color-scheme: dark;
-  /* OpenCut dark (opencut-classic globals.css): neutral near-black ground, panels as cards, one sky blue. */
-  --bg: #0d0d0d;
-  --panel: #1a1a1a;
-  --panel-2: #262626;
-  --line: #2e2e2e;
-  --line-strong: #3d3d3d;
-  --text: #d9d9d9;
-  --dim: #8a8a8a;
-  --accent: #16a9f3;
-  --accent-strong: #16a9f3;
-  --sky: #3abcfd;
-  --accent-soft: rgba(22, 169, 243, 0.16);
-  --danger: #f26b6b;
-  --video: #2a2a2a;
-  --image: #ba5d7a;
-  --audio: #8f5dba;
-  --text-clip: #5dbaa0;
-  --radius: 8px;
-  --radius-sm: 6px;
+  color-scheme: light;
+  /* Paircut: one pale slate ground split by hairlines, square corners.
+     Violet = action and selection, coral = time (playhead, now). */
+  --bg: #dde3ec;
+  --panel: #dde3ec;
+  --panel-2: #e8ecf2;
+  --line: #c3cad6;
+  --line-strong: #a9b1bf;
+  --text: #3b4250;
+  --dim: #858d9c;
+  --accent: #4b3ff0;
+  --accent-strong: #4b3ff0;
+  --sky: #4b3ff0;
+  --accent-soft: rgba(75, 63, 240, 0.1);
+  --coral: #f0585c;
+  --danger: #e0474c;
+  --video: #c9d0db;
+  --image: #d98d93;
+  --audio: #a497ee;
+  --text-clip: #f4b4ae;
+  --radius: 0;
+  --radius-sm: 0;
   font-family: 'Pretendard', 'Segoe UI', 'Malgun Gothic', sans-serif;
   font-size: 13px;
   color: var(--text);
@@ -178,8 +180,8 @@ body,
 button {
   font: inherit;
   color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid transparent;
+  background: transparent;
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   padding: 5px 10px;
   cursor: pointer;
@@ -187,7 +189,8 @@ button {
 }
 
 button:hover:not(:disabled) {
-  background: #303030;
+  background: var(--panel-2);
+  border-color: var(--line-strong);
 }
 
 button:disabled {
@@ -197,24 +200,25 @@ button:disabled {
 
 button.primary {
   background: var(--accent);
-  border-color: rgba(255, 255, 255, 0.18);
+  border-color: var(--accent);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 0 0 1px rgba(22, 169, 243, 0.35), 0 2px 10px rgba(22, 169, 243, 0.25);
 }
 
 button.primary:hover:not(:disabled) {
-  background: #2eb4f6;
+  background: #3a2fd6;
+  border-color: #3a2fd6;
 }
 
 button.toggle.on {
-  background: #00253d;
-  border-color: #003a5c;
-  color: var(--sky);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 button.ghost {
   background: transparent;
+  border-color: transparent;
   color: var(--dim);
 }
 
@@ -230,6 +234,7 @@ button.icon {
   display: inline-grid;
   place-items: center;
   background: transparent;
+  border-color: transparent;
   color: var(--text);
   font-size: 16px;
   line-height: 1;
@@ -237,11 +242,12 @@ button.icon {
 
 button.icon:hover:not(:disabled) {
   background: var(--panel-2);
+  border-color: transparent;
 }
 
 button.icon.on {
-  background: #00253d;
-  color: var(--sky);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 button.icon svg,
@@ -322,32 +328,31 @@ input[type='range'] {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 0 8px 8px;
 }
 
+/* Header cells split by hairlines, the way the reference sets logo, cart and sign-in apart. */
 .topbar {
   flex: none;
   height: 52px;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 4px;
+  align-items: stretch;
+  border-bottom: 1px solid var(--line);
 }
 
 .brand {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  background: #f2f2f2;
-  color: #0d0d0d;
-  font-weight: 900;
-  font-size: 15px;
-  letter-spacing: -0.04em;
+  display: flex;
+  align-items: center;
+  padding: 0 26px 0 22px;
+  border-right: 1px solid var(--line);
+  color: #6f7787;
+  font-weight: 700;
+  font-size: 23px;
+  letter-spacing: -0.03em;
 }
 
 .doc-title {
+  align-self: center;
+  padding: 0 18px;
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
@@ -367,8 +372,20 @@ input[type='range'] {
 .file-actions {
   flex: 1;
   display: flex;
+  align-items: center;
   gap: 2px;
-  margin-left: 8px;
+}
+
+.topbar > button.primary {
+  padding: 0 26px;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  color: var(--accent);
+}
+
+.topbar > button.primary:hover:not(:disabled) {
+  background: var(--accent-soft);
 }
 
 .tl-splitter {
@@ -389,22 +406,22 @@ input[type='range'] {
 .col-splitter::after {
   content: '';
   position: absolute;
-  border-radius: 2px;
+  background: var(--line);
   transition: background-color 0.15s;
 }
 
 .tl-splitter::after {
-  left: 40%;
-  right: 40%;
+  left: 0;
+  right: 0;
   top: 3px;
-  height: 2px;
+  height: 1px;
 }
 
 .col-splitter::after {
-  top: 40%;
-  bottom: 40%;
-  left: 2px;
-  width: 2px;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
 }
 
 .tl-splitter:hover::after,
@@ -426,11 +443,10 @@ input[type='range'] {
 
 .notice {
   margin-bottom: 6px;
-  padding: 7px 12px;
-  background: #00253d;
-  color: var(--sky);
-  border: 1px solid #003a5c;
-  border-radius: var(--radius-sm);
+  padding: 7px 22px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
 
@@ -443,7 +459,7 @@ input[type='range'] {
 
 .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius);
   min-height: 0;
   display: flex;
@@ -455,11 +471,19 @@ input[type='range'] {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 42px;
-  padding: 6px 12px;
+  min-height: 46px;
+  padding: 6px 16px;
   border-bottom: 1px solid var(--line);
-  color: var(--dim);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.panel-head .dim {
+  font-size: 12px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 
 .empty-state {
@@ -479,8 +503,8 @@ input[type='range'] {
   place-items: center;
   width: 44px;
   height: 44px;
-  border-radius: 10px;
-  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
   color: var(--dim);
 }
 
@@ -525,8 +549,8 @@ input[type='range'] {
 }
 
 .key-row button.icon.key.on {
-  background: rgba(255, 209, 102, 0.16);
-  color: #ffd166;
+  background: rgba(240, 88, 92, 0.12);
+  color: var(--coral);
 }
 
 .key-row button.icon.key.on svg {
@@ -607,7 +631,27 @@ input[type='range'] {
 }
 
 .preview {
+  position: relative;
   background: var(--panel);
+}
+
+/* Pale vertical wordmark in the empty margin beside the frame, like the 日本 glyphs in the reference.
+   The stage paints over it whenever a wide frame reaches that far. */
+.preview::before {
+  content: '페\A어\A컷';
+  position: absolute;
+  top: 22px;
+  left: 26px;
+  white-space: pre;
+  font-size: 64px;
+  font-weight: 300;
+  line-height: 1.05;
+  color: rgba(59, 66, 80, 0.09);
+  pointer-events: none;
+}
+
+.stage-wrap {
+  position: relative;
 }
 
 .stage-wrap {
@@ -679,7 +723,7 @@ input[type='range'] {
   left: 0;
   top: 7px;
   height: 2px;
-  background: var(--accent);
+  background: var(--coral);
   pointer-events: none;
 }
 
@@ -690,7 +734,7 @@ input[type='range'] {
   height: 10px;
   margin-left: -5px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--coral);
   pointer-events: none;
 }
 
@@ -720,18 +764,14 @@ input[type='range'] {
 }
 
 .transport button.icon.play {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: #f2f2f2;
-  color: #0d0d0d;
-}
-
-.transport button.icon.play:hover {
-  background: #fff;
+  width: 40px;
+  height: 40px;
+  color: var(--accent);
 }
 
 .transport button.icon.play svg {
+  width: 22px;
+  height: 22px;
   fill: currentColor;
 }
 
@@ -743,15 +783,16 @@ input[type='range'] {
 }
 
 .transport select {
-  background: var(--panel-2);
-  border-color: transparent;
+  background: transparent;
+  border-color: var(--line);
   padding: 3px 6px;
 }
 
 .timecode {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
-  color: var(--accent);
+  font-weight: 600;
+  color: var(--coral);
   letter-spacing: 0.02em;
 }
 
@@ -825,7 +866,7 @@ input[type='range'] {
   display: flex;
   flex-direction: column;
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius);
   overflow: hidden;
   min-height: 0;
@@ -928,9 +969,8 @@ input[type='range'] {
   width: calc(48px * var(--thumb-w, 0.5625));
   height: calc(48px * var(--thumb-h, 1));
   border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  background-color: #2b2b2b;
-  background-image: conic-gradient(#3a3a3a 25%, transparent 0 50%, #3a3a3a 0 75%, transparent 0);
+  background-color: #e8ecf2;
+  background-image: conic-gradient(#cfd6e0 25%, transparent 0 50%, #cfd6e0 0 75%, transparent 0);
   background-size: 8px 8px;
 }
 
@@ -989,7 +1029,7 @@ input[type='range'] {
 }
 
 .tl-track.locked {
-  background-image: repeating-linear-gradient(135deg, transparent 0 10px, rgba(255, 255, 255, 0.04) 10px 20px);
+  background-image: repeating-linear-gradient(135deg, transparent 0 10px, rgba(59, 66, 80, 0.06) 10px 20px);
 }
 
 .tl-track.locked .tl-clip {
@@ -1003,10 +1043,10 @@ input[type='range'] {
   display: flex;
   flex-direction: column;
   padding: 4px;
-  background: #121212;
-  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 28px rgba(40, 50, 70, 0.18);
 }
 
 .tl-menu button {
@@ -1055,10 +1095,10 @@ input[type='range'] {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: #121212;
-  border: 1px solid var(--line);
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 10px 28px rgba(40, 50, 70, 0.18);
   overflow: hidden;
 }
 
@@ -1103,7 +1143,7 @@ input[type='range'] {
 }
 
 .font-row.on .font-label {
-  color: var(--sky);
+  color: var(--accent);
 }
 
 .font-sample {
@@ -1240,7 +1280,7 @@ input[type='range'] {
   border-radius: var(--radius-sm);
   overflow: hidden;
   cursor: grab;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(59, 66, 80, 0.2);
 }
 
 .tl-clip.kind-video {
@@ -1256,7 +1296,7 @@ input[type='range'] {
 }
 
 .tl-clip.selected {
-  border: 2px solid #fff;
+  border: 2px solid var(--accent);
 }
 
 .tl-clip.dim {
@@ -1280,6 +1320,7 @@ input[type='range'] {
   top: 3px;
   right: 6px;
   font-size: 11px;
+  color: #fff;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1313,7 +1354,7 @@ input[type='range'] {
   bottom: 0;
   width: 2px;
   margin-left: -1px;
-  background: var(--accent);
+  background: var(--coral);
   pointer-events: none;
   z-index: 3;
 }
@@ -1335,14 +1376,14 @@ input[type='range'] {
   left: 1px;
   width: 14px;
   height: 14px;
-  background: var(--accent);
+  background: var(--coral);
   clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%);
 }
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: rgba(59, 66, 80, 0.32);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1352,16 +1393,17 @@ input[type='range'] {
   width: 440px;
   max-height: 80vh;
   overflow-y: auto;
-  background: #121212;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 20px 22px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  padding: 24px 26px;
+  box-shadow: 0 16px 40px rgba(40, 50, 70, 0.22);
 }
 
 .modal h2 {
   margin: 0 0 6px;
-  font-size: 16px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .choices {
@@ -1388,8 +1430,8 @@ input[type='range'] {
 .progress {
   position: relative;
   height: 22px;
-  background: var(--bg);
-  border-radius: 4px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
   overflow: hidden;
   margin: 12px 0;
 }
@@ -1531,7 +1573,7 @@ input[type='range'] {
 .snap-line {
   position: absolute;
   pointer-events: none;
-  background: #ff4fa3;
+  background: var(--coral);
 }
 
 .snap-line.v {
@@ -1552,19 +1594,19 @@ input[type='range'] {
   gap: 4px;
 }
 
-/* Track colors from OpenCut's timeline theme: text mint, audio violet, pictures show their own frames. */
+/* Track colors: text soft coral, audio lavender, pictures show their own frames. */
 .tl-clip.kind-text {
   background: var(--text-clip);
 }
 
 .tl-clip.kind-text .tl-clip-label {
-  color: #0d2a22;
+  color: #5a1d20;
   font-weight: 600;
   text-shadow: none;
 }
 
 .tl-clip.kind-text.selected .handle {
-  background: rgba(13, 42, 34, 0.6);
+  background: rgba(90, 29, 32, 0.55);
 }
 
 /* Keyframe diamonds along the bottom of a clip. */
@@ -1574,8 +1616,8 @@ input[type='range'] {
   width: 8px;
   height: 8px;
   margin-left: -4px;
-  background: #ffd166;
-  border: 1px solid rgba(0, 0, 0, 0.6);
+  background: var(--coral);
+  border: 1px solid rgba(255, 255, 255, 0.8);
   transform: rotate(45deg);
   pointer-events: none;
 }
@@ -1584,7 +1626,7 @@ input[type='range'] {
   position: absolute;
   top: 0;
   bottom: 0;
-  border-left: 1px solid #009dff;
+  border-left: 1px solid var(--accent);
   pointer-events: none;
 }
 
@@ -1593,7 +1635,7 @@ input[type='range'] {
   bottom: 1px;
   left: 3px;
   font-size: 10px;
-  color: #6cc7ff;
+  color: var(--accent);
   white-space: nowrap;
   pointer-events: auto;
   cursor: pointer;
@@ -1606,7 +1648,7 @@ input[type='range'] {
   left: -4px;
   width: 7px;
   height: 9px;
-  background: #009dff;
+  background: var(--accent);
   clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%);
 }
 
@@ -1615,7 +1657,7 @@ input[type='range'] {
   flex-direction: row;
   min-height: 0;
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius);
   overflow: hidden;
 }
@@ -1636,13 +1678,26 @@ input[type='range'] {
 
 .tabs {
   flex: none;
-  width: 44px;
+  width: 48px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 6px 0;
+  padding: 8px 0 18px;
   border-right: 1px solid var(--line);
+}
+
+/* Rotated caption at the foot of the rail, read bottom to top as in the reference's side labels. */
+.tabs::after {
+  content: 'paircut  editor';
+  margin-top: auto;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  white-space: pre;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dim);
+  letter-spacing: 0.01em;
 }
 
 .tabs .tab {
@@ -1670,8 +1725,8 @@ input[type='range'] {
 }
 
 .tabs .tab.on {
-  background: #00253d;
-  color: var(--sky);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .preset-list {
@@ -1811,8 +1866,8 @@ input[type='range'] {
 }
 
 .tabs .count.bad {
-  background: #5a1f1f;
-  color: #ffb4b4;
+  background: var(--coral);
+  color: #fff;
 }
 
 .issue-list {
@@ -1900,7 +1955,6 @@ input[type='range'] {
   align-self: flex-end;
   max-width: 90%;
   padding: 6px 9px;
-  border-radius: 6px;
   background: var(--accent-soft);
 }
 
@@ -1936,9 +1990,8 @@ input[type='range'] {
   resize: none;
   font: inherit;
   color: var(--text);
-  background: var(--bg);
+  background: var(--panel-2);
   border: 1px solid var(--line);
-  border-radius: 4px;
   padding: 6px;
 }
 
@@ -1948,7 +2001,7 @@ input[type='range'] {
 }
 
 .tl-track.selected {
-  background: rgba(22, 169, 243, 0.06);
+  background: rgba(75, 63, 240, 0.05);
 }
 
 .tl-add-layer {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { MediaAsset, Matte } from '../shared/project';
 import { FFMPEG } from './media';
 
-export const PYTHON = process.env.CUTDESK_PYTHON ?? 'python';
+export const PYTHON = process.env.PAIRCUT_PYTHON ?? 'python';
 /** u2net measured 0.48 s per 1080x1920 frame on this machine's CPU, isnet-general-use 1.06 s. */
 const MODEL = 'u2net';
 /** Masks are cut at this longest side; the model itself works at 320 px, so more only costs disk. */

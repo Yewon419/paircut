@@ -4,9 +4,9 @@ import { clipDuration, TEXT_STYLE_DEFAULTS } from '../shared/project';
 import type { TextPreset } from './presets';
 import { PRESETS } from './presets';
 
-const KEY = 'cutdesk.textTemplates';
+const KEY = 'paircut.textTemplates';
 /** Built-in templates live in code, so deleting one only hides it; the ids here are hidden. */
-const HIDDEN_KEY = 'cutdesk.hiddenTextPresets';
+const HIDDEN_KEY = 'paircut.hiddenTextPresets';
 
 const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
 

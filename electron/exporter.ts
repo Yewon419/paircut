@@ -14,7 +14,7 @@ export interface RunningExport {
 
 /** Bakes the picture layers of a small project into one see-through webm at outPath. */
 export async function runBake(project: Project, outPath: string): Promise<void> {
-  const workDir = mkdtempSync(join(tmpdir(), 'cutdesk-bake-'));
+  const workDir = mkdtempSync(join(tmpdir(), 'paircut-bake-'));
   try {
     const plan = buildBakePlan(project);
     for (const lut of plan.luts) writeFileSync(join(workDir, lut.name), lut.content, 'utf8');
@@ -46,7 +46,7 @@ export function runExport(
   texts: TextImage[],
   onProgress: (ratio: number) => void,
 ): RunningExport {
-  const workDir = mkdtempSync(join(tmpdir(), 'cutdesk-'));
+  const workDir = mkdtempSync(join(tmpdir(), 'paircut-'));
   const layers = texts.map((t, i) => {
     const path = join(workDir, `text${i}.png`);
     writeFileSync(path, Buffer.from(t.pngBase64, 'base64'));

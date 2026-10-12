@@ -85,7 +85,7 @@ export function startBridge(dir: string, run: (name: ToolName, input: unknown) =
   server.on('error', (err) => console.error('[bridge] server error', err));
   return () => {
     server.close();
-    // Another cutdesk started later may own the file now; only remove our own.
+    // Another paircut started later may own the file now; only remove our own.
     try {
       if ((JSON.parse(readFileSync(file, 'utf8')) as BridgeInfo).token === token) rmSync(file, { force: true });
     } catch (err) {

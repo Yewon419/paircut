@@ -1,5 +1,5 @@
 {
-  "name": "cutdesk",
+  "name": "paircut",
   "version": "0.1.0",
   "description": "Bitteul reels editor",
   "main": "dist-electron/electron/main.js",

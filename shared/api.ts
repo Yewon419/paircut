@@ -58,7 +58,7 @@ export interface OpenedProject {
   missing: string[];
 }
 
-export interface CutdeskApi {
+export interface PaircutApi {
   isTest(): Promise<boolean>;
   pickMedia(): Promise<string[]>;
   probeMedia(paths: string[]): Promise<MediaAsset[]>;

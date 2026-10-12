@@ -8,8 +8,8 @@ import { IMAGE_DEFAULT_DURATION } from '../shared/project';
 
 const run = promisify(execFile);
 
-export const FFMPEG = process.env.CUTDESK_FFMPEG ?? 'ffmpeg';
-export const FFPROBE = process.env.CUTDESK_FFPROBE ?? 'ffprobe';
+export const FFMPEG = process.env.PAIRCUT_FFMPEG ?? 'ffmpeg';
+export const FFPROBE = process.env.PAIRCUT_FFPROBE ?? 'ffprobe';
 
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif']);
 

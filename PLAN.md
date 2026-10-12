@@ -1,12 +1,14 @@
-# cutdesk 계획
+# paircut 계획
 
 빛뜰(@windgarden_gardener) 릴스 전용 Windows 데스크톱 편집기. CapCut의 작업 흐름을 따르되 이름·로고는 따로 쓴다.
 기준 문서: `Desktop\PROJECT\윈드가든인스타\CONTI_RULES.md`, `CHARACTER.md`, `board\board.json`.
 
+이름 변경(2026-10-12, 대표님 결정): cutdesk → paircut(페어컷). 배포 대비 디자인도 연한 청회색·1px 선·직각 테마로 바꿈. 옛 `%APPDATA%\cutdesk`(캐시·프리셋)와 `cutdesk.*` localStorage 값은 이어받지 않는다.
+
 ## 구조
 - Electron + React + TypeScript, 상태는 zustand(`src/store.ts`, 스냅샷 undo/redo)
 - 미리보기: `<video>`/`<img>` + canvas 합성(`src/engine/player.ts`)
-- 내보내기: 같은 프로젝트 JSON → ffmpeg `filter_complex`(`shared/exportGraph.ts`), 로컬 ffmpeg(`CUTDESK_FFMPEG`로 경로 변경 가능)
+- 내보내기: 같은 프로젝트 JSON → ffmpeg `filter_complex`(`shared/exportGraph.ts`), 로컬 ffmpeg(`PAIRCUT_FFMPEG`로 경로 변경 가능)
 - 배치 규칙은 `shared/project.ts`의 `placeVisual` 하나를 미리보기와 내보내기가 같이 쓴다(9:16 꽉 채우기, 레터박스 없음)
 - 로컬 파일은 `media://` 프로토콜(Range·CORS 지원)로 읽는다. CORS가 없으면 캔버스가 오염돼 픽셀 읽기와 WebGL이 막힌다
 - 클립 볼륨·페이드·속도: 미리보기는 요소마다 WebAudio GainNode(`audioGain`)와 `playbackRate`, 내보내기는 `setpts`·`atempo`·`volume`·`afade`(선형). 타임라인 길이는 `(out - in) / speed`, 소스 위치는 `sourceTime`
@@ -22,7 +24,7 @@
    - 3a 콘티 규칙 실시간 점검(`src/rules.ts`, 점검 탭, 안전 영역 가이드): 길이 15~35초, 메인 컷 2초, 두 줄(딴지 제외)·줄당 16자·초당 12자, 안전 영역, 배지 위치, 레터박스, 빈 화면, 무음 (완료)
    - 3b 오디오(클립 볼륨 0~200%·페이드 인/아웃)·속도(0.5~2배, 소리는 음높이 유지) (완료). 속도를 바꾸면 같은 트랙 뒤 클립이 따라 움직인다(다른 트랙의 자막은 그대로). 분할하면 안쪽 페이드는 0이 된다
    - 3c 색 보정(밝기·대비·채도·색온도) + 빛뜰 보정 프리셋(CHARACTER 2-1: 밝기 +20, 대비 -15, 빛뜰 톤 100 = 초록 채도 절반, 185~260° 파랑을 세룰리안 204.5°로 70% 당김) (완료). 흰색 중립은 자동 화이트밸런스 없이 색온도로 맞춘다. 그레인은 없다
-     - 대표님 추가 지시(2026-10-01): 보정 프리셋 저장(앱 전체 공유, `localStorage` `cutdesk.colorPresets`, 같은 이름은 덮어씀)과 "모든 영상·사진 클립에 적용"(되돌리기 한 번) (완료)
+     - 대표님 추가 지시(2026-10-01): 보정 프리셋 저장(앱 전체 공유, `localStorage` `paircut.colorPresets`, 같은 이름은 덮어씀)과 "모든 영상·사진 클립에 적용"(되돌리기 한 번) (완료)
    - 3c+ 앱 안 Claude(대표님 결정 2026-10-01: Agent SDK, 로그인된 Claude Code 구독, 기본 모델 Sonnet). 구현: 사이드 패널 Claude 탭, 도구 4개(get_state 압축 텍스트, edit 일괄·원자적·undo 1단계, screenshot 270x480, screenshot_app). 내장 도구·설정 파일·다른 MCP 없이 실행. 내보내기·저장·열기는 맡기지 않음
    - 3d 크로스 디졸브 (완료). 들어오는 클립의 `dissolve`(초, 0.3·0.5·1 버튼)가 같은 트랙 바로 앞 클립과 붙어 있을 때만 쓰인다. 컷을 가운데 두고 앞뒤로 반씩 겹쳐서 영상 길이·컷·자막 위치는 그대로다. 겹치는 동안 원본에 남은 프레임(트림 바깥)을 쓰고, 원본이 모자라면 첫·끝 프레임을 멈춰 둔다(내보내기는 `tpad` clone). 소리는 컷에서 바뀐다. 분할하면 오른쪽 조각은 디졸브 0
 
@@ -30,15 +32,15 @@
    - 4a 타이포그래피 (완료). 자막 전체 `rotation`(°)과 부분 꾸미기 `spans`: 꾸밀 글자를 "토큰을 채운 문장에서 `match`의 `nth`번째"로 지정해 문장을 고쳐도 따라간다. 부분마다 색·글꼴(두께)·크기 배율·회전·이동(1080 기준 px). 같은 함수(`rasterizeText`)가 글자별 모양을 정해 회전까지 굽고, 캔버스는 회전 결과를 다 담게 커지되 회전 없는 상자의 기준점(가운데 정렬은 중심, 왼쪽 정렬은 왼쪽 끝)은 그대로. 인스펙터는 글상자에서 드래그로 고른 뒤 "선택한 글자 꾸미기", 브릿지는 `span` 연산
    - 4b 단색 배경 (완료). 프로젝트 크기의 한 색 PNG를 ffmpeg로 만들어(`userData/solids`, 같은 색·크기는 재사용) 일반 사진 에셋으로 넣는다. 에셋 `solid`에 색을 적고, 인스펙터 "이 색으로 바꾸기"는 클립이 가리키는 에셋을 바꾼다. 브릿지는 `add_solid`
    - 4c 모션그래픽 이식 (완료). 투명 배경 VP9/VP8 webm(`alpha_mode=1`)을 가져오면 에셋 `alpha`가 붙는다. 미리보기는 `<video>`가 알파째 그리고, 내보내기는 그 입력만 `-c:v libvpx-vp9`(VP8은 `libvpx`)로 읽는다. ffmpeg 기본 VP9 디코더는 알파를 버려 뒤가 검게 덮인다. 이 기능 전에 가져온 webm은 다시 가져와야 `alpha`가 붙는다. ProRes 4444 .mov는 Chromium이 재생하지 못해 쓰지 않는다
-   - 4d 미리보기 키우기 (완료). 미리보기와 타임라인 사이 경계를 끌어 타임라인 높이 조절(120px~, `localStorage` `cutdesk.timelineHeight`, 두 번 누르면 300px). "크게 보기"는 타임라인·양옆 패널을 숨기고(언마운트 없이 CSS로) Esc로 돌아온다
+   - 4d 미리보기 키우기 (완료). 미리보기와 타임라인 사이 경계를 끌어 타임라인 높이 조절(120px~, `localStorage` `paircut.timelineHeight`, 두 번 누르면 300px). "크게 보기"는 타임라인·양옆 패널을 숨기고(언마운트 없이 CSS로) Esc로 돌아온다
    - 4e 글자 효과 (완료). 자막 `style.effect`: 반전(`invert`, 글자 모양 안의 화면을 difference로 뒤집음), 흑백 창(`mono`, 글자 안만 흑백 0.3/0.59/0.11), 유리 창(`frost`, 글자 안만 흐리게 + 흰색 25%), 뚫린 글자(`knockout`, 배경 상자에서 글자를 오려 아래 화면이 비침). 앞의 셋은 아래 화면을 읽는 효과라 미리보기는 캔버스 합성(`difference`·`saturation`·블러 사본을 글자로 마스크), 내보내기는 글자를 투명 전체 프레임에 올려 알파를 마스크로 쓰고 처리한 화면을 `alphamerge`로 다시 얹는다(`enable`로 클립 구간에서만). 뚫린 글자는 PNG에 구워져 양쪽이 같다. 글리치·색수차·글로우는 4f, 피사체 뒤 글자는 4g
    - 4f 글로우·색수차·글리치 (완료, 2026-10-05). 셋 다 글자 그림에 구워 미리보기와 내보내기가 같다. 글로우는 글자색 그림자 두 겹(`GLOW_BLUR` 0.35·크기), 색수차는 빨강 사본 왼쪽·청록 사본 오른쪽(`lighter`라 겹치면 흰색) 위에 글자. 글리치는 띠를 잘라 옆으로 민 변형 3장(글자 내용으로 시드)을 만들고, 클립 안 시각으로 1.5초마다 0.3초 동안 0.1초씩 바꿔 낀다(`glitchVariant`). 내보내기는 변형마다 입력을 하나 더 열고 같은 식을 `mod`·`floor`로 쓴 `enable`로 켠다
-   - 4g 피사체 뒤 글자 (완료, 2026-10-05). 효과 `behind`: 자막 트랙 바로 아래의 보이는 영상 트랙에서 자막과 겹치는 클립이 피사체다(`behindSubjects`). 마스크는 인스펙터 "피사체 분리"로 만든다. ffmpeg가 필요한 원본 구간을 프로젝트 fps로 뽑고(긴 변 960) `tools/matte.py`가 rembg `u2net`(CPU 프레임당 약 0.5초)으로 흰색+알파 PNG를 `userData/mattes/<해시>`에 쓴다. 에셋 `matte`에 구간·fps·장수를 적고, 프레임 n = 원본 from + n/fps. 미리보기는 글자 전 화면을 복사해 두고 글자를 그린 뒤 마스크 모양만 다시 얹고, 내보내기는 같은 PNG 열을 image2로 읽어 투명 전체 프레임에 놓고 `alphaextract`·`alphamerge`로 같은 일을 한다. 마스크가 없거나 구간이 모자라면 내보내기가 멈추고 알려 준다(`matteNeeds`). Python은 `CUTDESK_PYTHON`(기본 `python`)
+   - 4g 피사체 뒤 글자 (완료, 2026-10-05). 효과 `behind`: 자막 트랙 바로 아래의 보이는 영상 트랙에서 자막과 겹치는 클립이 피사체다(`behindSubjects`). 마스크는 인스펙터 "피사체 분리"로 만든다. ffmpeg가 필요한 원본 구간을 프로젝트 fps로 뽑고(긴 변 960) `tools/matte.py`가 rembg `u2net`(CPU 프레임당 약 0.5초)으로 흰색+알파 PNG를 `userData/mattes/<해시>`에 쓴다. 에셋 `matte`에 구간·fps·장수를 적고, 프레임 n = 원본 from + n/fps. 미리보기는 글자 전 화면을 복사해 두고 글자를 그린 뒤 마스크 모양만 다시 얹고, 내보내기는 같은 PNG 열을 image2로 읽어 투명 전체 프레임에 놓고 `alphaextract`·`alphamerge`로 같은 일을 한다. 마스크가 없거나 구간이 모자라면 내보내기가 멈추고 알려 준다(`matteNeeds`). Python은 `PAIRCUT_PYTHON`(기본 `python`)
    - 4i 피사체를 새 레이어로 (완료, 2026-10-05). 영상·사진 클립 인스펙터 "피사체를 새 레이어로": 클립의 원본 구간 마스크(4g와 같은 `makeMatte`)로 피사체만 불투명한 VP9 알파 webm(사진은 PNG)을 `userData/subjects`에 만들고, 같은 시각·위치·자르기·속도·보정으로 원래 클립 바로 위 새 트랙에 올린다(`withSubjectLayer`). 두 트랙 사이에 다른 그림을 넣으면 피사체 뒤에 깔린다. 재생은 4c 투명 webm 경로를 그대로 쓴다
    - 4l 이동 (완료, 2026-10-08). 미리보기 아래 진행 바(`seekbar`): 누르거나 끌면 프레임 단위로 이동. 타임라인 스크럽 중 포인터를 양쪽 가장자리(28px) 안이나 밖에 두면 그쪽으로 계속 스크롤(최대 24px/프레임)하고 재생 헤드는 보이는 가장자리에 붙는다. 멈춘 상태에서도 재생 헤드가 화면 밖으로 가면 타임라인이 따라간다(재생 중엔 40px 여유, 멈춤은 완전히 벗어났을 때만)
    - 4k 라틴 글꼴 (완료, 2026-10-07). `src/fonts`에 가변 woff2로 Josefin Sans·Josefin Slab·Montserrat·Inter(OFL)와 Rock Salt(Apache 2.0). FontId `josefin(-light)`, `josefin-slab`, `montserrat(-medium)`, `inter(-regular)`, `scratch`. 한글 없음(한글 글자는 폴백으로 빠짐). Gotham·Helvetica Neue·CoFo Raffine·Editor's Note·Barnule은 유료라 번들하지 않고, PC에 설치한 뒤 인스펙터 "PC 글꼴" 이름으로 쓴다
    - 4j 기본 효과음 (완료, 2026-10-07). 리포 `sfx/`에 CC0 효과음 20개(MixClap·Kenney Interface Sounds·BigSoundBank)와 `sfx.json`(한글 이름·분류·출처). 미디어 탭 "효과음" 버튼이 목록을 펼치고(`sfx:list`가 절대 경로를 돌려줌), ▶는 `media://`로 미리 듣기, +는 `probeMedia`로 보통 에셋처럼 넣는다(같은 경로가 이미 있으면 다시 넣지 않음). 파일은 앱 폴더에 있으니 프로젝트 JSON의 경로가 PC마다 다를 수 있다
-   - 4h 텍스트 템플릿 (완료, 2026-10-05). 텍스트 탭에서 고른 자막을 "템플릿으로 추가"(문구·스타일·위치·애니메이션·회전·부분 꾸미기·길이, `localStorage` `cutdesk.textTemplates`). 모든 템플릿에 × 삭제. 기본 템플릿은 코드에 있어 숨김 목록(`cutdesk.hiddenTextPresets`)에 넣고 "기본 템플릿 되살리기"로 되돌린다. 인스펙터 프리셋 목록도 같은 목록. Claude `add_text`는 아직 기본 템플릿 id만 받는다
+   - 4h 텍스트 템플릿 (완료, 2026-10-05). 텍스트 탭에서 고른 자막을 "템플릿으로 추가"(문구·스타일·위치·애니메이션·회전·부분 꾸미기·길이, `localStorage` `paircut.textTemplates`). 모든 템플릿에 × 삭제. 기본 템플릿은 코드에 있어 숨김 목록(`paircut.hiddenTextPresets`)에 넣고 "기본 템플릿 되살리기"로 되돌린다. 인스펙터 프리셋 목록도 같은 목록. Claude `add_text`는 아직 기본 템플릿 id만 받는다
 
 ## 검증
 - `npm test` = 빌드 + `scripts/e2e-export.mjs`(실제 ffmpeg 출력의 픽셀·음량 검사) + `scripts/e2e-ui.mjs`(Electron 실행, 미리보기 캔버스와 내보낸 프레임 비교(텍스트 포함), 분할·되돌리기·드래그·트림, 프리셋 추가·텍스트 수정, 실제 board.json p001 콘티 불러오기, SRT 내보내기·가져오기, 콘티 규칙, 속도·볼륨·페이드, 색 보정의 미리보기·함수·내보내기 3자 비교, 디졸브 구간의 미리보기·내보내기 비교와 원본 여유 프레임·멈춘 프레임)

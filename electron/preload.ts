@@ -1,11 +1,11 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type { AgentEvent, ToolName } from '../shared/agentOps';
-import type { CutdeskApi, ExportEvent, MatteProgress } from '../shared/api';
+import type { PaircutApi, ExportEvent, MatteProgress } from '../shared/api';
 
 const MEDIA_SCHEME = 'media';
 
-const api: CutdeskApi = {
+const api: PaircutApi = {
   isTest: () => ipcRenderer.invoke('app:isTest'),
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),

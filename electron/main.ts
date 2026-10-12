@@ -15,7 +15,7 @@ import { runBake, runExport } from './exporter';
 import { makeSubjectFile } from './matte';
 import { importMedia, makeSolidImage, makeStillImage } from './media';
 
-const isTest = process.env.CUTDESK_TEST === '1';
+const isTest = process.env.PAIRCUT_TEST === '1';
 
 protocol.registerSchemesAsPrivileged([
   { scheme: MEDIA_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
@@ -90,7 +90,7 @@ function createWindow(): void {
     minWidth: 1100,
     minHeight: 700,
     backgroundColor: '#141416',
-    title: 'cutdesk',
+    title: 'paircut',
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -254,8 +254,8 @@ function registerIpc(): void {
     if (!target) {
       if (!win) return null;
       const res = await dialog.showSaveDialog(win, {
-        defaultPath: 'untitled.cutdesk.json',
-        filters: [{ name: 'cutdesk 프로젝트', extensions: ['json'] }],
+        defaultPath: 'untitled.paircut.json',
+        filters: [{ name: 'paircut 프로젝트', extensions: ['json'] }],
       });
       if (res.canceled || !res.filePath) return null;
       target = res.filePath;
@@ -269,7 +269,7 @@ function registerIpc(): void {
     if (!win) return null;
     const res = await dialog.showOpenDialog(win, {
       properties: ['openFile'],
-      filters: [{ name: 'cutdesk 프로젝트', extensions: ['json'] }],
+      filters: [{ name: 'paircut 프로젝트', extensions: ['json'] }],
     });
     if (res.canceled || res.filePaths.length === 0) return null;
     const opened = readProject(res.filePaths[0]);
@@ -345,7 +345,7 @@ void app.whenReady().then(() => {
   registerIpc();
   createWindow();
   if (!isTest) app.on('will-quit', startBridge(app.getPath('userData'), bridgeTool));
-  else (globalThis as { __cutdeskBridge?: object }).__cutdeskBridge = { callTool: bridgeTool };
+  else (globalThis as { __paircutBridge?: object }).__paircutBridge = { callTool: bridgeTool };
 });
 
 app.on('window-all-closed', () => {

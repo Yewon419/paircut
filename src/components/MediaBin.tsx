@@ -4,7 +4,7 @@ import type { MediaAsset } from '../../shared/project';
 import { formatSeconds } from '../format';
 import { addAssets, addAssetToTimeline, useEditor } from '../store';
 
-export const ASSET_MIME = 'application/x-cutdesk-asset';
+export const ASSET_MIME = 'application/x-paircut-asset';
 
 const KIND_LABEL: Record<MediaAsset['kind'], string> = { video: '영상', image: '사진', audio: '오디오' };
 

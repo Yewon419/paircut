@@ -31,7 +31,7 @@ async function saveProject(saveAs: boolean): Promise<void> {
   if (path) useEditor.setState({ filePath: path, dirty: false });
 }
 
-const TIMELINE_KEY = 'cutdesk.timelineHeight';
+const TIMELINE_KEY = 'paircut.timelineHeight';
 const TIMELINE_DEFAULT = 300;
 const TIMELINE_MIN = 120;
 
@@ -44,7 +44,7 @@ function storedTimelineHeight(): number {
   return Number.isFinite(n) && n > 0 ? clampTimeline(n) : TIMELINE_DEFAULT;
 }
 
-const COLUMN_KEYS = { left: 'cutdesk.leftWidth', right: 'cutdesk.rightWidth' } as const;
+const COLUMN_KEYS = { left: 'paircut.leftWidth', right: 'paircut.rightWidth' } as const;
 const COLUMN_DEFAULT = 300;
 const COLUMN_MIN = 220;
 
@@ -139,7 +139,7 @@ export function App() {
   useEffect(() => {
     void window.api.isTest().then((isTest) => {
       if (!isTest) return;
-      (window as unknown as { __cutdesk: object }).__cutdesk = {
+      (window as unknown as { __paircut: object }).__paircut = {
         load: (p: Project) => loadProject(p, null),
         seek: (t: number) => {
           pause();
@@ -247,8 +247,8 @@ export function App() {
   return (
     <div className={big ? 'app big' : 'app'} style={layout}>
       <header className="topbar">
-        <div className="brand" title="cutdesk">
-          c
+        <div className="brand" title="paircut">
+          paircut.
         </div>
         <div className="doc-title" title={filePath ?? undefined}>
           {title}

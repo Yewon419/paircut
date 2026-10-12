@@ -10,7 +10,7 @@ type Entry =
   | { kind: 'error'; text: string }
   | { kind: 'done'; text: string };
 
-const MODEL_KEY = 'cutdesk.agentModel';
+const MODEL_KEY = 'paircut.agentModel';
 const MODELS: { id: AgentModel; label: string }[] = [
   { id: 'sonnet', label: 'Sonnet' },
   { id: 'haiku', label: 'Haiku' },
