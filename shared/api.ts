@@ -58,6 +58,22 @@ export interface OpenedProject {
   missing: string[];
 }
 
+/** A start-screen card: a recently opened or saved project file and what could be read from it. */
+export interface RecentProject {
+  path: string;
+  /** `missing`: the file is gone; `unreadable`: it exists but did not parse as a project (see `problem`). */
+  status: 'ok' | 'missing' | 'unreadable';
+  problem: string | null;
+  /** File modified time (ms since epoch), null when missing. */
+  modifiedAt: number | null;
+  duration: number | null;
+  width: number | null;
+  height: number | null;
+  /** JPEG of the preview taken at the last save, null until the project is saved once. */
+  thumbPath: string | null;
+  thumbAt: number | null;
+}
+
 export interface PaircutApi {
   isTest(): Promise<boolean>;
   pickMedia(): Promise<string[]>;
@@ -78,8 +94,14 @@ export interface PaircutApi {
   mediaUrl(path: string): string;
   saveProject(project: Project, path: string | null): Promise<string | null>;
   openProject(): Promise<OpenedProject | null>;
-  /** The project file last opened or saved, if it still exists. */
-  openLastProject(): Promise<OpenedProject | null>;
+  /** Recently opened or saved project files, newest first. */
+  listRecentProjects(): Promise<RecentProject[]>;
+  /** Opens a project file without a dialog and moves it to the top of the recent list. */
+  openProjectFile(path: string): Promise<OpenedProject>;
+  /** Drops a file from the recent list (the file itself is left alone). */
+  forgetRecentProject(path: string): Promise<void>;
+  /** Stores the start-screen picture for a saved project file. */
+  saveProjectThumb(path: string, jpegBase64: string): Promise<void>;
   pickExportPath(): Promise<string | null>;
   startExport(project: Project, options: ExportOptions, texts: TextImage[]): Promise<void>;
   cancelExport(): Promise<void>;

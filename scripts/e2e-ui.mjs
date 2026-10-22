@@ -1,8 +1,9 @@
 // UI end-to-end: launches the real Electron app, drives the editor, and checks that the
 // preview canvas matches the exported MP4 at the same timestamps.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
 import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
@@ -41,6 +42,10 @@ const project = {
   ],
 };
 const vTop = () => window.__paircut.state().project.tracks.find((t) => t.id === 'v-top').clips[0];
+
+/** The test run's recent list and start-screen pictures (the app keeps them here under PAIRCUT_TEST). */
+const recentRoot = join(tmpdir(), 'paircut-test-recent');
+rmSync(recentRoot, { recursive: true, force: true });
 
 const app = await _electron.launch({ args: ['.'], cwd: root, env: { ...process.env, PAIRCUT_TEST: '1' } });
 try {
@@ -1758,6 +1763,53 @@ try {
   const sheetBig = await bridge('contact_sheet', { from: 0, to: 7, step: 0.1 });
   check('contact_sheet refuses more than 24 frames', sheetBig.isError && sheetBig.text.includes('at most 24'), sheetBig.text);
 
+  // Start screen: the files saved above are the recent list, newest first, with the preview taken at save.
+  const fileC = join(dir, 'bridge-c.paircut.json');
+  await win.evaluate(() => window.__paircut.seek(1.5));
+  await win.waitForTimeout(500);
+  const savedC = await bridge('save_project', { path: fileC });
+  rmSync(fileA);
+  const size = await win.evaluate(() => ({ w: window.__paircut.state().project.width, h: window.__paircut.state().project.height }));
+  await win.evaluate(() => window.__paircut.home());
+  await win.waitForSelector('[data-testid="recent-card"]');
+  await win.waitForFunction(() => [...document.querySelectorAll('.recent-card img')].every((i) => i.complete && i.naturalWidth > 0));
+  const cards = () => win.evaluate(() => [...document.querySelectorAll('[data-testid="recent-card"]')].map((c) => ({
+    name: c.querySelector('.recent-name').textContent,
+    meta: c.querySelector('.recent-meta').textContent,
+    disabled: c.querySelector('.recent-open').disabled,
+    img: c.querySelector('img') ? `${c.querySelector('img').naturalWidth}x${c.querySelector('img').naturalHeight}` : null,
+  })));
+  const home1 = await cards();
+  const long = 480 / Math.max(size.w, size.h);
+  const thumbSize = `${Math.round(size.w * long)}x${Math.round(size.h * long)}`;
+  check('start screen lists saved files newest first', !savedC.isError && home1.map((c) => c.name).join(',') === 'bridge-c,bridge-b,bridge-a',
+    JSON.stringify(home1));
+  check('a saved project shows the preview taken at save', home1[0].img === thumbSize && !home1[0].disabled && home1[0].meta.includes('0:'),
+    `${home1[0].img} vs ${thumbSize}, ${home1[0].meta}`);
+  check('a project file that is gone is shown as missing and cannot open', home1[2].disabled && home1[2].meta === '파일 없음', JSON.stringify(home1[2]));
+  await win.screenshot({ path: join(dir, 'home.png') });
+  console.log(`screenshot: ${join(dir, 'home.png')}`);
+  await win.keyboard.press('Space');
+  await win.keyboard.press('Delete');
+  const behind = await win.evaluate(() => ({ playing: window.__paircut.state().playing, clips: window.__paircut.state().project.tracks.flatMap((t) => t.clips).length }));
+  check('editor shortcuts are off while the start screen is up', !behind.playing && behind.clips > 0, JSON.stringify(behind));
+  await win.locator('[data-testid="recent-card"]').nth(2).hover();
+  await win.locator('[data-testid="recent-forget"]').nth(2).click();
+  await win.waitForFunction(() => document.querySelectorAll('[data-testid="recent-card"]').length === 2);
+  const recentFile = JSON.parse(readFileSync(join(recentRoot, 'recent.json'), 'utf8')).paths;
+  check('forgetting a card drops it from the list only', recentFile.length === 2 && !recentFile.includes(fileA) && existsSync(fileC), JSON.stringify(recentFile));
+  await win.locator('.recent-open').first().click();
+  await win.waitForSelector('[data-testid="home"]', { state: 'detached' });
+  const fromCard = await win.evaluate(() => ({ filePath: window.__paircut.state().filePath, screen: window.__paircut.state().screen }));
+  check('clicking a card opens that project in the editor', fromCard.filePath === fileC && fromCard.screen === 'editor', JSON.stringify(fromCard));
+  await win.click('[data-testid="go-home"]');
+  await win.waitForSelector('[data-testid="home"]');
+  check('the logo goes back to the start screen', (await win.evaluate(() => window.__paircut.state().screen)) === 'home');
+  await win.click('[data-testid="home-new"]');
+  const fresh = await win.evaluate(() => ({ screen: window.__paircut.state().screen, filePath: window.__paircut.state().filePath, clips: window.__paircut.state().project.tracks.flatMap((t) => t.clips).length }));
+  check('new project from the start screen opens an empty editor', fresh.screen === 'editor' && fresh.filePath === null && fresh.clips === 0, JSON.stringify(fresh));
+
+  await win.evaluate((p) => window.__paircut.load(p), project);
   await win.evaluate(() => window.__paircut.seek(0.5));
   await win.waitForTimeout(500);
   await win.screenshot({ path: join(dir, 'app.png') });

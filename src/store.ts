@@ -37,6 +37,8 @@ export interface EditorState {
   snap: boolean;
   /** A video layer being merged down while its overlap with the layer below bakes, or why that merge failed. */
   layerJob: { trackId: string; error: string | null } | null;
+  /** The start screen covers the editor (which stays mounted so the preview engine and bridge keep running). */
+  screen: 'home' | 'editor';
 }
 
 export const useEditor = create<EditorState>(() => ({
@@ -54,6 +56,7 @@ export const useEditor = create<EditorState>(() => ({
   zoom: 80,
   snap: true,
   layerJob: null,
+  screen: 'home',
 }));
 
 const get = useEditor.getState;
@@ -160,6 +163,7 @@ export function loadProject(project: Project, filePath: string | null): void {
     selectedTrackId: null,
     playhead: 0,
     playing: false,
+    screen: 'editor',
   });
 }
 

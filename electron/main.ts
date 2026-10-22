@@ -1,13 +1,14 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
 import { createHash } from 'node:crypto';
-import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, extname, isAbsolute, join } from 'node:path';
+import { createReadStream, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
-import type { ExportEvent, ExportOptions, OpenedProject, SfxEntry, TextFile, TextImage } from '../shared/api';
+import type { ExportEvent, ExportOptions, OpenedProject, RecentProject, SfxEntry, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
-import { normalizeProject } from '../shared/project';
+import { normalizeProject, projectDuration } from '../shared/project';
 import { callRendererTool, callTool, registerAgent } from './agent';
 import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
@@ -178,6 +179,77 @@ function projectPathProblem(name: string, input: unknown): string | null {
   return null;
 }
 
+const RECENT_LIMIT = 12;
+
+/** Where the recent list and start-screen pictures live; tests use a temp folder so a run never touches the real list. */
+function recentRoot(): string {
+  const dir = isTest ? join(tmpdir(), 'paircut-test-recent') : app.getPath('userData');
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function samePath(a: string, b: string): boolean {
+  return resolve(a).toLowerCase() === resolve(b).toLowerCase();
+}
+
+/** Newest first. Before the list existed only `last-project.json` was kept, so that one file seeds it. */
+function readRecentPaths(): string[] {
+  const root = recentRoot();
+  const file = join(root, 'recent.json');
+  if (existsSync(file)) {
+    const data = JSON.parse(readFileSync(file, 'utf8')) as { paths?: unknown };
+    if (!Array.isArray(data.paths) || !data.paths.every((p) => typeof p === 'string')) throw new Error(`malformed recent list: ${file}`);
+    return data.paths as string[];
+  }
+  const legacy = join(root, 'last-project.json');
+  if (isTest || !existsSync(legacy)) return [];
+  const { path } = JSON.parse(readFileSync(legacy, 'utf8')) as { path?: unknown };
+  return typeof path === 'string' ? [path] : [];
+}
+
+function writeRecentPaths(paths: string[]): void {
+  writeFileSync(join(recentRoot(), 'recent.json'), JSON.stringify({ paths }, null, 2), 'utf8');
+}
+
+function rememberProject(path: string): void {
+  writeRecentPaths([path, ...readRecentPaths().filter((p) => !samePath(p, path))].slice(0, RECENT_LIMIT));
+}
+
+function thumbFile(path: string): string {
+  const dir = join(recentRoot(), 'project-thumbs');
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${createHash('sha1').update(resolve(path).toLowerCase()).digest('hex')}.jpg`);
+}
+
+function forgetProject(path: string): void {
+  writeRecentPaths(readRecentPaths().filter((p) => !samePath(p, path)));
+  const thumb = thumbFile(path);
+  if (existsSync(thumb)) unlinkSync(thumb);
+}
+
+function readProject(path: string): OpenedProject {
+  const project = normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project);
+  if (project.version !== 1) throw new Error(`unsupported project version: ${String(project.version)}`);
+  const missing = project.assets.filter((a) => !existsSync(a.path)).map((a) => a.path);
+  return { path, project, missing };
+}
+
+function recentEntry(path: string): RecentProject {
+  const thumb = thumbFile(path);
+  const thumbAt = existsSync(thumb) ? statSync(thumb).mtimeMs : null;
+  const base = { path, thumbPath: thumbAt === null ? null : thumb, thumbAt };
+  const unknown = { duration: null, width: null, height: null };
+  if (!existsSync(path)) return { ...base, ...unknown, status: 'missing', problem: null, modifiedAt: null };
+  const modifiedAt = statSync(path).mtimeMs;
+  try {
+    const { project } = readProject(path);
+    return { ...base, status: 'ok', problem: null, modifiedAt, duration: projectDuration(project), width: project.width, height: project.height };
+  } catch (err) {
+    console.error(`[recent] ${path}: ${(err as Error).message}`);
+    return { ...base, ...unknown, status: 'unreadable', problem: (err as Error).message, modifiedAt };
+  }
+}
+
 function send(event: ExportEvent): void {
   win?.webContents.send('export:event', event);
 }
@@ -240,16 +312,6 @@ function registerIpc(): void {
     }
   });
 
-  /** Remembers the project file last opened or saved, so the next launch can bring it back. */
-  const lastProjectFile = join(app.getPath('userData'), 'last-project.json');
-  const rememberProject = (path: string) => writeFileSync(lastProjectFile, JSON.stringify({ path }), 'utf8');
-  const readProject = (path: string): OpenedProject => {
-    const project = normalizeProject(JSON.parse(readFileSync(path, 'utf8')) as Project);
-    if (project.version !== 1) throw new Error(`unsupported project version: ${String(project.version)}`);
-    const missing = project.assets.filter((a) => !existsSync(a.path)).map((a) => a.path);
-    return { path, project, missing };
-  };
-
   ipcMain.handle('project:save', async (_e, project: Project, path: string | null) => {
     let target = path;
     if (!target) {
@@ -262,7 +324,7 @@ function registerIpc(): void {
       target = res.filePath;
     }
     writeFileSync(target, JSON.stringify(project, null, 2), 'utf8');
-    if (!isTest) rememberProject(target);
+    rememberProject(target);
     return target;
   });
 
@@ -274,14 +336,25 @@ function registerIpc(): void {
     });
     if (res.canceled || res.filePaths.length === 0) return null;
     const opened = readProject(res.filePaths[0]);
-    if (!isTest) rememberProject(opened.path);
+    rememberProject(opened.path);
     return opened;
   });
 
-  ipcMain.handle('project:openLast', (): OpenedProject | null => {
-    if (isTest || !existsSync(lastProjectFile)) return null;
-    const { path } = JSON.parse(readFileSync(lastProjectFile, 'utf8')) as { path: string };
-    return existsSync(path) ? readProject(path) : null;
+  ipcMain.handle('project:openFile', (_e, path: string): OpenedProject => {
+    try {
+      const opened = readProject(path);
+      rememberProject(path);
+      return opened;
+    } catch (err) {
+      console.error(`[project] open ${path}: ${(err as Error).message}`);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('recent:list', (): RecentProject[] => readRecentPaths().map(recentEntry));
+  ipcMain.handle('recent:forget', (_e, path: string) => forgetProject(path));
+  ipcMain.handle('project:saveThumb', (_e, path: string, jpegBase64: string) => {
+    writeFileSync(thumbFile(path), Buffer.from(jpegBase64, 'base64'));
   });
 
   ipcMain.handle('export:pickPath', async () => {

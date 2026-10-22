@@ -6,9 +6,12 @@ import { emptyProject } from '../shared/project';
 import { copySelection, cutSelection, pasteAttributes, pasteClipboard } from './clipboard';
 import { startAgentBridge } from './components/AgentPanel';
 import { ExportDialog } from './components/ExportDialog';
+import { Home } from './components/Home';
 import { Inspector } from './components/Inspector';
 import { SidePanel } from './components/SidePanel';
 import { textImagesFor } from './exportTexts';
+import type { OpenedProject } from '../shared/api';
+import { saveThumb } from './projectThumb';
 import type { Theme } from './theme';
 import { applyTheme, initialTheme, saveTheme } from './theme';
 import { Preview } from './components/Preview';
@@ -30,7 +33,9 @@ import {
 async function saveProject(saveAs: boolean): Promise<void> {
   const { project, filePath } = useEditor.getState();
   const path = await window.api.saveProject(project, saveAs ? null : filePath);
-  if (path) useEditor.setState({ filePath: path, dirty: false });
+  if (!path) return;
+  useEditor.setState({ filePath: path, dirty: false });
+  await saveThumb(path);
 }
 
 const TIMELINE_KEY = 'paircut.timelineHeight';
@@ -66,6 +71,7 @@ function confirmDiscard(): boolean {
 export function App() {
   const filePath = useEditor((s) => s.filePath);
   const dirty = useEditor((s) => s.dirty);
+  const screen = useEditor((s) => s.screen);
   const [exportOpen, setExportOpen] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [big, setBig] = useState(false);
@@ -134,23 +140,15 @@ export function App() {
   };
 
   useEffect(() => startPausedSync(), []);
-  useEffect(() => {
-    window.api
-      .openLastProject()
-      .then((opened) => {
-        if (!opened || useEditor.getState().dirty) return;
-        loadProject(opened.project, opened.path);
-        setNotice(opened.missing.length > 0 ? `찾을 수 없는 파일 ${opened.missing.length}개: ${opened.missing.join(', ')}` : null);
-      })
-      .catch((err: unknown) => setNotice(`마지막 프로젝트를 열지 못했어요: ${(err as Error).message}`));
-  }, []);
   useEffect(() => startAgentBridge(), []);
 
   useEffect(() => {
     void window.api.isTest().then((isTest) => {
       if (!isTest) return;
+      useEditor.setState({ screen: 'editor' });
       (window as unknown as { __paircut: object }).__paircut = {
         load: (p: Project) => loadProject(p, null),
+        home: () => useEditor.setState({ screen: 'home' }),
         seek: (t: number) => {
           pause();
           seek(t);
@@ -166,6 +164,7 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, select')) return;
+      if (useEditor.getState().screen === 'home') return;
       if (e.code === 'Escape') {
         setBig(false);
         return;
@@ -233,17 +232,38 @@ export function App() {
     loadProject(emptyProject(), null);
   };
 
+  const showOpened = (opened: OpenedProject) => {
+    loadProject(opened.project, opened.path);
+    setNotice(opened.missing.length > 0 ? `찾을 수 없는 파일 ${opened.missing.length}개: ${opened.missing.join(', ')}` : null);
+  };
+
   const openProject = async () => {
     if (!confirmDiscard()) return;
     pause();
     try {
       const opened = await window.api.openProject();
-      if (!opened) return;
-      loadProject(opened.project, opened.path);
-      setNotice(opened.missing.length > 0 ? `찾을 수 없는 파일 ${opened.missing.length}개: ${opened.missing.join(', ')}` : null);
+      if (opened) showOpened(opened);
     } catch (err) {
       setNotice(`프로젝트를 열지 못했어요: ${(err as Error).message}`);
     }
+  };
+
+  const openPath = async (path: string) => {
+    if (!confirmDiscard()) return;
+    pause();
+    try {
+      showOpened(await window.api.openProjectFile(path));
+    } catch (err) {
+      setNotice(`프로젝트를 열지 못했어요: ${(err as Error).message}`);
+    }
+  };
+
+  const goHome = () => {
+    if (!confirmDiscard()) return;
+    pause();
+    setNotice(null);
+    setBig(false);
+    useEditor.setState({ screen: 'home' });
   };
 
   const title = filePath ? filePath.split(/[\\/]/).pop() : '새 프로젝트';
@@ -257,13 +277,13 @@ export function App() {
   return (
     <div className={big ? 'app big' : 'app'} style={layout}>
       <header className="topbar">
-        <div className="brand" title="paircut">
+        <button className="brand" onClick={goHome} title="시작 화면으로" data-testid="go-home">
           <svg className="brand-mark" viewBox="150 150 724 724" aria-hidden="true">
             <path d="M494 172 A320 320 0 0 0 494 812 Z" fill="#f0585c" />
             <path d="M530 212 A320 320 0 0 1 530 852 Z" fill="#4b3ff0" />
           </svg>
           paircut.
-        </div>
+        </button>
         <div className="doc-title" title={filePath ?? undefined}>
           {title}
           {dirty && <span className="dirty"> · 저장 안 됨</span>}
@@ -313,6 +333,17 @@ export function App() {
       <div className="tl-splitter" onPointerDown={dragSplitter} onDoubleClick={resetSplitter} title="끌어서 타임라인 높이 조절, 두 번 누르면 원래대로" />
       <Timeline />
       {exportOpen && <ExportDialog onClose={() => setExportOpen(false)} />}
+      {screen === 'home' && (
+        <Home
+          theme={theme}
+          notice={notice}
+          onToggleTheme={toggleTheme}
+          onDismissNotice={() => setNotice(null)}
+          onNew={newProject}
+          onOpenDialog={() => void openProject()}
+          onOpenPath={(path) => void openPath(path)}
+        />
+      )}
     </div>
   );
 }

@@ -28,6 +28,7 @@ import { allPresets, savePreset } from './colorPresets';
 import { compositor, pause } from './engine/player';
 import { fontInstalled } from './engine/text';
 import { textImagesFor } from './exportTexts';
+import { saveThumb } from './projectThumb';
 import { BASIC_TEXT, makeTextClip } from './presets';
 import {
   commit,
@@ -538,7 +539,7 @@ function loadProjectTool(input: unknown): AgentToolResult {
   if (orphan) return { text: `load_project: clip ${orphan.id} uses a missing asset; nothing was changed`, isError: true };
   const next = normalizeProject(project);
   commit(() => next);
-  useEditor.setState({ selectedClipId: null });
+  useEditor.setState({ selectedClipId: null, screen: 'editor' });
   return { text: `ok, project replaced as one undo step (${n(projectDuration(next))}s)` };
 }
 
@@ -571,6 +572,7 @@ async function saveTo(path: string): Promise<string> {
   const saved = await window.api.saveProject(useEditor.getState().project, path);
   if (!saved) throw new Error(`saving to ${path} returned no path`);
   useEditor.setState({ filePath: saved, dirty: false });
+  await saveThumb(saved);
   return saved;
 }
 
