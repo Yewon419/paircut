@@ -1809,6 +1809,74 @@ try {
   const fresh = await win.evaluate(() => ({ screen: window.__paircut.state().screen, filePath: window.__paircut.state().filePath, clips: window.__paircut.state().project.tracks.flatMap((t) => t.clips).length }));
   check('new project from the start screen opens an empty editor', fresh.screen === 'editor' && fresh.filePath === null && fresh.clips === 0, JSON.stringify(fresh));
 
+  // Import progress: a row per file with its stage, assets added as each finishes, a bad file fails alone.
+  {
+    await win.click('[data-tab="media"]');
+    const long = join(dir, 'import-long.mp4');
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=s=1920x1080:r=30:d=40', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', long]);
+    const bad = join(dir, 'import-bad.mp4');
+    writeFileSync(bad, 'not a video');
+    await win.evaluate(() => {
+      window.__stages = [];
+      new MutationObserver(() => {
+        for (const row of document.querySelectorAll('[data-testid="import-job"]')) {
+          window.__stages.push(`${row.querySelector('.asset-name').textContent}|${row.dataset.stage}|${row.querySelector('.import-sub').textContent}`);
+        }
+      }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+    });
+    await win.evaluate((paths) => window.__paircut.importFiles(paths), [long, bad, f('tone.m4a')]);
+    await win.waitForSelector('[data-testid="import-job"]');
+    await win.waitForFunction(() => {
+      const rows = [...document.querySelectorAll('[data-testid="import-job"]')];
+      return rows.length === 1 && rows[0].dataset.stage === 'error';
+    }, null, { timeout: 60000 });
+    const stages = await win.evaluate(() => window.__stages);
+    const longStages = stages.filter((s) => s.startsWith('import-long.mp4|'));
+    const pct = longStages.map((s) => /(\d+)%$/.exec(s)).filter(Boolean).map((m) => Number(m[1]));
+    check('a waiting file shows its own row before its turn', stages.some((s) => s.startsWith('tone.m4a|wait|')), String(stages.length));
+    check('the long video reports thumbnail percent in between', pct.some((p) => p > 0 && p < 100) && pct.every((p, i) => i === 0 || p >= pct[i - 1]), pct.join(','));
+    const names = await win.evaluate(() => window.__paircut.state().project.assets.map((a) => a.name));
+    check('good files are added even though one failed', names.includes('import-long.mp4') && names.includes('tone.m4a'), JSON.stringify(names));
+    const errText = await win.locator('[data-testid="import-job"] .import-error').textContent();
+    check('the failed row keeps the error and the file path', errText.includes('import-bad.mp4'), errText.slice(0, 160));
+    await win.locator('[data-testid="import-job"] button').click();
+    check('the failed row can be closed', (await win.locator('[data-testid="import-job"]').count()) === 0);
+
+    // Right-click menu: rename, delete with the clips that use the asset, undo brings both back.
+    const longRow = win.locator('[data-testid="asset"]', { hasText: 'import-long.mp4' });
+    await longRow.locator('button.icon').click();
+    await longRow.click({ button: 'right' });
+    await win.locator('[data-testid="asset-menu"] button', { hasText: '이름 바꾸기' }).click();
+    await win.fill('[data-testid="asset-rename"]', '긴 영상');
+    await win.keyboard.press('Enter');
+    const renamed = await win.evaluate(() => window.__paircut.state().project.assets.find((a) => a.path.endsWith('import-long.mp4'))?.name);
+    check('rename from the right-click menu sets the asset name', renamed === '긴 영상', renamed);
+    const kept = win.locator('[data-testid="asset"]', { hasText: '긴 영상' });
+    await kept.click({ button: 'right' });
+    await win.locator('[data-testid="asset-menu"] button', { hasText: '이름 바꾸기' }).click();
+    await win.fill('[data-testid="asset-rename"]', '취소될 이름');
+    await win.keyboard.press('Escape');
+    const afterEsc = await win.evaluate(() => window.__paircut.state().project.assets.find((a) => a.path.endsWith('import-long.mp4'))?.name);
+    check('Escape leaves the name as it was', afterEsc === '긴 영상', afterEsc);
+
+    await kept.click({ button: 'right' });
+    const note = await win.locator('[data-testid="asset-menu"] .tl-menu-note').textContent();
+    check('the menu says the timeline clip goes too', note.includes('1개'), note);
+    await win.locator('[data-testid="asset-menu"] button', { hasText: '삭제' }).click();
+    const gone = await win.evaluate(() => {
+      const p = window.__paircut.state().project;
+      const id = p.assets.find((a) => a.path.endsWith('import-long.mp4'))?.id ?? null;
+      return { id, clips: p.tracks.flatMap((t) => t.clips).filter((c) => c.assetId !== undefined).length };
+    });
+    check('delete removes the asset and its clip', gone.id === null && gone.clips === 0, JSON.stringify(gone));
+    await win.keyboard.press('Control+z');
+    const back = await win.evaluate(() => {
+      const p = window.__paircut.state().project;
+      return { name: p.assets.find((a) => a.path.endsWith('import-long.mp4'))?.name, clips: p.tracks.flatMap((t) => t.clips).length };
+    });
+    check('one undo brings the asset and its clip back', back.name === '긴 영상' && back.clips === 1, JSON.stringify(back));
+  }
+
   await win.evaluate((p) => window.__paircut.load(p), project);
   await win.evaluate(() => window.__paircut.seek(0.5));
   await win.waitForTimeout(500);

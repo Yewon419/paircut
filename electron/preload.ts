@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 import type { AgentEvent, ToolName } from '../shared/agentOps';
-import type { PaircutApi, ExportEvent, MatteProgress } from '../shared/api';
+import type { PaircutApi, ExportEvent, ImportProgress, MatteProgress } from '../shared/api';
 
 const MEDIA_SCHEME = 'media';
 
@@ -9,6 +9,12 @@ const api: PaircutApi = {
   isTest: () => ipcRenderer.invoke('app:isTest'),
   pickMedia: () => ipcRenderer.invoke('media:pick'),
   probeMedia: (paths) => ipcRenderer.invoke('media:probe', paths),
+  importMedia: (jobId, path) => ipcRenderer.invoke('media:import', jobId, path),
+  onImportProgress: (listener) => {
+    const handler = (_e: IpcRendererEvent, p: ImportProgress) => listener(p);
+    ipcRenderer.on('media:importProgress', handler);
+    return () => ipcRenderer.removeListener('media:importProgress', handler);
+  },
   listSfx: () => ipcRenderer.invoke('sfx:list'),
   makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
   makeStill: (asset, seconds) => ipcRenderer.invoke('media:still', asset, seconds),

@@ -10,6 +10,7 @@ import { Home } from './components/Home';
 import { Inspector } from './components/Inspector';
 import { SidePanel } from './components/SidePanel';
 import { textImagesFor } from './exportTexts';
+import { queueImports } from './importQueue';
 import type { OpenedProject } from '../shared/api';
 import { saveThumb } from './projectThumb';
 import type { Theme } from './theme';
@@ -156,6 +157,7 @@ export function App() {
         state: () => useEditor.getState(),
         texts: (height: number) => textImagesFor(useEditor.getState().project, height),
         audio: (clipId: string) => compositor.audioState(clipId),
+        importFiles: (paths: string[]) => queueImports(paths),
       };
     });
   }, []);

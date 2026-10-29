@@ -1,8 +1,10 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
 import { promisify } from 'node:util';
+import type { ImportStage } from '../shared/api';
 import type { MediaAsset, MediaKind } from '../shared/project';
 import { IMAGE_DEFAULT_DURATION } from '../shared/project';
 
@@ -37,6 +39,40 @@ async function runTool(cmd: string, args: string[]): Promise<string> {
     const e = err as { stderr?: string; message: string };
     throw new Error(`${cmd} failed (${args.join(' ')}): ${e.stderr ?? e.message}`, { cause: err });
   }
+}
+
+/**
+ * Runs ffmpeg with `-progress pipe:1` and reports out_time / duration (0..1) as it goes. Errors carry the args and
+ * the tail of stderr like runTool.
+ */
+function runFfmpegProgress(args: string[], duration: number, onRatio: (ratio: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const full = ['-progress', 'pipe:1', '-nostats', ...args];
+    const child = spawn(FFMPEG, full, { windowsHide: true });
+    let stdoutBuf = '';
+    let stderrTail = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk: string) => {
+      stdoutBuf += chunk;
+      const lines = stdoutBuf.split(/\r?\n/);
+      stdoutBuf = lines.pop() ?? '';
+      for (const line of lines) {
+        const m = /^out_time_us=(\d+)/.exec(line);
+        if (m) onRatio(Math.min(1, Number(m[1]) / 1e6 / duration));
+      }
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      stderrTail = (stderrTail + chunk).slice(-4000);
+    });
+    child.on('error', (err) => reject(new Error(`${FFMPEG} could not start (${full.join(' ')}): ${err.message}`, { cause: err })));
+    child.on('close', (code) => {
+      if (code === 0) {
+        onRatio(1);
+        resolve();
+      } else reject(new Error(`${FFMPEG} failed with code ${code} (${full.join(' ')}): ${stderrTail}`));
+    });
+  });
 }
 
 function rotationOf(stream: ProbeStream): number {
@@ -107,24 +143,27 @@ function cacheKey(path: string, suffix: string): string {
 
 export const THUMB_FRAMES_MAX = 60;
 
-export async function makeFilmstrip(path: string, duration: number, cacheDir: string): Promise<string> {
+/**
+ * The clip's filmstrip: `frames` small frames spread over its length, side by side in one JPEG. The frames are
+ * written first (one output, so ffmpeg's out_time follows the source and gives the ratio), then tiled.
+ */
+export async function makeFilmstrip(
+  path: string,
+  duration: number,
+  cacheDir: string,
+  onRatio: (ratio: number) => void,
+): Promise<string> {
   const frames = Math.min(THUMB_FRAMES_MAX, Math.max(4, Math.ceil(duration)));
   const out = join(cacheDir, `${cacheKey(path, `strip${frames}`)}.jpg`);
   if (existsSync(out)) return out;
-  await runTool(FFMPEG, [
-    '-y',
-    '-v',
-    'error',
-    '-i',
-    path,
-    '-vf',
-    `fps=${frames}/${duration.toFixed(3)},scale=-2:72,tile=${frames}x1`,
-    '-frames:v',
-    '1',
-    '-q:v',
-    '5',
-    out,
-  ]);
+  const work = mkdtempSync(join(tmpdir(), 'paircut-strip-'));
+  try {
+    const pattern = join(work, '%03d.png');
+    await runFfmpegProgress(['-y', '-v', 'error', '-i', path, '-vf', `fps=${frames}/${duration.toFixed(3)},scale=-2:72`, pattern], duration, onRatio);
+    await runTool(FFMPEG, ['-y', '-v', 'error', '-i', pattern, '-vf', `tile=${frames}x1`, '-frames:v', '1', '-q:v', '5', out]);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
   return out;
 }
 
@@ -176,11 +215,27 @@ export async function makeStillImage(path: string, seconds: number, alpha: 'vp8'
 }
 
 export async function importMedia(path: string, cacheDir: string): Promise<MediaAsset> {
+  return importMediaTracked(path, cacheDir, () => undefined);
+}
+
+/** importMedia that reports each step: 'probe' at the start, then 'thumb' with the filmstrip ratio or 'wave'. */
+export async function importMediaTracked(
+  path: string,
+  cacheDir: string,
+  onStep: (stage: ImportStage, ratio: number) => void,
+): Promise<MediaAsset> {
+  onStep('probe', 0);
   const base = await probe(path);
   let thumbPath: string | null = null;
   let wavePath: string | null = null;
-  if (base.kind === 'video') thumbPath = await makeFilmstrip(path, base.duration, cacheDir);
+  if (base.kind === 'video') {
+    onStep('thumb', 0);
+    thumbPath = await makeFilmstrip(path, base.duration, cacheDir, (ratio) => onStep('thumb', ratio));
+  }
   if (base.kind === 'image') thumbPath = path;
-  if (base.kind === 'audio') wavePath = await makeWaveform(path, cacheDir);
+  if (base.kind === 'audio') {
+    onStep('wave', 0);
+    wavePath = await makeWaveform(path, cacheDir);
+  }
   return { ...base, thumbPath, wavePath };
 }

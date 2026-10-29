@@ -235,6 +235,41 @@ export function addAssets(assets: MediaAsset[]): void {
   commit((p) => ({ ...p, assets: [...p.assets, ...assets] }));
 }
 
+/** The media bin name; the file on disk keeps its name. Empty or unchanged names are ignored. */
+export function renameAsset(assetId: string, name: string): void {
+  const trimmed = name.trim();
+  const asset = get().project.assets.find((a) => a.id === assetId);
+  if (!asset || !trimmed || trimmed === asset.name) return;
+  commit((p) => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, name: trimmed } : a)) }));
+}
+
+/** How many timeline clips use the asset, and how many of those sit on locked layers. */
+export function assetUsage(p: Project, assetId: string): { clips: number; locked: number } {
+  let clips = 0;
+  let locked = 0;
+  for (const t of p.tracks) {
+    const n = t.clips.filter((c) => isMediaClip(c) && c.assetId === assetId).length;
+    clips += n;
+    if (t.locked) locked += n;
+  }
+  return { clips, locked };
+}
+
+/** Removes the asset and every clip that uses it as one undo step; refused while a locked layer holds one of them. */
+export function deleteAsset(assetId: string): void {
+  const { project } = get();
+  if (!project.assets.some((a) => a.id === assetId)) return;
+  if (assetUsage(project, assetId).locked > 0) return;
+  commit((p) =>
+    tidyTracks(p, {
+      ...p,
+      assets: p.assets.filter((a) => a.id !== assetId),
+      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !(isMediaClip(c) && c.assetId === assetId)) })),
+    }),
+  );
+  pruneSelection();
+}
+
 export function appendToMain(asset: MediaAsset): void {
   commit((p) => {
     const trackId = mainTrackId(p, trackKindFor(asset));

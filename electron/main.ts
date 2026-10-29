@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
-import type { ExportEvent, ExportOptions, OpenedProject, RecentProject, SfxEntry, TextFile, TextImage } from '../shared/api';
+import type { ExportEvent, ExportOptions, ImportProgress, OpenedProject, RecentProject, SfxEntry, TextFile, TextImage } from '../shared/api';
 import { MEDIA_SCHEME } from '../shared/api';
 import type { MediaAsset, Project } from '../shared/project';
 import { normalizeProject, projectDuration } from '../shared/project';
@@ -14,7 +14,7 @@ import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runBake, runExport } from './exporter';
 import { makeSubjectFile } from './matte';
-import { importMedia, makeSolidImage, makeStillImage } from './media';
+import { importMedia, importMediaTracked, makeSolidImage, makeStillImage } from './media';
 
 const isTest = process.env.PAIRCUT_TEST === '1';
 
@@ -272,6 +272,17 @@ function registerIpc(): void {
   });
 
   ipcMain.handle('media:probe', (_e, paths: string[]): Promise<MediaAsset[]> => probePaths(paths));
+  ipcMain.handle('media:import', (e, jobId: string, path: string): Promise<MediaAsset> => {
+    let sentAt = 0;
+    return importMediaTracked(path, cacheDir(), (stage, ratio) => {
+      // ffmpeg reports several times a second; a few updates a second are enough for a bar.
+      const now = Date.now();
+      if (stage === 'thumb' && ratio > 0 && ratio < 1 && now - sentAt < 100) return;
+      sentAt = now;
+      const progress: ImportProgress = { jobId, stage, ratio };
+      if (!e.sender.isDestroyed()) e.sender.send('media:importProgress', progress);
+    });
+  });
   ipcMain.handle('sfx:list', (): SfxEntry[] => listSfx());
   ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
   ipcMain.handle('media:still', (_e, asset: MediaAsset, seconds: number): Promise<MediaAsset> => makeStill(asset, seconds));

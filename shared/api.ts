@@ -28,6 +28,15 @@ export interface TextIntro {
   h: number;
 }
 
+/** 'probe' reads the file; 'thumb' draws a video's filmstrip (`ratio` 0..1); 'wave' draws an audio waveform. */
+export type ImportStage = 'probe' | 'thumb' | 'wave';
+
+export interface ImportProgress {
+  jobId: string;
+  stage: ImportStage;
+  ratio: number;
+}
+
 export interface MatteProgress {
   assetId: string;
   done: number;
@@ -78,6 +87,9 @@ export interface PaircutApi {
   isTest(): Promise<boolean>;
   pickMedia(): Promise<string[]>;
   probeMedia(paths: string[]): Promise<MediaAsset[]>;
+  /** Probes one file and makes its thumbnail, sending ImportProgress for `jobId` along the way. */
+  importMedia(jobId: string, path: string): Promise<MediaAsset>;
+  onImportProgress(listener: (p: ImportProgress) => void): () => void;
   /** The sound effects shipped in the app's `sfx` folder, in manifest order. */
   listSfx(): Promise<SfxEntry[]>;
   /** Makes (or reuses) a one-color PNG of the given size and probes it as an image asset. */

@@ -1,15 +1,104 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SfxEntry } from '../../shared/api';
 import type { MediaAsset } from '../../shared/project';
 import { formatSeconds } from '../format';
-import { addAssets, addAssetToTimeline, useEditor } from '../store';
+import { dismissImport, queueImports, useImports } from '../importQueue';
+import type { ImportJob } from '../importQueue';
+import { addAssets, addAssetToTimeline, assetUsage, deleteAsset, renameAsset, useEditor } from '../store';
 
 export const ASSET_MIME = 'application/x-paircut-asset';
 
 const KIND_LABEL: Record<MediaAsset['kind'], string> = { video: '영상', image: '사진', audio: '오디오' };
+const MENU_W = 190;
+const MENU_H = 120;
+
+function jobLabel(job: ImportJob): string {
+  if (job.stage === 'wait') return '대기';
+  if (job.stage === 'probe') return '파일 확인 중';
+  if (job.stage === 'thumb') return `썸네일 만드는 중 ${Math.round(job.ratio * 100)}%`;
+  if (job.stage === 'wave') return '파형 만드는 중';
+  return '실패';
+}
+
+function ImportRow({ job }: { job: ImportJob }) {
+  const ratio = job.stage === 'thumb' ? job.ratio : 0;
+  return (
+    <li className={`import-job stage-${job.stage}`} data-testid="import-job" data-stage={job.stage} title={job.error ?? job.path}>
+      <div className="import-head">
+        <span className="asset-name">{job.name}</span>
+        {job.stage === 'error' && (
+          <button className="icon" title="닫기" onClick={() => dismissImport(job.id)}>
+            ×
+          </button>
+        )}
+      </div>
+      <div className="import-sub">{jobLabel(job)}</div>
+      {job.stage === 'error' ? (
+        <div className="import-error">{job.error}</div>
+      ) : (
+        <div className="import-bar">
+          <div style={{ width: `${ratio * 100}%` }} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+interface AssetMenuProps {
+  asset: MediaAsset;
+  at: { x: number; y: number };
+  close: () => void;
+  rename: () => void;
+}
+
+/** Right-click menu of a media bin item: rename, or delete it along with the clips that use it. */
+function AssetMenu({ asset, at, close, rename }: AssetMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+  const project = useEditor((s) => s.project);
+  const usage = assetUsage(project, asset.id);
+  useEffect(() => {
+    const away = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) close();
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('pointerdown', away, true);
+    window.addEventListener('keydown', esc);
+    return () => {
+      window.removeEventListener('pointerdown', away, true);
+      window.removeEventListener('keydown', esc);
+    };
+  }, [close]);
+  const style = {
+    left: Math.min(at.x, window.innerWidth - MENU_W - 8),
+    top: Math.min(at.y, window.innerHeight - MENU_H - 8),
+  };
+  const run = (action: () => void) => () => {
+    action();
+    close();
+  };
+  return (
+    <div className="tl-menu" ref={ref} style={style} data-testid="asset-menu">
+      <button onClick={run(rename)}>이름 바꾸기</button>
+      <button className="danger" disabled={usage.locked > 0} onClick={run(() => deleteAsset(asset.id))}>
+        삭제
+      </button>
+      {usage.locked > 0 ? (
+        <div className="tl-menu-note">잠긴 레이어에서 쓰고 있어서 지울 수 없어요</div>
+      ) : (
+        usage.clips > 0 && <div className="tl-menu-note">타임라인 클립 {usage.clips}개도 같이 지워져요</div>
+      )}
+    </div>
+  );
+}
 
 export function MediaBin() {
   const assets = useEditor((s) => s.project.assets);
+  const jobs = useImports((s) => s.jobs);
+  const [menu, setMenu] = useState<{ assetId: string; x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const renameCancelled = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -63,25 +152,14 @@ export function MediaBin() {
     }
   };
 
-  const importPaths = async (paths: string[]) => {
-    if (paths.length === 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      addAssets(await window.api.probeMedia(paths));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const paths = [...e.dataTransfer.files].map((f) => window.api.pathForFile(f)).filter(Boolean);
-    void importPaths(paths);
+    queueImports(paths);
   };
+
+  const menuAsset = menu ? assets.find((a) => a.id === menu.assetId) : undefined;
 
   return (
     <section
@@ -97,9 +175,7 @@ export function MediaBin() {
     >
       <div className="panel-head">
         <span>미디어</span>
-        <button disabled={busy} onClick={() => void window.api.pickMedia().then(importPaths)}>
-          {busy ? '불러오는 중' : '가져오기'}
-        </button>
+        <button onClick={() => void window.api.pickMedia().then(queueImports)}>가져오기</button>
       </div>
       <div className="solid-row">
         <input type="color" value={solid} data-testid="solid-color" onChange={(e) => setSolid(e.target.value)} title="단색 배경 색" />
@@ -133,15 +209,27 @@ export function MediaBin() {
         </ul>
       )}
       {error && <div className="error">{error}</div>}
-      {assets.length === 0 ? (
+      {jobs.length > 0 && (
+        <ul className="import-list" data-testid="import-list">
+          {jobs.map((j) => (
+            <ImportRow key={j.id} job={j} />
+          ))}
+        </ul>
+      )}
+      {assets.length === 0 && jobs.length === 0 ? (
         <div className="empty">파일을 여기로 끌어오거나 가져오기를 누르세요</div>
       ) : (
         <ul className="asset-list">
           {assets.map((a) => (
             <li
               key={a.id}
-              className="asset"
-              draggable
+              className={`asset${menu?.assetId === a.id ? ' open' : ''}`}
+              data-testid="asset"
+              draggable={renaming !== a.id}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({ assetId: a.id, x: e.clientX, y: e.clientY });
+              }}
               onDragStart={(e) => {
                 e.dataTransfer.setData(ASSET_MIME, a.id);
                 e.dataTransfer.effectAllowed = 'copy';
@@ -159,7 +247,29 @@ export function MediaBin() {
                 }
               />
               <div className="asset-meta">
-                <div className="asset-name">{a.name}</div>
+                {renaming === a.id ? (
+                  <input
+                    className="asset-name-input"
+                    data-testid="asset-rename"
+                    autoFocus
+                    defaultValue={a.name}
+                    onFocus={(e) => e.currentTarget.select()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur();
+                      if (e.key === 'Escape') {
+                        renameCancelled.current = true;
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    onBlur={(e) => {
+                      if (!renameCancelled.current) renameAsset(a.id, e.currentTarget.value);
+                      renameCancelled.current = false;
+                      setRenaming(null);
+                    }}
+                  />
+                ) : (
+                  <div className="asset-name">{a.name}</div>
+                )}
                 <div className="asset-sub">
                   {KIND_LABEL[a.kind]} · {formatSeconds(a.duration)}
                   {a.kind !== 'audio' ? ` · ${a.width}×${a.height}` : ''}
@@ -171,6 +281,9 @@ export function MediaBin() {
             </li>
           ))}
         </ul>
+      )}
+      {menuAsset && (
+        <AssetMenu asset={menuAsset} at={menu ?? { x: 0, y: 0 }} close={() => setMenu(null)} rename={() => setRenaming(menuAsset.id)} />
       )}
     </section>
   );
