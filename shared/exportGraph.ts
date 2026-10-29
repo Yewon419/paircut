@@ -29,7 +29,7 @@ import {
   visualSpan,
 } from './project';
 import type { BackdropEffect, BlendMode, Clip, Project, Track, TransformKey } from './project';
-import { colorKey, cubeFile, isLutNeutral, vignetteMask } from './color';
+import { colorKey, cubeFile, detailPlan, isLutNeutral, vignetteMask } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
 export interface TextLayer {
@@ -85,6 +85,9 @@ const FFMPEG_BLEND: Record<BlendMode, string> = {
   difference: 'difference',
 };
 
+/** gblur passes; more is closer to a true Gaussian, which the preview draws. */
+const DEFINITION_STEPS = 3;
+
 function num(n: number): string {
   return n.toFixed(4).replace(/\.?0+$/, '') || '0';
 }
@@ -137,7 +140,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   const filters: string[] = [];
   const audioLabels: string[] = [];
   const files = new Map<string, SideFile>();
-  let vignettes = 0;
+  let grades = 0;
   let inputIndex = 0;
 
   const sideFile = (key: string, ext: string, content: () => string | Uint8Array): string => {
@@ -148,17 +151,32 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
     }
     return file.name;
   };
-  /** The clip's LUT, then its vignette on the w x h picture: a mask multiplied in (darker) or screened in (lighter). */
-  const grade = (clip: Clip, w: number, h: number): string => {
+  /**
+   * The clip's color on the w x h (cropped) picture, in the preview's order: noise reduction, LUT, definition,
+   * sharpness, vignette. Detail sizes follow the dw x dh picture before the crop, like the preview's.
+   * `a + k * (a - b)` is mix with weights 1 + k and -k; the vignette mask is multiplied in (darker) or screened in (lighter).
+   */
+  const grade = (clip: Clip, w: number, h: number, dw: number, dh: number): string => {
     const c = clip.color;
-    const lut = isLutNeutral(c) ? '' : `format=rgba,lut3d=file=${sideFile(`lut ${colorKey(c)}`, 'cube', () => cubeFile(c))}:interp=trilinear,`;
-    if (c.vignette === 0) return lut;
+    const n = grades++;
+    const detail = detailPlan(c, dw, dh);
+    const against = (tag: string, k: number, filter: string) =>
+      `format=gbrap,split[${tag}${n}a][${tag}${n}b];[${tag}${n}b]${filter}[${tag}${n}f];` +
+      `[${tag}${n}a][${tag}${n}f]mix=weights='${num(1 + k)} ${num(-k)}':scale=1:planes=7,`;
+    let out = detail.noise > 0 ? against('dn', -detail.noise, 'median=radius=1:planes=7') : '';
+    if (!isLutNeutral(c)) out += `format=rgba,lut3d=file=${sideFile(`lut ${colorKey(c)}`, 'cube', () => cubeFile(c))}:interp=trilinear,`;
+    if (detail.definition) out += against('dd', detail.definition.k, `gblur=sigma=${num(detail.definition.sigma)}:steps=${DEFINITION_STEPS}:planes=7`);
+    if (detail.sharpness) {
+      const m = 2 * detail.sharpness.steps + 1;
+      const k = num(detail.sharpness.k);
+      out += `format=gbrap,unsharp=lx=${m}:ly=${m}:la=${k}:cx=${m}:cy=${m}:ca=${k},`;
+    }
+    if (c.vignette === 0) return out;
     const key = `vig ${w}x${h} ${c.vignette.toFixed(3)} ${c.vignetteRadius.toFixed(3)} ${c.vignetteSoftness.toFixed(3)}`;
     const mask = sideFile(key, 'ppm', () => vignetteMask(c, w, h));
-    const n = vignettes++;
     const mode = c.vignette > 0 ? 'multiply' : 'screen';
     return (
-      `${lut}format=gbrap[vg${n}];movie=${mask},format=gbrap[vm${n}];` +
+      `${out}format=gbrap[vg${n}];movie=${mask},format=gbrap[vm${n}];` +
       `[vg${n}][vm${n}]blend=c0_mode=${mode}:c1_mode=${mode}:c2_mode=${mode}:c3_mode=normal:c3_opacity=1,`
     );
   };
@@ -365,7 +383,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const sIn = keyExpr(keys, 'scale', `(t-${num(pre)})`);
         const size = (px: number) => `max(2,${even(`${num(px)}*${sIn}`)})`;
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip, even2(asset.width * keepW), even2(asset.height * keepH))}` +
+          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip, even2(asset.width * keepW), even2(asset.height * keepH), asset.width, asset.height)}` +
             `scale=w='${size(asset.width * cover * keepW)}':h='${size(asset.height * cover * keepH)}':eval=frame:flags=bicubic,` +
             `setsar=1,format=yuva420p,${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
@@ -382,7 +400,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const b = hasCrop(clip.crop) ? cropBox(r, clip.crop) : { x: 0, y: 0, w: r.w, h: r.h };
         const crop = hasCrop(clip.crop) ? `crop=${b.w}:${b.h}:${b.x}:${b.y},` : '';
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip, b.w, b.h)}format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip, b.w, b.h, r.w, r.h)}format=yuva420p,` +
             `${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
         overlay(label, String(r.x + b.x), String(r.y + b.y), span.from, span.to);

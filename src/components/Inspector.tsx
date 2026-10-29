@@ -135,7 +135,7 @@ const SPEEDS = [0.5, 1, 1.5, 2];
 const DISSOLVES = [0, 0.3, 0.5, 1];
 
 /** The Photos app's adjust sliders, grouped and named the same way. */
-const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string }[] }[] = [
+const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string; min?: number }[] }[] = [
   {
     title: '빛',
     keys: [
@@ -155,6 +155,14 @@ const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string
       { key: 'vibrance', label: '생동감' },
       { key: 'temperature', label: '따뜻함' },
       { key: 'tint', label: '색조' },
+    ],
+  },
+  {
+    title: '디테일',
+    keys: [
+      { key: 'sharpness', label: '선명도' },
+      { key: 'definition', label: '명료도' },
+      { key: 'noiseReduction', label: '노이즈 감소', min: 0 },
     ],
   },
   {
@@ -1070,14 +1078,14 @@ function ColorControls({ clip }: { clip: Clip }) {
               {group.title}
               {changed > 0 && <span className="color-group-count">{changed}개 조정</span>}
             </summary>
-            {group.keys.map(({ key, label }) => (
+            {group.keys.map(({ key, label, min }) => (
               <label key={key}>
                 <span>
                   {label} {Math.round(clip.color[key] * 100)}
                 </span>
                 <input
                   type="range"
-                  min={-100}
+                  min={min ?? -100}
                   max={100}
                   step={1}
                   value={Math.round(clip.color[key] * 100)}

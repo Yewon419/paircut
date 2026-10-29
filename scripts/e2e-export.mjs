@@ -8,13 +8,16 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
+const { detailPlan, gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
 export const LIGHT = pickColor({ exposure: 0.3, brilliance: 0.4, highlights: -0.5, shadows: 0.4, blackPoint: 0.3, vibrance: 0.5, tint: -0.4 });
 /** A strong dark vignette with a tight radius, so both the center and the corners are clearly checked. */
 export const VIGNETTE = pickColor({ vignette: 0.8, vignetteRadius: -0.3 });
+
+/** Gray levels of the steps fixture, above and below y = 960. */
+export const STEP = [60, 190];
 
 /** Stripes of the swatch fixture, top to bottom, 480px each. */
 export const SWATCHES = [[70, 160, 60], [70, 50, 200], [220, 150, 110], [128, 128, 128]];
@@ -50,6 +53,10 @@ export function makeFixtures(target) {
   ff(['-f', 'lavfi', '-i', 'color=c=black@0.0:s=1080x1920:r=30:d=2,format=rgba', '-f', 'lavfi', '-i', 'color=c=0x00FF00:s=400x400:r=30:d=2,format=rgba',
     '-filter_complex', '[0][1]overlay=340:760:format=auto,format=yuva420p', '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuva420p',
     '-auto-alt-ref', '0', '-b:v', '1M', f('motion.webm')]);
+  // Detail fixtures: a gray step at y = 960 for sharpness and definition, and colored noise for noise reduction.
+  ff(['-f', 'lavfi', '-i', `color=c=0x${STEP[0].toString(16).repeat(3)}:s=1080x960`, '-f', 'lavfi', '-i', `color=c=0x${STEP[1].toString(16).repeat(3)}:s=1080x960`,
+    '-filter_complex', '[0:v][1:v]vstack=inputs=2', '-frames:v', '1', f('steps.png')]);
+  ff(['-f', 'lavfi', '-i', 'color=c=0x808080:s=1080x1920,format=yuv444p,noise=alls=60:allf=u', '-frames:v', '1', f('noise.png')]);
   // A green box sliding right over red, for subject masks: it covers the frame center around t = 1 only.
   ff(['-filter_complex', "color=c=red:s=540x960:d=2:r=30[bg];color=c=0x00C000:s=200x200:d=2:r=30[b];[bg][b]overlay=x='40+t*130':y=380",
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '2', f('box.mp4')]);
@@ -304,6 +311,92 @@ export function vignetteWant(color, x, y, box) {
   return vignettePixel(gradePixel(src, color), color, (x - box.x) / box.w, (y - box.y) / box.h).map((v) => Math.round(v * 255));
 }
 
+/** Green values down column x of the frame at t, the whole height. */
+export function column(file, t, x) {
+  const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
+    '-vf', `crop=2:ih:${x}:0`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
+  return Array.from({ length: buf.length / 6 }, (_, i) => buf[i * 6 + 1]);
+}
+
+/** Standard deviation of a block's green values, a noise measure. */
+export function blockSpread(file, t, x, y, size = 64) {
+  const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
+    '-vf', `crop=${size}:${size}:${x}:${y}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
+  const g = Array.from({ length: buf.length / 3 }, (_, i) => buf[i * 3 + 1]);
+  const mean = g.reduce((a, b) => a + b, 0) / g.length;
+  return Math.sqrt(g.reduce((a, b) => a + (b - mean) ** 2, 0) / g.length);
+}
+
+/**
+ * The steps fixture's column after the detail passes, from the shared plan: the picture is uniform across, so the
+ * separable kernels reduce to one dimension (edges clamped, as in ffmpeg unsharp).
+ */
+export function detailColumn(color, h) {
+  const plan = detailPlan(color, 1080, h);
+  let col = Array.from({ length: h }, (_, y) => STEP[y < h / 2 ? 0 : 1] / 255);
+  const against = (kernel, k) => {
+    const r = (kernel.length - 1) / 2;
+    const blur = col.map((_, y) => kernel.reduce((sum, w, j) => sum + w * col[Math.min(h - 1, Math.max(0, y + j - r))], 0));
+    col = col.map((a, y) => Math.min(1, Math.max(0, a + k * (a - blur[y]))));
+  };
+  if (plan.definition) {
+    const r = Math.ceil(3 * plan.definition.sigma);
+    const g = Array.from({ length: 2 * r + 1 }, (_, j) => Math.exp(-((j - r) ** 2) / (2 * plan.definition.sigma ** 2)));
+    const total = g.reduce((a, b) => a + b, 0);
+    against(g.map((v) => v / total), plan.definition.k);
+  }
+  if (plan.sharpness) {
+    let row = [1];
+    for (let i = 0; i < 2 * plan.sharpness.steps; i++) row = [...row, 0].map((v, j) => v + (j > 0 ? row[j - 1] : 0));
+    against(row.map((v) => v / 4 ** plan.sharpness.steps), plan.sharpness.k);
+  }
+  return col.map((v) => Math.round(v * 255));
+}
+
+/** Sharpness, definition and noise reduction through unsharp, gblur + mix and median + mix. */
+async function checkDetail(base, dir, f) {
+  const cache = join(dir, 'cache');
+  const steps = await importMedia(f('steps.png'), cache);
+  const noise = await importMedia(f('noise.png'), cache);
+  const T = { scale: 1, x: 0, y: 0 };
+  const cases = [
+    { asset: steps, color: pickColor({ sharpness: 1 }) },
+    { asset: steps, color: pickColor({ sharpness: -1 }) },
+    { asset: steps, color: pickColor({ definition: 1 }) },
+    { asset: steps, color: pickColor({ definition: -1, sharpness: 0.5 }) },
+    { asset: noise, color: pickColor({}) },
+    { asset: noise, color: pickColor({ noiseReduction: 1 }) },
+    { asset: noise, color: pickColor({ noiseReduction: 0.5, sharpness: 0.3, vignette: 0.5 }) },
+  ];
+  const project = {
+    ...base,
+    assets: [...base.assets, steps, noise],
+    tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: cases.map((c, i) =>
+      ({ ...MEDIA_CLIP_DEFAULTS, id: `d${i}`, assetId: c.asset.id, start: i, in: 0, out: 1, transform: T, color: c.color })) }],
+  };
+  const out = join(dir, 'detail.mp4');
+  const result = await runExport(project, 1920, out, [], () => {}).done;
+  check('detail export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  const names = ['sharpness +', 'sharpness -', 'definition +', 'definition - with sharpness'];
+  for (const [i, name] of names.entries()) {
+    const want = detailColumn(cases[i].color, 1920);
+    const got = column(out, i + 0.5, 540);
+    const rows = Array.from({ length: 141 }, (_, k) => 890 + k);
+    const off = Math.max(...rows.map((y) => Math.abs(got[y] - want[y])));
+    const worst = rows.reduce((a, y) => (Math.abs(got[y] - want[y]) > Math.abs(got[a] - want[a]) ? y : a), rows[0]);
+    check(`${name} matches the reference across the edge`, off <= 6, `max off ${off} at y ${worst}: got ${got[worst]} want ${want[worst]}`);
+  }
+  const edge = (c) => detailColumn(pickColor(c), 1920);
+  check('sharpness + overshoots the edge, - softens it', edge({ sharpness: 1 })[958] < STEP[0] && edge({ sharpness: -1 })[959] > STEP[0] + 20,
+    `${edge({ sharpness: 1 })[958]} ${edge({ sharpness: -1 })[959]}`);
+  check('definition + reaches farther than sharpness', edge({ definition: 1 })[935] < STEP[0] - 3 && edge({ sharpness: 1 })[935] === STEP[0]);
+  const plain = blockSpread(out, 4.5, 500, 900);
+  const reduced = blockSpread(out, 5.5, 500, 900);
+  check('noise reduction lowers the noise', reduced < plain * 0.75, `${reduced.toFixed(1)} vs ${plain.toFixed(1)}`);
+  check('noise reduction with sharpness and vignette exports', blockSpread(out, 6.5, 500, 900) < plain);
+}
+
 /** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */
 function redSpan(file, t, y) {
   const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
@@ -421,6 +514,7 @@ async function main() {
   await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
   await checkColor(project, assets.swatch, dir);
   await checkVignette(project, assets.swatch, dir);
+  await checkDetail(project, dir, f);
   await checkDissolve(f, project, dir);
   await checkKeyframes(project, assets.pic, dir);
 

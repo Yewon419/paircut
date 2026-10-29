@@ -24,6 +24,12 @@ export interface ClipColor {
   temperature: number;
   /** Positive is magenta, negative green. */
   tint: number;
+  /** Positive sharpens fine edges (ffmpeg unsharp's kernel), negative softens them. */
+  sharpness: number;
+  /** Local contrast: positive adds punch to midsize detail, negative flattens it. */
+  definition: number;
+  /** 0..1: a 3x3 median blended in. */
+  noiseReduction: number;
   /** Positive darkens the edges, negative lightens them. Applied after the LUT, on the cropped picture. */
   vignette: number;
   /** Where the vignette is half strength: larger pushes it out to the corners. */
@@ -47,7 +53,10 @@ export const LUT_KEYS: (keyof ClipColor)[] = [
   'tint',
 ];
 
-export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
+/** Filters that look at neighboring pixels, so they run as their own passes around the LUT. */
+export const DETAIL_KEYS: (keyof ClipColor)[] = ['sharpness', 'definition', 'noiseReduction'];
+
+export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, ...DETAIL_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
 
 export const NEUTRAL_COLOR: ClipColor = {
   exposure: 0,
@@ -61,6 +70,9 @@ export const NEUTRAL_COLOR: ClipColor = {
   vibrance: 0,
   temperature: 0,
   tint: 0,
+  sharpness: 0,
+  definition: 0,
+  noiseReduction: 0,
   vignette: 0,
   vignetteRadius: 0,
   vignetteSoftness: 0,
@@ -74,7 +86,32 @@ export function isLutNeutral(c: ClipColor): boolean {
 }
 
 export function isNeutral(c: ClipColor): boolean {
-  return isLutNeutral(c) && c.vignette === 0;
+  return isLutNeutral(c) && DETAIL_KEYS.every((k) => c[k] === 0) && c.vignette === 0;
+}
+
+/**
+ * The detail passes for a picture processed at w x h (before any crop), in order: noise reduction before the LUT,
+ * then definition and sharpness after it. Sizes scale with the picture so a small overlay gets the same look.
+ * Each pass is out = a + k * (a - b), b being the median or the blur of a.
+ */
+export interface DetailPlan {
+  /** Median weight, 0 for none (k = -noise). */
+  noise: number;
+  definition: { sigma: number; k: number } | null;
+  /** Half size of ffmpeg unsharp's binomial kernel (msize = 2 * steps + 1). */
+  sharpness: { steps: number; k: number } | null;
+}
+
+export function detailPlan(c: ClipColor, w: number, h: number): DetailPlan {
+  const scale = Math.min(w, h) / 1080;
+  return {
+    noise: Math.min(1, Math.max(0, c.noiseReduction)),
+    definition: c.definition === 0 ? null : { sigma: Math.max(1, 16 * scale), k: 0.8 * c.definition },
+    sharpness:
+      c.sharpness === 0
+        ? null
+        : { steps: Math.min(6, Math.max(1, Math.round(2 * scale))), k: c.sharpness > 0 ? 1.5 * c.sharpness : c.sharpness },
+  };
 }
 
 /** Cache key of the LUT, so moving a vignette slider does not rebuild it. */

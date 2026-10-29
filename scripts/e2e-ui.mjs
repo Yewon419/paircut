@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
+import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, column, detailColumn, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
 const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
@@ -321,7 +321,7 @@ try {
   // Every Photos-style slider is in the inspector, and moving one changes only its own field.
   const sliderKeys = await win.evaluate(() => [...document.querySelectorAll('[data-color]')].map((el) => el.dataset.color).join());
   check('the inspector has the color and vignette sliders in Photos order', sliderKeys ===
-    'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint,vignette,vignetteRadius,vignetteSoftness', sliderKeys);
+    'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint,sharpness,definition,noiseReduction,vignette,vignetteRadius,vignetteSoftness', sliderKeys);
   await win.evaluate(() => {
     const el = document.querySelector('[data-color="blackPoint"]');
     el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -362,6 +362,50 @@ try {
         `preview ${shown} / function ${want} / export ${made}`);
     }
   }
+  // Detail passes: the preview's column across the steps edge against the reference and the export, both taken
+  // to the canvas's half resolution; noise reduction by how much it lowers the spread.
+  const steps = await importMedia(f('steps.png'), join(dir, 'cache'));
+  const noise = await importMedia(f('noise.png'), join(dir, 'cache'));
+  const showDetail = async (asset, color) => {
+    await win.evaluate(({ p, asset, color }) => {
+      const main = p.tracks.find((t) => t.id === 'v-main');
+      const clip = { ...main.clips[1], id: 'g1', assetId: asset.id, start: 0, in: 0, out: 1, color };
+      window.__paircut.load({ ...p, assets: [...p.assets, asset], tracks: [{ ...main, clips: [clip] }] });
+    }, { p: project, asset, color });
+    await win.evaluate(() => window.__paircut.seek(0.5));
+    await win.waitForTimeout(400);
+  };
+  const canvasColumn = () => win.evaluate(() => {
+    const c = document.querySelector('[data-testid="preview-canvas"]');
+    const d = c.getContext('2d').getImageData(270, 0, 1, c.height).data;
+    return Array.from({ length: d.length / 4 }, (_, i) => d[i * 4 + 1]);
+  });
+  // The canvas shows the picture at half size, so a canvas row may be any mix of the two full-size rows under it.
+  const outside = (v, col, y) => Math.max(0, Math.min(col[2 * y], col[2 * y + 1]) - v, v - Math.max(col[2 * y], col[2 * y + 1]));
+  for (const [name, color] of [['sharpness', pickColor({ sharpness: 1 })], ['definition', pickColor({ definition: -1, sharpness: 0.5 })]]) {
+    await showDetail(steps, color);
+    const shown = await canvasColumn();
+    const file = join(dir, `detail-${name}.mp4`);
+    await exportTo(file);
+    const want = detailColumn(color, 1920);
+    const made = column(file, 0.5, 540);
+    const rows = Array.from({ length: 71 }, (_, k) => 445 + k);
+    const offWant = Math.max(...rows.map((y) => outside(shown[y], want, y)));
+    const offMade = Math.max(...rows.map((y) => outside(shown[y], made, y)));
+    check(`${name} preview across the edge matches reference and export`, offWant <= 5 && offMade <= 6,
+      `off ${offWant} / ${offMade}; rows 477-482 preview ${shown.slice(477, 483)} want ${want.slice(954, 966)} export ${made.slice(954, 966)}`);
+  }
+  const spread = () => win.evaluate(() => {
+    const d = document.querySelector('[data-testid="preview-canvas"]').getContext('2d').getImageData(250, 450, 32, 32).data;
+    const g = Array.from({ length: d.length / 4 }, (_, i) => d[i * 4 + 1]);
+    const mean = g.reduce((a, b) => a + b, 0) / g.length;
+    return Math.sqrt(g.reduce((a, b) => a + (b - mean) ** 2, 0) / g.length);
+  });
+  await showDetail(noise, pickColor({}));
+  const noisy = await spread();
+  await showDetail(noise, pickColor({ noiseReduction: 1 }));
+  const calmer = await spread();
+  check('noise reduction lowers the preview noise', calmer < noisy * 0.75, `${calmer.toFixed(1)} vs ${noisy.toFixed(1)}`);
   const videoPixel = async (color) => {
     await win.evaluate(({ p, c }) => window.__paircut.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
       clips: t.clips.map((k) => (k.id === 'c1' ? { ...k, color: c } : k)) })) }), { p: project, c: color });
