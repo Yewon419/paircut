@@ -17,7 +17,7 @@ export async function runBake(project: Project, outPath: string): Promise<void> 
   const workDir = mkdtempSync(join(tmpdir(), 'paircut-bake-'));
   try {
     const plan = buildBakePlan(project);
-    for (const lut of plan.luts) writeFileSync(join(workDir, lut.name), lut.content, 'utf8');
+    for (const file of plan.files) writeFileSync(join(workDir, file.name), file.content);
     const scriptPath = join(workDir, 'graph.txt');
     writeFileSync(scriptPath, plan.filterGraph, 'utf8');
     const args = bakeArgs(plan, scriptPath, outPath);
@@ -66,7 +66,7 @@ export function runExport(
     rmSync(workDir, { recursive: true, force: true });
     throw err;
   }
-  for (const lut of plan.luts) writeFileSync(join(workDir, lut.name), lut.content, 'utf8');
+  for (const file of plan.files) writeFileSync(join(workDir, file.name), file.content);
   const scriptPath = join(workDir, 'graph.txt');
   writeFileSync(scriptPath, plan.filterGraph, 'utf8');
   const args = ffmpegArgs(plan, scriptPath, outPath);

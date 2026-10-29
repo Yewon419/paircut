@@ -29,7 +29,7 @@ import {
   visualSpan,
 } from './project';
 import type { BackdropEffect, BlendMode, Clip, Project, Track, TransformKey } from './project';
-import { colorKey, cubeFile, isNeutral } from './color';
+import { colorKey, cubeFile, isLutNeutral, vignetteMask } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
 export interface TextLayer {
@@ -52,15 +52,15 @@ export interface IntroLayer {
   y: number;
 }
 
-/** A .cube file the exporter writes next to the filter script; ffmpeg runs with that folder as cwd. */
-export interface LutFile {
+/** A .cube LUT or a vignette mask the exporter writes next to the filter script; ffmpeg runs with that folder as cwd. */
+export interface SideFile {
   name: string;
-  content: string;
+  content: string | Uint8Array;
 }
 
 export interface ExportPlan {
   inputArgs: string[];
-  luts: LutFile[];
+  files: SideFile[];
   filterGraph: string;
   duration: number;
   width: number;
@@ -136,18 +136,31 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   const inputArgs: string[] = [];
   const filters: string[] = [];
   const audioLabels: string[] = [];
-  const luts = new Map<string, LutFile>();
+  const files = new Map<string, SideFile>();
+  let vignettes = 0;
   let inputIndex = 0;
 
-  const grade = (clip: Clip): string => {
-    if (isNeutral(clip.color)) return '';
-    const key = colorKey(clip.color);
-    let lut = luts.get(key);
-    if (!lut) {
-      lut = { name: `lut${luts.size}.cube`, content: cubeFile(clip.color) };
-      luts.set(key, lut);
+  const sideFile = (key: string, ext: string, content: () => string | Uint8Array): string => {
+    let file = files.get(key);
+    if (!file) {
+      file = { name: `side${files.size}.${ext}`, content: content() };
+      files.set(key, file);
     }
-    return `format=rgba,lut3d=file=${lut.name}:interp=trilinear,`;
+    return file.name;
+  };
+  /** The clip's LUT, then its vignette on the w x h picture: a mask multiplied in (darker) or screened in (lighter). */
+  const grade = (clip: Clip, w: number, h: number): string => {
+    const c = clip.color;
+    const lut = isLutNeutral(c) ? '' : `format=rgba,lut3d=file=${sideFile(`lut ${colorKey(c)}`, 'cube', () => cubeFile(c))}:interp=trilinear,`;
+    if (c.vignette === 0) return lut;
+    const key = `vig ${w}x${h} ${c.vignette.toFixed(3)} ${c.vignetteRadius.toFixed(3)} ${c.vignetteSoftness.toFixed(3)}`;
+    const mask = sideFile(key, 'ppm', () => vignetteMask(c, w, h));
+    const n = vignettes++;
+    const mode = c.vignette > 0 ? 'multiply' : 'screen';
+    return (
+      `${lut}format=gbrap[vg${n}];movie=${mask},format=gbrap[vm${n}];` +
+      `[vg${n}][vm${n}]blend=c0_mode=${mode}:c1_mode=${mode}:c2_mode=${mode}:c3_mode=normal:c3_opacity=1,`
+    );
   };
 
   filters.push(
@@ -345,13 +358,14 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const retime = clip.speed === 1 ? '' : `setpts=(PTS-STARTPTS)/${num(clip.speed)},`;
         const fade = span.fadeIn > 0 ? `fade=t=in:st=0:d=${num(span.fadeIn)}:alpha=1,` : '';
         const even = (e: string) => `trunc((${e})/2)*2`;
+        const even2 = (v: number) => Math.trunc(v / 2) * 2;
         const crop = hasCrop(c)
           ? `crop=w='${even(`iw*${num(keepW)}`)}':h='${even(`ih*${num(keepH)}`)}':x='${even(`iw*${num(c.l)}`)}':y='${even(`ih*${num(c.t)}`)}',`
           : '';
         const sIn = keyExpr(keys, 'scale', `(t-${num(pre)})`);
         const size = (px: number) => `max(2,${even(`${num(px)}*${sIn}`)})`;
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip)}` +
+          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip, even2(asset.width * keepW), even2(asset.height * keepH))}` +
             `scale=w='${size(asset.width * cover * keepW)}':h='${size(asset.height * cover * keepH)}':eval=frame:flags=bicubic,` +
             `setsar=1,format=yuva420p,${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
@@ -368,7 +382,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const b = hasCrop(clip.crop) ? cropBox(r, clip.crop) : { x: 0, y: 0, w: r.w, h: r.h };
         const crop = hasCrop(clip.crop) ? `crop=${b.w}:${b.h}:${b.x}:${b.y},` : '';
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip)}format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip, b.w, b.h)}format=yuva420p,` +
             `${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
         overlay(label, String(r.x + b.x), String(r.y + b.y), span.from, span.to);
@@ -430,7 +444,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
 
   return {
     inputArgs,
-    luts: [...luts.values()],
+    files: [...files.values()],
     filterGraph: filters.join(';\n'),
     duration,
     width: W,

@@ -157,6 +157,14 @@ const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string
       { key: 'tint', label: '색조' },
     ],
   },
+  {
+    title: '비네트',
+    keys: [
+      { key: 'vignette', label: '강도' },
+      { key: 'vignetteRadius', label: '반경' },
+      { key: 'vignetteSoftness', label: '부드러움' },
+    ],
+  },
 ];
 
 const CROP_EDGES: { key: keyof ClipCrop; opposite: keyof ClipCrop; label: string }[] = [

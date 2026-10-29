@@ -8,11 +8,13 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
+const { gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
 export const LIGHT = pickColor({ exposure: 0.3, brilliance: 0.4, highlights: -0.5, shadows: 0.4, blackPoint: 0.3, vibrance: 0.5, tint: -0.4 });
+/** A strong dark vignette with a tight radius, so both the center and the corners are clearly checked. */
+export const VIGNETTE = pickColor({ vignette: 0.8, vignetteRadius: -0.3 });
 
 /** Stripes of the swatch fixture, top to bottom, 480px each. */
 export const SWATCHES = [[70, 160, 60], [70, 50, 200], [220, 150, 110], [128, 128, 128]];
@@ -258,6 +260,50 @@ async function checkColor(base, swatch, dir) {
   check('tint + is magenta (less green)', light('tint', 1, mid)[1] < 0.5 && light('tint', 1, mid)[0] === 0.5);
 }
 
+/** Vignettes through the mask blend: dark and light, after a LUT, fitted to a crop, and on a keyframed clip. */
+async function checkVignette(base, swatch, dir) {
+  const T = { scale: 1, x: 0, y: 0 };
+  const clip = { ...MEDIA_CLIP_DEFAULTS, id: 'n1', assetId: swatch.id, start: 0, in: 0, out: 1, transform: T };
+  const still = [{ t: 0, scale: 1, x: 0, y: 0, ease: 'linear' }, { t: 1, scale: 1, x: 0, y: 0, ease: 'linear' }];
+  const cases = [
+    { t: 0.5, color: VIGNETTE, crop: { l: 0, t: 0, r: 0, b: 0 } },
+    { t: 1.5, color: pickColor({ ...LIGHT, vignette: -0.7, vignetteRadius: -0.4, vignetteSoftness: 0.5 }), crop: { l: 0, t: 0, r: 0, b: 0 } },
+    { t: 2.5, color: pickColor({ vignette: 1, vignetteRadius: -1 }), crop: { l: 0.2, t: 0.1, r: 0, b: 0.3 } },
+    { t: 3.5, color: pickColor({ vignette: 0.9, vignetteSoftness: -0.5 }), crop: { l: 0.25, t: 0, r: 0, b: 0 }, keys: still },
+  ];
+  const project = {
+    ...base,
+    tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: cases.map((c, i) =>
+      ({ ...clip, id: `n${i}`, start: i, color: c.color, crop: c.crop, ...(c.keys ? { keys: c.keys } : {}) })) }],
+  };
+  const out = join(dir, 'vignette.mp4');
+  const result = await runExport(project, 1920, out, [], () => {}).done;
+  check('vignette export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
+  if (result.type !== 'done') return;
+  for (const [i, c] of cases.entries()) {
+    const box = { x: c.crop.l * 1080, y: c.crop.t * 1920, w: (1 - c.crop.l - c.crop.r) * 1080, h: (1 - c.crop.t - c.crop.b) * 1920 };
+    const pts = [[box.x + box.w / 2 - 4, 700], [box.x + 12, box.y + 12], [box.x + box.w - 20, box.y + box.h - 20], [box.x + 40, 1180],
+      [box.x + box.w / 2 - 4, 1180]];
+    for (const [x, y] of pts.map(([x, y]) => [Math.round(x), Math.round(y)])) {
+      const want = vignetteWant(c.color, x + 4, y + 4, box);
+      const got = samplePixel(out, c.t, x, y);
+      const off = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
+      check(`vignette case ${i} at ${x},${y}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
+    }
+  }
+  const corner = vignettePixel([0.5, 0.5, 0.5], VIGNETTE, 0, 0)[0];
+  const center = vignettePixel([0.5, 0.5, 0.5], VIGNETTE, 0.5, 0.5)[0];
+  const lit = vignettePixel([0.5, 0.5, 0.5], pickColor({ vignette: -1 }), 0, 0)[0];
+  check('vignette + darkens corners, leaves the center, - lightens', corner < 0.3 && center === 0.5 && lit > 0.8, `${corner} ${center} ${lit}`);
+  check('radius and softness alone change nothing', isNeutral(pickColor({ vignetteRadius: 0.5, vignetteSoftness: -0.3 })));
+}
+
+/** What the shared functions give for the swatch pixel at x, y of the output, inside a picture at box. */
+export function vignetteWant(color, x, y, box) {
+  const src = SWATCHES[Math.min(3, Math.floor(y / 480))].map((v) => v / 255);
+  return vignettePixel(gradePixel(src, color), color, (x - box.x) / box.w, (y - box.y) / box.h).map((v) => Math.round(v * 255));
+}
+
 /** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */
 function redSpan(file, t, y) {
   const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
@@ -374,6 +420,7 @@ async function main() {
   await checkTextLayers(f, project, dir);
   await checkSpeedAndAudio(f, project, assets, dir, volumeOf(out, 3.6, 4.4));
   await checkColor(project, assets.swatch, dir);
+  await checkVignette(project, assets.swatch, dir);
   await checkDissolve(f, project, dir);
   await checkKeyframes(project, assets.pic, dir);
 

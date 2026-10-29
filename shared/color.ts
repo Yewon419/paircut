@@ -24,9 +24,16 @@ export interface ClipColor {
   temperature: number;
   /** Positive is magenta, negative green. */
   tint: number;
+  /** Positive darkens the edges, negative lightens them. Applied after the LUT, on the cropped picture. */
+  vignette: number;
+  /** Where the vignette is half strength: larger pushes it out to the corners. */
+  vignetteRadius: number;
+  /** How wide the fade from center to edge is. */
+  vignetteSoftness: number;
 }
 
-export const COLOR_KEYS: (keyof ClipColor)[] = [
+/** The fields baked into the 3D LUT; the vignette depends on position, so it is not one of them. */
+export const LUT_KEYS: (keyof ClipColor)[] = [
   'exposure',
   'brilliance',
   'highlights',
@@ -40,6 +47,8 @@ export const COLOR_KEYS: (keyof ClipColor)[] = [
   'tint',
 ];
 
+export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
+
 export const NEUTRAL_COLOR: ClipColor = {
   exposure: 0,
   brilliance: 0,
@@ -52,16 +61,25 @@ export const NEUTRAL_COLOR: ClipColor = {
   vibrance: 0,
   temperature: 0,
   tint: 0,
+  vignette: 0,
+  vignetteRadius: 0,
+  vignetteSoftness: 0,
 };
 
 export const LUT_SIZE = 33;
 
-export function isNeutral(c: ClipColor): boolean {
-  return COLOR_KEYS.every((k) => c[k] === 0);
+/** Whether the LUT leaves every pixel as it is. */
+export function isLutNeutral(c: ClipColor): boolean {
+  return LUT_KEYS.every((k) => c[k] === 0);
 }
 
+export function isNeutral(c: ClipColor): boolean {
+  return isLutNeutral(c) && c.vignette === 0;
+}
+
+/** Cache key of the LUT, so moving a vignette slider does not rebuild it. */
 export function colorKey(c: ClipColor): string {
-  return COLOR_KEYS.map((k) => c[k].toFixed(3)).join('_');
+  return LUT_KEYS.map((k) => c[k].toFixed(3)).join('_');
 }
 
 /** Only the known fields, missing ones 0: older files and presets carry four fields (and some a dropped 'look'). */
@@ -155,4 +173,45 @@ export function cubeFile(c: ClipColor): string {
   const lines = [`LUT_3D_SIZE ${LUT_SIZE}`];
   for (const [r, g, b] of lutEntries(c)) lines.push(`${r.toFixed(6)} ${g.toFixed(6)} ${b.toFixed(6)}`);
   return `${lines.join('\n')}\n`;
+}
+
+/** Vignette radius and half width in the units of vignetteDistance; the preview shader uses the same numbers. */
+export function vignetteShape(c: ClipColor): { radius: number; width: number } {
+  return { radius: 0.75 + 0.25 * c.vignetteRadius, width: 0.35 + 0.25 * c.vignetteSoftness };
+}
+
+/** 0 at the center, 1 at the corners, elliptical with the picture. u and v are 0..1 across it. */
+export function vignetteDistance(u: number, v: number): number {
+  return Math.hypot(u - 0.5, v - 0.5) * Math.SQRT2;
+}
+
+/** How far a pixel moves toward black (vignette > 0) or white (vignette < 0), 0..1. */
+export function vignetteAmount(c: ClipColor, u: number, v: number): number {
+  const { radius, width } = vignetteShape(c);
+  return Math.abs(c.vignette) * smooth(radius - width, radius + width, vignetteDistance(u, v));
+}
+
+/** Applies the vignette to one graded pixel at u, v. */
+export function vignettePixel(rgb: [number, number, number], c: ClipColor, u: number, v: number): [number, number, number] {
+  const m = vignetteAmount(c, u, v);
+  return rgb.map((x) => (c.vignette > 0 ? x * (1 - m) : x + (1 - x) * m)) as [number, number, number];
+}
+
+/**
+ * The export's vignette as a binary PPM at the picture's size, sampled at pixel centers. Black-going vignettes hold
+ * 1 - amount for ffmpeg blend multiply, white-going ones hold amount for blend screen. RGB rather than gray, so no
+ * range conversion touches the values on the way to gbrap.
+ */
+export function vignetteMask(c: ClipColor, w: number, h: number): Uint8Array {
+  const header = new TextEncoder().encode(`P6\n${w} ${h}\n255\n`);
+  const out = new Uint8Array(header.length + w * h * 3);
+  out.set(header);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const m = vignetteAmount(c, (x + 0.5) / w, (y + 0.5) / h);
+      const v = Math.round(255 * (c.vignette > 0 ? 1 - m : m));
+      out.fill(v, header.length + (y * w + x) * 3, header.length + (y * w + x) * 3 + 3);
+    }
+  }
+  return out;
 }

@@ -381,7 +381,7 @@ class Compositor {
       const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
       srcW = Math.round(r.w * fit);
       srcH = Math.round(r.h * fit);
-      src = grader.apply(el as TexImageSource, srcW, srcH, clip.color);
+      src = grader.apply(el as TexImageSource, srcW, srcH, clip.color, clip.crop);
     }
     if (!hasCrop(clip.crop)) {
       ctx.drawImage(src, r.x, r.y, r.w, r.h);

@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
+import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
 const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
@@ -320,7 +320,8 @@ try {
   }
   // Every Photos-style slider is in the inspector, and moving one changes only its own field.
   const sliderKeys = await win.evaluate(() => [...document.querySelectorAll('[data-color]')].map((el) => el.dataset.color).join());
-  check('the inspector has the eleven color sliders in Photos order', sliderKeys === 'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint', sliderKeys);
+  check('the inspector has the color and vignette sliders in Photos order', sliderKeys ===
+    'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint,vignette,vignetteRadius,vignetteSoftness', sliderKeys);
   await win.evaluate(() => {
     const el = document.querySelector('[data-color="blackPoint"]');
     el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -335,6 +336,32 @@ try {
   check('the light group counts the moved sliders', count === '5개 조정', count);
   await win.locator('[data-color="blackPoint"]').dblclick();
   check('double-clicking a slider sets it back to 0', (await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color.blackPoint)) === 0);
+  // Vignette: the preview shader against the shared function and the export's mask blend, dark and light, on a crop.
+  const vignettes = [
+    ['dark vignette', VIGNETTE, { l: 0.2, t: 0.1, r: 0, b: 0.3 }],
+    ['light vignette', pickColor({ ...GRADE, vignette: -0.8, vignetteSoftness: 0.4 }), { l: 0, t: 0, r: 0.15, b: 0 }],
+  ];
+  for (const [name, color, crop] of vignettes) {
+    await win.evaluate(({ p, swatchId, color, crop }) => {
+      const main = p.tracks.find((t) => t.id === 'v-main');
+      const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color, crop };
+      window.__paircut.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
+    }, { p: project, swatchId: fx.swatch.id, color, crop });
+    await win.evaluate(() => window.__paircut.seek(0.5));
+    await win.waitForTimeout(400);
+    const file = join(dir, `${name.replace(' ', '-')}.mp4`);
+    await exportTo(file);
+    const box = { x: crop.l * 1080, y: crop.t * 1920, w: (1 - crop.l - crop.r) * 1080, h: (1 - crop.t - crop.b) * 1920 };
+    const pts = [[box.x + box.w / 2 - 4, 700], [box.x + 40, box.y + 40], [box.x + box.w / 2 - 4, 1180], [box.x + box.w - 60, box.y + box.h - 60]];
+    for (const [x, y] of pts.map(([x, y]) => [Math.round(x / 2) * 2, Math.round(y / 2) * 2])) {
+      const shown = await readCanvas({ x, y });
+      const want = vignetteWant(color, x + 4, y + 4, box);
+      const made = samplePixel(file, 0.5, x, y);
+      const off = (a, b) => Math.max(...a.map((v, k) => Math.abs(v - b[k])));
+      check(`${name} preview at ${x},${y} matches pixel function and export`, off(shown, want) <= 5 && off(shown, made) <= 6,
+        `preview ${shown} / function ${want} / export ${made}`);
+    }
+  }
   const videoPixel = async (color) => {
     await win.evaluate(({ p, c }) => window.__paircut.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
       clips: t.clips.map((k) => (k.id === 'c1' ? { ...k, color: c } : k)) })) }), { p: project, c: color });

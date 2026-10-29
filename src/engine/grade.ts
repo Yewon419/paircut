@@ -1,5 +1,6 @@
 import type { ClipColor } from '../../shared/color';
-import { colorKey, LUT_SIZE, lutEntries } from '../../shared/color';
+import { colorKey, LUT_SIZE, lutEntries, vignetteShape } from '../../shared/color';
+import type { ClipCrop } from '../../shared/project';
 
 const VERT = `#version 300 es
 in vec2 pos;
@@ -15,12 +16,21 @@ precision highp sampler3D;
 in vec2 uv;
 uniform sampler2D src;
 uniform sampler3D lut;
+uniform float vig;
+uniform vec2 vigShape;
+uniform vec4 crop;
 out vec4 color;
 void main() {
   vec4 c = texture(src, uv);
   float n = ${LUT_SIZE.toFixed(1)};
   vec3 p = c.rgb * ((n - 1.0) / n) + 0.5 / n;
-  color = vec4(texture(lut, p).rgb, c.a);
+  vec3 g = texture(lut, p).rgb;
+  // Same as vignettePixel in shared/color.ts, over the cropped picture.
+  vec2 q = (uv - crop.xy) / (1.0 - crop.xy - crop.zw);
+  float d = length(q - 0.5) * sqrt(2.0);
+  float m = abs(vig) * smoothstep(vigShape.x - vigShape.y, vigShape.x + vigShape.y, d);
+  g = vig > 0.0 ? g * (1.0 - m) : g + (1.0 - g) * m;
+  color = vec4(g, c.a);
 }`;
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -41,6 +51,9 @@ class Grader {
   private gl: WebGL2RenderingContext | null = null;
   private srcTex: WebGLTexture | null = null;
   private luts = new Map<string, WebGLTexture>();
+  private vigLoc: WebGLUniformLocation | null = null;
+  private vigShapeLoc: WebGLUniformLocation | null = null;
+  private cropLoc: WebGLUniformLocation | null = null;
 
   private context(): WebGL2RenderingContext {
     if (this.gl) return this.gl;
@@ -60,6 +73,9 @@ class Grader {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     gl.uniform1i(gl.getUniformLocation(program, 'src'), 0);
     gl.uniform1i(gl.getUniformLocation(program, 'lut'), 1);
+    this.vigLoc = gl.getUniformLocation(program, 'vig');
+    this.vigShapeLoc = gl.getUniformLocation(program, 'vigShape');
+    this.cropLoc = gl.getUniformLocation(program, 'crop');
     this.srcTex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.srcTex);
@@ -90,10 +106,14 @@ class Grader {
     return tex;
   }
 
-  /** Returns a canvas holding `source` graded at w x h. Valid until the next call. */
-  apply(source: TexImageSource, w: number, h: number, color: ClipColor): HTMLCanvasElement {
+  /** Returns a canvas holding `source` graded at w x h, the vignette fitted to the crop. Valid until the next call. */
+  apply(source: TexImageSource, w: number, h: number, color: ClipColor, crop: ClipCrop): HTMLCanvasElement {
     const gl = this.context();
     const lut = this.lutTexture(gl, color);
+    const shape = vignetteShape(color);
+    gl.uniform1f(this.vigLoc, color.vignette);
+    gl.uniform2f(this.vigShapeLoc, shape.radius, shape.width);
+    gl.uniform4f(this.cropLoc, crop.l, crop.t, crop.r, crop.b);
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
