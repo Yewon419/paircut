@@ -43,11 +43,12 @@ async function runTool(cmd: string, args: string[]): Promise<string> {
 
 /**
  * Runs ffmpeg with `-progress pipe:1` and reports out_time / duration (0..1) as it goes. Errors carry the args and
- * the tail of stderr like runTool.
+ * the tail of stderr like runTool. Reports every 0.1s (ffmpeg's default is 0.5s), so a pass of under a second still
+ * shows steps in between.
  */
 function runFfmpegProgress(args: string[], duration: number, onRatio: (ratio: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const full = ['-progress', 'pipe:1', '-nostats', ...args];
+    const full = ['-progress', 'pipe:1', '-stats_period', '0.1', '-nostats', ...args];
     const child = spawn(FFMPEG, full, { windowsHide: true });
     let stdoutBuf = '';
     let stderrTail = '';
