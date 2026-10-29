@@ -1,5 +1,5 @@
 import type { ClipColor } from './color';
-import { NEUTRAL_COLOR } from './color';
+import { NEUTRAL_COLOR, pickColor } from './color';
 
 export type MediaKind = 'video' | 'audio' | 'image';
 
@@ -482,11 +482,6 @@ export function introProgress(anim: 'blur' | 'track' | 'wipe', text: string, dur
   return 1 - (1 - p) ** 3;
 }
 
-/** Keeps only the color fields the editor has; older files carry 'look' (the dropped Bitteul tone). */
-function pickColor(c: ClipColor): ClipColor {
-  return { brightness: c.brightness, contrast: c.contrast, saturation: c.saturation, temperature: c.temperature };
-}
-
 /** Fills fields added after the first project format so older files still open. */
 export function normalizeProject(p: Project): Project {
   // Badge numbers ('vars') were dropped with the Bitteul-only features.
@@ -500,7 +495,7 @@ export function normalizeProject(p: Project): Project {
       clips: t.clips.map((c) => {
         if (isMediaClip(c)) {
           const full = { ...MEDIA_CLIP_DEFAULTS, ...c };
-          return { ...full, color: pickColor({ ...NEUTRAL_COLOR, ...full.color }) };
+          return { ...full, color: pickColor(full.color) };
         }
         const style = { ...TEXT_STYLE_DEFAULTS, ...c.style };
         // 'behind' (the subject drawn over the letters) was dropped for a subject layer moved above the text.

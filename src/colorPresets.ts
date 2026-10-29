@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { ClipColor } from '../shared/color';
+import { COLOR_KEYS, pickColor } from '../shared/color';
 
 export interface ColorPreset {
   id: string;
@@ -8,10 +9,8 @@ export interface ColorPreset {
 }
 
 const KEY = 'paircut.colorPresets';
-const COLOR_KEYS: (keyof ClipColor)[] = ['brightness', 'contrast', 'saturation', 'temperature'];
-
-const pickColor = (c: Record<string, unknown>): ClipColor =>
-  Object.fromEntries(COLOR_KEYS.map((k) => [k, c[k]])) as unknown as ClipColor;
+/** Presets saved before the light controls carry only these; the rest are filled with 0. */
+const FIRST_KEYS: (keyof ClipColor)[] = ['brightness', 'contrast', 'saturation', 'temperature'];
 
 function isPreset(v: unknown): v is ColorPreset {
   if (typeof v !== 'object' || v === null) return false;
@@ -22,7 +21,8 @@ function isPreset(v: unknown): v is ColorPreset {
     typeof p.name === 'string' &&
     typeof c === 'object' &&
     c !== null &&
-    COLOR_KEYS.every((k) => typeof c[k] === 'number' && Number.isFinite(c[k]))
+    FIRST_KEYS.every((k) => typeof c[k] === 'number' && Number.isFinite(c[k])) &&
+    COLOR_KEYS.every((k) => c[k] === undefined || (typeof c[k] === 'number' && Number.isFinite(c[k])))
   );
 }
 
@@ -34,7 +34,7 @@ function loadUserPresets(): ColorPreset[] {
     const list: unknown = JSON.parse(raw);
     if (!Array.isArray(list) || !list.every(isPreset)) throw new Error('unexpected shape');
     // Presets saved before the Bitteul tone was dropped still carry 'look'; only the known fields are kept.
-    return list.map((p) => ({ id: p.id, name: p.name, color: pickColor(p.color as unknown as Record<string, unknown>) }));
+    return list.map((p) => ({ id: p.id, name: p.name, color: pickColor(p.color) }));
   } catch (err) {
     const backup = `${KEY}.broken-${Date.now()}`;
     localStorage.setItem(backup, raw);

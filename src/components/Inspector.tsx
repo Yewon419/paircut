@@ -134,11 +134,29 @@ function AlignButtons({ project, clip }: { project: Project; clip: Clip | TextCl
 const SPEEDS = [0.5, 1, 1.5, 2];
 const DISSOLVES = [0, 0.3, 0.5, 1];
 
-const COLOR_SLIDERS: { key: keyof ClipColor; label: string; min: number }[] = [
-  { key: 'brightness', label: '밝기', min: -100 },
-  { key: 'contrast', label: '대비', min: -100 },
-  { key: 'saturation', label: '채도', min: -100 },
-  { key: 'temperature', label: '색온도', min: -100 },
+/** The Photos app's adjust sliders, grouped and named the same way. */
+const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string }[] }[] = [
+  {
+    title: '빛',
+    keys: [
+      { key: 'exposure', label: '노출' },
+      { key: 'brilliance', label: '휘도' },
+      { key: 'highlights', label: '하이라이트' },
+      { key: 'shadows', label: '그림자' },
+      { key: 'contrast', label: '대비' },
+      { key: 'brightness', label: '밝기' },
+      { key: 'blackPoint', label: '블랙 포인트' },
+    ],
+  },
+  {
+    title: '색',
+    keys: [
+      { key: 'saturation', label: '채도' },
+      { key: 'vibrance', label: '생동감' },
+      { key: 'temperature', label: '따뜻함' },
+      { key: 'tint', label: '색조' },
+    ],
+  },
 ];
 
 const CROP_EDGES: { key: keyof ClipCrop; opposite: keyof ClipCrop; label: string }[] = [
@@ -1036,28 +1054,41 @@ function ColorControls({ clip }: { clip: Clip }) {
         ))}
         <button onClick={() => setColor(NEUTRAL_COLOR)}>원래대로</button>
       </div>
-      {COLOR_SLIDERS.map(({ key, label, min }) => (
-        <label key={key}>
-          <span>
-            {label} {Math.round(clip.color[key] * 100)}
-          </span>
-          <input
-            type="range"
-            min={min}
-            max={100}
-            step={1}
-            value={Math.round(clip.color[key] * 100)}
-            onPointerDown={beginGesture}
-            onPointerUp={endGesture}
-            onChange={(e) =>
-              updateGesture((base) =>
-                updateMediaClip(base, id, (c) => ({ ...c, color: { ...c.color, [key]: Number(e.target.value) / 100 } })),
-              )
-            }
-            data-color={key}
-          />
-        </label>
-      ))}
+      {COLOR_GROUPS.map((group) => {
+        const changed = group.keys.filter(({ key }) => clip.color[key] !== 0).length;
+        return (
+          <details key={group.title} className="color-group" open>
+            <summary>
+              {group.title}
+              {changed > 0 && <span className="color-group-count">{changed}개 조정</span>}
+            </summary>
+            {group.keys.map(({ key, label }) => (
+              <label key={key}>
+                <span>
+                  {label} {Math.round(clip.color[key] * 100)}
+                </span>
+                <input
+                  type="range"
+                  min={-100}
+                  max={100}
+                  step={1}
+                  value={Math.round(clip.color[key] * 100)}
+                  onPointerDown={beginGesture}
+                  onPointerUp={endGesture}
+                  onDoubleClick={() => commit((p) => updateMediaClip(p, id, (c) => ({ ...c, color: { ...c.color, [key]: 0 } })))}
+                  title="두 번 누르면 0으로"
+                  onChange={(e) =>
+                    updateGesture((base) =>
+                      updateMediaClip(base, id, (c) => ({ ...c, color: { ...c.color, [key]: Number(e.target.value) / 100 } })),
+                    )
+                  }
+                  data-color={key}
+                />
+              </label>
+            ))}
+          </details>
+        );
+      })}
       <div className="button-row">
         <input
           value={name}

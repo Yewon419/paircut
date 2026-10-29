@@ -8,9 +8,11 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { gradePixel } = require('../dist-electron/shared/color.js');
-/** A grade that moves every control, so the lut3d path is checked end to end. */
-const GRADE = { brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 };
+const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
+/** A grade that moves the first four controls, so the lut3d path is checked end to end. */
+const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
+/** The Photos-style light and color controls added later, all moved at once. */
+export const LIGHT = pickColor({ exposure: 0.3, brilliance: 0.4, highlights: -0.5, shadows: 0.4, blackPoint: 0.3, vibrance: 0.5, tint: -0.4 });
 
 /** Stripes of the swatch fixture, top to bottom, 480px each. */
 export const SWATCHES = [[70, 160, 60], [70, 50, 200], [220, 150, 110], [128, 128, 128]];
@@ -205,7 +207,8 @@ async function checkColor(base, swatch, dir) {
     ...base,
     tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
       { ...clip, color: GRADE },
-      { ...clip, id: 'g2', start: 1, color: { brightness: 0, contrast: 0, saturation: -1, temperature: 0 } },
+      { ...clip, id: 'g2', start: 1, color: pickColor({ saturation: -1 }) },
+      { ...clip, id: 'g3', start: 2, color: LIGHT },
     ] }],
   };
   const out = join(dir, 'color.mp4');
@@ -220,6 +223,39 @@ async function checkColor(base, swatch, dir) {
   });
   const gray = samplePixel(out, 1.5, 536, 480 + 236);
   check('saturation -100% gives gray', Math.max(...gray) - Math.min(...gray) <= 4, gray.join(','));
+  SWATCHES.forEach((src, i) => {
+    const want = gradePixel(src.map((v) => v / 255), LIGHT).map((v) => Math.round(v * 255));
+    const got = samplePixel(out, 2.5, 536, i * 480 + 236);
+    const off = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
+    check(`light controls on ${src.join(',')}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
+  });
+  // The first four controls keep their original formula, so older projects look the same.
+  const legacy = ([r, g, b], c) => {
+    r *= 1 + 0.1 * c.temperature;
+    b *= 1 - 0.1 * c.temperature;
+    const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const k = 1 + c.saturation;
+    const tone = (x) => Math.pow(Math.min(1, Math.max(0, 0.5 + (Math.min(1, Math.max(0, x)) - 0.5) * (1 + c.contrast))), Math.pow(2, -c.brightness));
+    return [l + (r - l) * k, l + (g - l) * k, l + (b - l) * k].map(tone);
+  };
+  const drift = Math.max(...SWATCHES.flatMap((src) => {
+    const a = gradePixel(src.map((v) => v / 255), GRADE);
+    const b = legacy(src.map((v) => v / 255), GRADE);
+    return a.map((v, k) => Math.abs(v - b[k]));
+  }));
+  check('the first four controls are unchanged by the new ones', drift < 1e-12, String(drift));
+  const light = (key, value, src) => gradePixel(src, pickColor({ [key]: value }));
+  const mid = [0.5, 0.5, 0.5];
+  check('exposure + brightens, - darkens', light('exposure', 0.5, mid)[0] > 0.6 && light('exposure', -0.5, mid)[0] < 0.4);
+  check('highlights - pulls bright tones down, leaves dark ones', light('highlights', -1, [0.9, 0.9, 0.9])[0] < 0.85 && Math.abs(light('highlights', -1, [0.1, 0.1, 0.1])[0] - 0.1) < 0.005);
+  check('shadows + lifts dark tones, leaves bright ones', light('shadows', 1, [0.1, 0.1, 0.1])[0] > 0.2 && Math.abs(light('shadows', 1, [0.95, 0.95, 0.95])[0] - 0.95) < 0.005);
+  check('black point + takes near-black to black', light('blackPoint', 1, [0.1, 0.1, 0.1])[0] === 0);
+  const muted = [0.5, 0.45, 0.4];
+  const vivid = [0.9, 0.2, 0.1];
+  const spread = (c) => Math.max(...c) - Math.min(...c);
+  const gain = (src) => spread(light('vibrance', 1, src)) / spread(src);
+  check('vibrance boosts muted colors more than vivid ones', gain(muted) > gain(vivid) + 0.3, `${gain(muted)} vs ${gain(vivid)}`);
+  check('tint + is magenta (less green)', light('tint', 1, mid)[1] < 0.5 && light('tint', 1, mid)[0] === 0.5);
 }
 
 /** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */

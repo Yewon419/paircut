@@ -36,12 +36,20 @@ const font = z
   .describe(
     'black..thin = Pretendard weights 900..100; serif = Korean myeongjo for titles; pres-* = Freesentation gothic; hand = handwriting; Latin only: josefin(-light) = Josefin Sans 700/300, josefin-slab = Josefin Slab 700, montserrat(-medium) = Montserrat 800/500 (Gotham-like), inter(-regular) = Inter 700/400 (Helvetica-like), scratch = Rock Salt scratchy marker, instrument-italic = Instrument Serif Italic (editorial emphasis)',
   );
+const amount = z.number().min(-1).max(1);
 const color = z
   .object({
-    brightness: z.number().min(-1).max(1),
-    contrast: z.number().min(-1).max(1),
-    saturation: z.number().min(-1).max(1),
-    temperature: z.number().min(-1).max(1),
+    exposure: amount.describe('±1.5 stops'),
+    brilliance: amount.describe('lifts shadows and pulls highlights in'),
+    highlights: amount.describe('+ brightens bright tones, - recovers them'),
+    shadows: amount.describe('+ opens dark tones, - deepens them'),
+    contrast: amount,
+    brightness: amount.describe('midtone gamma'),
+    blackPoint: amount.describe('+ crushes the darkest tones to black, - lifts them'),
+    saturation: amount,
+    vibrance: amount.describe('saturation that favors muted colors'),
+    temperature: amount.describe('+ warmer'),
+    tint: amount.describe('+ magenta, - green'),
   })
   .partial();
 

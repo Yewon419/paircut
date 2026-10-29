@@ -6,12 +6,12 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
+import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, samplePixel, SWATCHES } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
-const { gradePixel } = require('../dist-electron/shared/color.js');
-/** A grade that moves every control, so the preview LUT is checked end to end. */
-const GRADE = { brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 };
+const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
+/** A grade that moves the first four controls, so the preview LUT is checked end to end. */
+const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 const { importMedia } = require('../dist-electron/electron/media.js');
 
 const root = resolve(import.meta.dirname, '..');
@@ -297,25 +297,44 @@ try {
       .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
   check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
   // Color correction: preview (WebGL LUT) against the shared pixel function and the ffmpeg lut3d export.
-  await win.evaluate(({ p, swatchId, grade }) => {
-    const main = p.tracks.find((t) => t.id === 'v-main');
-    const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color: grade };
-    window.__paircut.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
-  }, { p: project, swatchId: fx.swatch.id, grade: GRADE });
-  await win.locator('[data-clip="g1"]').click();
-  await win.evaluate(() => window.__paircut.seek(0.5));
-  await win.waitForTimeout(400);
-  const graded = join(dir, 'graded.mp4');
-  await exportTo(graded);
-  for (const [i, src] of SWATCHES.entries()) {
-    const at = { x: 540, y: i * 480 + 236 };
-    const shown = await readCanvas(at);
-    const want = gradePixel(src.map((v) => v / 255), GRADE).map((v) => Math.round(v * 255));
-    const made = samplePixel(graded, 0.5, at.x, at.y);
-    const off = (a, b) => Math.max(...a.map((v, k) => Math.abs(v - b[k])));
-    check(`graded preview ${src.join(',')} matches pixel function and export`, off(shown, want) <= 4 && off(shown, made) <= 6,
-      `preview ${shown} / function ${want} / export ${made}`);
+  for (const [name, grade] of [['graded', GRADE], ['light', LIGHT]]) {
+    await win.evaluate(({ p, swatchId, grade }) => {
+      const main = p.tracks.find((t) => t.id === 'v-main');
+      const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color: grade };
+      window.__paircut.load({ ...p, tracks: [{ ...main, clips: [clip] }] });
+    }, { p: project, swatchId: fx.swatch.id, grade });
+    await win.locator('[data-clip="g1"]').click();
+    await win.evaluate(() => window.__paircut.seek(0.5));
+    await win.waitForTimeout(400);
+    const graded = join(dir, `${name}.mp4`);
+    await exportTo(graded);
+    for (const [i, src] of SWATCHES.entries()) {
+      const at = { x: 540, y: i * 480 + 236 };
+      const shown = await readCanvas(at);
+      const want = gradePixel(src.map((v) => v / 255), grade).map((v) => Math.round(v * 255));
+      const made = samplePixel(graded, 0.5, at.x, at.y);
+      const off = (a, b) => Math.max(...a.map((v, k) => Math.abs(v - b[k])));
+      check(`${name} preview ${src.join(',')} matches pixel function and export`, off(shown, want) <= 4 && off(shown, made) <= 6,
+        `preview ${shown} / function ${want} / export ${made}`);
+    }
   }
+  // Every Photos-style slider is in the inspector, and moving one changes only its own field.
+  const sliderKeys = await win.evaluate(() => [...document.querySelectorAll('[data-color]')].map((el) => el.dataset.color).join());
+  check('the inspector has the eleven color sliders in Photos order', sliderKeys === 'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint', sliderKeys);
+  await win.evaluate(() => {
+    const el = document.querySelector('[data-color="blackPoint"]');
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, '35');
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }));
+  });
+  const moved = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color);
+  const shifted = Object.keys(moved).filter((k) => moved[k] !== LIGHT[k]);
+  check('the black point slider sets only black point', moved.blackPoint === 0.35 && shifted.join() === 'blackPoint', JSON.stringify(moved));
+  const count = await win.locator('.color-group-count').first().textContent();
+  check('the light group counts the moved sliders', count === '5개 조정', count);
+  await win.locator('[data-color="blackPoint"]').dblclick();
+  check('double-clicking a slider sets it back to 0', (await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color.blackPoint)) === 0);
   const videoPixel = async (color) => {
     await win.evaluate(({ p, c }) => window.__paircut.load({ ...p, tracks: p.tracks.map((t) => ({ ...t,
       clips: t.clips.map((k) => (k.id === 'c1' ? { ...k, color: c } : k)) })) }), { p: project, c: color });
@@ -331,7 +350,7 @@ try {
     }
     return last;
   };
-  const plain = await videoPixel({ brightness: 0, contrast: 0, saturation: 0, temperature: 0 });
+  const plain = await videoPixel(pickColor({}));
   const gradedVideo = await videoPixel(GRADE);
   const wantVideo = gradePixel(plain.map((v) => v / 255), GRADE).map((v) => Math.round(v * 255));
   check('graded video frame goes through the LUT', Math.max(...gradedVideo.map((v, k) => Math.abs(v - wantVideo[k]))) <= 12,
