@@ -172,6 +172,9 @@ const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string
       { key: 'glow', label: '소프트 글로우', min: 0 },
       { key: 'glowSize', label: '글로우 번짐' },
       { key: 'glowThreshold', label: '글로우 기준 밝기' },
+      { key: 'halation', label: '할레이션', min: 0 },
+      { key: 'star', label: '빛줄기', min: 0 },
+      { key: 'starLength', label: '빛줄기 길이' },
     ],
   },
   {

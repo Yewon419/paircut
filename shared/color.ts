@@ -38,6 +38,12 @@ export interface ClipColor {
   glowSize: number;
   /** Which tones glow: positive keeps it to the brightest, negative lets midtones glow too. */
   glowThreshold: number;
+  /** 0..1: film halation, a warm red fringe around the brightest parts. */
+  halation: number;
+  /** 0..1: star filter, four still rays (across and up) from bright points. */
+  star: number;
+  /** How long the star rays reach. */
+  starLength: number;
   /** Positive darkens the edges, negative lightens them. Applied after the LUT, on the cropped picture. */
   vignette: number;
   /** Where the vignette is half strength: larger pushes it out to the corners. */
@@ -64,8 +70,8 @@ export const LUT_KEYS: (keyof ClipColor)[] = [
 /** Filters that look at neighboring pixels, so they run as their own passes around the LUT. */
 export const DETAIL_KEYS: (keyof ClipColor)[] = ['sharpness', 'definition', 'noiseReduction'];
 
-/** Camera-lens looks drawn after the detail passes; size and threshold only matter while glow is on. */
-export const LENS_KEYS: (keyof ClipColor)[] = ['blur', 'glow', 'glowSize', 'glowThreshold'];
+/** Camera-lens looks drawn after the detail passes; glow size and threshold, and star length, only matter while on. */
+export const LENS_KEYS: (keyof ClipColor)[] = ['blur', 'glow', 'glowSize', 'glowThreshold', 'halation', 'star', 'starLength'];
 
 export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, ...DETAIL_KEYS, ...LENS_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
 
@@ -88,6 +94,9 @@ export const NEUTRAL_COLOR: ClipColor = {
   glow: 0,
   glowSize: 0,
   glowThreshold: 0,
+  halation: 0,
+  star: 0,
+  starLength: 0,
   vignette: 0,
   vignetteRadius: 0,
   vignetteSoftness: 0,
@@ -101,7 +110,7 @@ export function isLutNeutral(c: ClipColor): boolean {
 }
 
 export function isNeutral(c: ClipColor): boolean {
-  return isLutNeutral(c) && DETAIL_KEYS.every((k) => c[k] === 0) && c.blur === 0 && c.glow === 0 && c.vignette === 0;
+  return isLutNeutral(c) && DETAIL_KEYS.every((k) => c[k] === 0) && c.blur === 0 && c.glow === 0 && c.halation === 0 && c.star === 0 && c.vignette === 0;
 }
 
 export const GLOW_GAIN = 1.5;
@@ -111,6 +120,41 @@ export function glowBright(v: number, threshold: number): number {
   const t = Math.min(1, Math.max(0, (v - threshold) / (1 - threshold)));
   return Math.min(1, GLOW_GAIN * v * t * t * (3 - 2 * t));
 }
+
+/** ffmpeg gblur passes in the export; more is closer to a true Gaussian. */
+export const GBLUR_STEPS = 3;
+
+/**
+ * ffmpeg gblur's impulse response from -reach to reach: GBLUR_STEPS passes of a causal and an anticausal first-order
+ * filter (Alvarez-Mazorra), then its postscale. Its tail is heavier than a Gaussian's, which shows once a gain lifts it.
+ */
+export function gblurKernel(sigma: number, reach: number): number[] {
+  const lambda = (sigma * sigma) / (2 * GBLUR_STEPS);
+  const nu = (1 + 2 * lambda - Math.sqrt(1 + 4 * lambda)) / (2 * lambda);
+  const pad = 8 * reach;
+  const buf = new Float64Array(2 * reach + 1 + 2 * pad);
+  buf[pad + reach] = 1;
+  for (let s = 0; s < GBLUR_STEPS; s++) {
+    for (let i = 1; i < buf.length; i++) buf[i] += nu * buf[i - 1];
+    for (let i = buf.length - 1; i > 0; i--) buf[i - 1] += nu * buf[i];
+  }
+  const post = Math.pow(nu / lambda, GBLUR_STEPS);
+  return Array.from(buf.subarray(pad, pad + 2 * reach + 1), (v) => v * post);
+}
+
+/** Luma weights the halation's and the star's bright passes read. */
+export const LUMA: [number, number, number] = [0.2126, 0.7152, 0.0722];
+
+/** The star's bright pass: the color kept as it is, scaled by how far its luma is over the threshold, eased in. */
+export function starBright(rgb: [number, number, number], threshold: number): [number, number, number] {
+  const y = LUMA[0] * rgb[0] + LUMA[1] * rgb[1] + LUMA[2] * rgb[2];
+  const t = Math.min(1, Math.max(0, (y - threshold) / (1 - threshold)));
+  const k = t * t * (3 - 2 * t);
+  return [rgb[0] * k, rgb[1] * k, rgb[2] * k];
+}
+
+/** The halation's color: film's red layer catching light bounced back through the base. */
+export const HALATION_TINT: [number, number, number] = [1, 0.35, 0.12];
 
 /**
  * The detail passes for a picture processed at w x h (before any crop), in order: noise reduction before the LUT,
@@ -127,6 +171,13 @@ export interface DetailPlan {
   blur: { sigma: number } | null;
   /** Then glowBright of each channel, blurred, screened over: a + amount * b * (1 - a). */
   glow: { sigma: number; threshold: number; amount: number } | null;
+  /** Then glowBright of the luma times HALATION_TINT, blurred, times gain clipped to 1, screened over at amount. */
+  halation: { sigma: number; threshold: number; gain: number; amount: number } | null;
+  /**
+   * Then starBright blurred along rows only and, apart, along columns only; each times gain, clipped
+   * to 1, screened over at amount.
+   */
+  star: { sigma: number; threshold: number; gain: number; amount: number } | null;
 }
 
 export function detailPlan(c: ClipColor, w: number, h: number): DetailPlan {
@@ -142,6 +193,16 @@ export function detailPlan(c: ClipColor, w: number, h: number): DetailPlan {
     glow:
       c.glow > 0
         ? { sigma: Math.max(1, 16 * scale * Math.pow(2, 0.7 * c.glowSize)), threshold: 0.55 + 0.25 * c.glowThreshold, amount: Math.min(1, c.glow) }
+        : null,
+    halation: c.halation > 0 ? { sigma: Math.max(1, 16 * scale), threshold: 0.6, gain: 2, amount: Math.min(1, c.halation) } : null,
+    star:
+      c.star > 0
+        ? {
+            sigma: Math.max(1, 24 * scale * Math.pow(2, c.starLength)),
+            threshold: 0.8,
+            gain: 3 * Math.pow(2, 0.5 * c.starLength),
+            amount: Math.min(1, c.star),
+          }
         : null,
   };
 }

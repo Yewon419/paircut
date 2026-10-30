@@ -29,7 +29,7 @@ import {
   visualSpan,
 } from './project';
 import type { BackdropEffect, BlendMode, Clip, Project, Track, TransformKey } from './project';
-import { colorKey, cubeFile, detailPlan, GLOW_GAIN, isLutNeutral, vignetteMask } from './color';
+import { colorKey, cubeFile, detailPlan, GBLUR_STEPS, GLOW_GAIN, HALATION_TINT, isLutNeutral, LUMA, vignetteMask } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
 export interface TextLayer {
@@ -85,8 +85,6 @@ const FFMPEG_BLEND: Record<BlendMode, string> = {
   difference: 'difference',
 };
 
-/** gblur passes; more is closer to a true Gaussian, which the preview draws. */
-const DEFINITION_STEPS = 3;
 
 function num(n: number): string {
   return n.toFixed(4).replace(/\.?0+$/, '') || '0';
@@ -153,7 +151,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   };
   /**
    * The clip's color on the w x h (cropped) picture, in the preview's order: noise reduction, LUT, definition,
-   * sharpness, blur, glow, vignette. Detail sizes follow the dw x dh picture before the crop, like the preview's.
+   * sharpness, blur, glow, halation, star, vignette. Detail sizes follow the dw x dh picture before the crop, like the preview's.
    * `a + k * (a - b)` is mix with weights 1 + k and -k; the vignette mask is multiplied in (darker) or screened in (lighter).
    */
   const grade = (clip: Clip, w: number, h: number, dw: number, dh: number): string => {
@@ -165,23 +163,51 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
       `[${tag}${n}a][${tag}${n}f]mix=weights='${num(1 + k)} ${num(-k)}':scale=1:planes=7,`;
     let out = detail.noise > 0 ? against('dn', -detail.noise, 'median=radius=1:planes=7') : '';
     if (!isLutNeutral(c)) out += `format=rgba,lut3d=file=${sideFile(`lut ${colorKey(c)}`, 'cube', () => cubeFile(c))}:interp=trilinear,`;
-    if (detail.definition) out += against('dd', detail.definition.k, `gblur=sigma=${num(detail.definition.sigma)}:steps=${DEFINITION_STEPS}:planes=7`);
+    if (detail.definition) out += against('dd', detail.definition.k, `gblur=sigma=${num(detail.definition.sigma)}:steps=${GBLUR_STEPS}:planes=7`);
     if (detail.sharpness) {
       const m = 2 * detail.sharpness.steps + 1;
       const k = num(detail.sharpness.k);
       out += `format=gbrap,unsharp=lx=${m}:ly=${m}:la=${k}:cx=${m}:cy=${m}:ca=${k},`;
     }
-    if (detail.blur) out += `format=gbrap,gblur=sigma=${num(detail.blur.sigma)}:steps=${DEFINITION_STEPS}:planes=7,`;
+    if (detail.blur) out += `format=gbrap,gblur=sigma=${num(detail.blur.sigma)}:steps=${GBLUR_STEPS}:planes=7,`;
+    /** glowBright of each channel times its tint, as lutrgb expressions: ld(0) is the eased position above the threshold. */
+    const brightLut = (threshold: number, tint: [number, number, number] = [1, 1, 1]) => {
+      const t = num(threshold);
+      const [r, g, b] = tint.map((k) => `'st(0,clip((val/255-${t})/(1-${t}),0,1));${num(k)}*min(255,${GLOW_GAIN}*val*ld(0)*ld(0)*(3-2*ld(0)))'`);
+      return `format=rgba,lutrgb=r=${r}:g=${g}:b=${b},format=gbrap`;
+    };
+    const screen = (o: number) =>
+      `blend=c0_mode=screen:c0_opacity=${num(o)}:c1_mode=screen:c1_opacity=${num(o)}:c2_mode=screen:c2_opacity=${num(o)}:c3_mode=normal:c3_opacity=1`;
+    const gblur = (sigma: number, sigmaV = sigma) =>
+      `gblur=sigma=${num(sigma)}:sigmaV=${num(sigmaV)}:steps=${GBLUR_STEPS}:planes=7`;
     if (detail.glow) {
       const g = detail.glow;
-      // glowBright as a lutrgb expression: ld(0) is the eased position above the threshold.
-      const t = num(g.threshold);
-      const bright = `'st(0,clip((val/255-${t})/(1-${t}),0,1));min(255,${GLOW_GAIN}*val*ld(0)*ld(0)*(3-2*ld(0)))'`;
-      const o = num(g.amount);
+      out += `format=gbrap,split[gl${n}a][gl${n}b];[gl${n}b]${brightLut(g.threshold)},${gblur(g.sigma)}[gl${n}f];[gl${n}a][gl${n}f]${screen(g.amount)},`;
+    }
+    const [lr, lg, lb] = LUMA.map(num);
+    const luma = `colorchannelmixer=rr=${lr}:rg=${lg}:rb=${lb}:gr=${lr}:gg=${lg}:gb=${lb}:br=${lr}:bg=${lg}:bb=${lb}`;
+    const times = (k: number) => {
+      const e = `'min(255,${num(k)}*val)'`;
+      return `format=rgba,lutrgb=r=${e}:g=${e}:b=${e},format=gbrap`;
+    };
+    if (detail.halation) {
+      const g = detail.halation;
       out +=
-        `format=gbrap,split[gl${n}a][gl${n}b];[gl${n}b]format=rgba,lutrgb=r=${bright}:g=${bright}:b=${bright},format=gbrap,` +
-        `gblur=sigma=${num(g.sigma)}:steps=${DEFINITION_STEPS}:planes=7[gl${n}f];` +
-        `[gl${n}a][gl${n}f]blend=c0_mode=screen:c0_opacity=${o}:c1_mode=screen:c1_opacity=${o}:c2_mode=screen:c2_opacity=${o}:c3_mode=normal:c3_opacity=1,`;
+        `format=gbrap,split[ha${n}a][ha${n}b];[ha${n}b]${luma},${brightLut(g.threshold, HALATION_TINT)},${gblur(g.sigma)},${times(g.gain)}[ha${n}f];` +
+        `[ha${n}a][ha${n}f]${screen(g.amount)},`;
+    }
+    if (detail.star) {
+      const s = detail.star;
+      const gain = times(s.gain);
+      // starBright: the picture multiplied by the eased luma position over the threshold.
+      const t = num(s.threshold);
+      const ease = `'st(0,clip((val/255-${t})/(1-${t}),0,1));255*ld(0)*ld(0)*(3-2*ld(0))'`;
+      out +=
+        `format=gbrap,split[st${n}a][st${n}b];[st${n}b]split[st${n}c][st${n}d];` +
+        `[st${n}d]${luma},format=rgba,lutrgb=r=${ease}:g=${ease}:b=${ease},format=gbrap[st${n}k];` +
+        `[st${n}c][st${n}k]blend=c0_mode=multiply:c1_mode=multiply:c2_mode=multiply:c3_mode=normal:c3_opacity=1,split[st${n}h][st${n}v];` +
+        `[st${n}h]${gblur(s.sigma, 0)},${gain}[st${n}hf];[st${n}v]${gblur(0, s.sigma)},${gain}[st${n}vf];` +
+        `[st${n}a][st${n}hf]${screen(s.amount)}[st${n}m];[st${n}m][st${n}vf]${screen(s.amount)},`;
     }
     if (c.vignette === 0) return out;
     const key = `vig ${w}x${h} ${c.vignette.toFixed(3)} ${c.vignetteRadius.toFixed(3)} ${c.vignetteSoftness.toFixed(3)}`;

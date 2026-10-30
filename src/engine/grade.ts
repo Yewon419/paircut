@@ -1,5 +1,5 @@
 import type { ClipColor } from '../../shared/color';
-import { colorKey, detailPlan, GLOW_GAIN, isLutNeutral, LUT_SIZE, lutEntries, vignetteShape } from '../../shared/color';
+import { colorKey, detailPlan, gblurKernel, GLOW_GAIN, HALATION_TINT, isLutNeutral, LUMA, LUT_SIZE, lutEntries, vignetteShape } from '../../shared/color';
 import type { ClipCrop } from '../../shared/project';
 
 /**
@@ -67,7 +67,7 @@ void main() {
   color = vec4(v[4], texture(src, uv).a);
 }`;
 
-const MAX_TAPS = 96;
+const MAX_TAPS = 192;
 
 /** One direction of a separable blur: taps are (offset in texels, weight). */
 const BLUR_FRAG = `${HEAD}
@@ -82,26 +82,37 @@ void main() {
 
 /**
  * screen 0: a + k * (a - b), sharpening and definition against a blur, noise reduction against the median.
- * screen 1: a + k * b * (1 - a), the glow screened over (ffmpeg blend screen at opacity k).
+ * screen 1: a + k * b * (1 - a), the glow screened over (ffmpeg blend screen at opacity k), b first times gain
+ * and clipped to 1.
  */
 const COMBINE_FRAG = `${HEAD}
 uniform sampler2D other;
 uniform float k;
 uniform float screen;
+uniform float gain;
 void main() {
   vec4 a = texture(src, uv);
-  vec3 b = texture(other, uv).rgb;
+  vec3 b = min(vec3(1.0), gain * texture(other, uv).rgb);
   vec3 c = screen > 0.5 ? a.rgb + k * b * (1.0 - a.rgb) : a.rgb + k * (a.rgb - b);
   color = vec4(clamp(c, 0.0, 1.0), a.a);
 }`;
 
-/** glowBright in shared/color.ts on each channel. */
+/**
+ * mode 0: glowBright in shared/color.ts on each channel; 1: on the luma in all three; both times tint.
+ * mode 2: starBright, the color times the eased luma position.
+ */
 const BRIGHT_FRAG = `${HEAD}
 uniform float threshold;
+uniform int mode;
+uniform vec3 tint;
 void main() {
   vec4 a = texture(src, uv);
-  vec3 t = clamp((a.rgb - threshold) / (1.0 - threshold), 0.0, 1.0);
-  color = vec4(min(vec3(1.0), ${GLOW_GAIN.toFixed(4)} * a.rgb * t * t * (3.0 - 2.0 * t)), a.a);
+  float y = dot(a.rgb, vec3(${LUMA.map((k) => k.toFixed(4)).join(', ')}));
+  vec3 v = mode == 0 ? a.rgb : vec3(y);
+  vec3 t = clamp((v - threshold) / (1.0 - threshold), 0.0, 1.0);
+  vec3 e = t * t * (3.0 - 2.0 * t);
+  vec3 g = mode == 2 ? a.rgb * e : tint * min(vec3(1.0), ${GLOW_GAIN.toFixed(4)} * v * e);
+  color = vec4(g, a.a);
 }`;
 
 type Tap = [number, number];
@@ -114,12 +125,8 @@ function binomialTaps(steps: number): Tap[] {
   return row.map((v, j): Tap => [j - steps, v / total]);
 }
 
-/** A Gaussian out to 3 sigma, neighboring texels paired into one linear sample. */
-function gaussianTaps(sigma: number): Tap[] {
-  const reach = Math.min(Math.ceil(3 * sigma), MAX_TAPS - 2);
-  const w = (i: number) => Math.exp(-(i * i) / (2 * sigma * sigma));
-  let total = w(0);
-  for (let i = 1; i <= reach; i++) total += 2 * w(i);
+/** A symmetric kernel w(0..reach) divided by total, neighboring texels paired into one linear sample. */
+function pairedTaps(w: (i: number) => number, reach: number, total: number): Tap[] {
   const taps: Tap[] = [[0, w(0) / total]];
   for (let i = 1; i <= reach; i += 2) {
     const a = w(i);
@@ -128,6 +135,22 @@ function gaussianTaps(sigma: number): Tap[] {
     taps.push([at, (a + b) / total], [-at, (a + b) / total]);
   }
   return taps;
+}
+
+/** A Gaussian out to 3 sigma. */
+function gaussianTaps(sigma: number): Tap[] {
+  const reach = Math.min(Math.ceil(3 * sigma), MAX_TAPS - 2);
+  const w = (i: number) => Math.exp(-(i * i) / (2 * sigma * sigma));
+  let total = w(0);
+  for (let i = 1; i <= reach; i++) total += 2 * w(i);
+  return pairedTaps(w, reach, total);
+}
+
+/** The export's own gblur kernel out to 4 sigma, for the halation and the star, whose gain makes the difference from a Gaussian show. */
+function gblurTaps(sigma: number): Tap[] {
+  const reach = Math.min(Math.ceil(4 * sigma), MAX_TAPS - 2);
+  const k = gblurKernel(sigma, reach);
+  return pairedTaps((i) => k[reach + i], reach, 1);
 }
 
 function compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
@@ -160,7 +183,7 @@ interface Programs {
 
 /**
  * Applies a clip's color on the GPU in the export's order: noise reduction, LUT, definition, sharpness, blur, glow,
- * vignette.
+ * halation, star, vignette.
  * The LUT comes from the same function the export writes to a .cube file, sampled trilinearly like ffmpeg lut3d
  * interp=trilinear; the detail passes use the export's kernels at the same picture size.
  */
@@ -307,34 +330,35 @@ class Grader {
         gl.uniform4f(u('crop'), crop.l, crop.t, crop.r, crop.b);
       });
     let cur: Input = { tex: this.srcTex as WebGLTexture, flip: true };
-    if (plan.noise === 0 && !plan.definition && !plan.sharpness && !plan.blur && !plan.glow) {
+    if (plan.noise === 0 && !plan.definition && !plan.sharpness && !plan.blur && !plan.glow && !plan.halation && !plan.star) {
       lutPass(cur, null, useLut, true);
       return this.canvas;
     }
     this.ensureTargets(gl, w, h);
-    const combine = (a: Input, b: Input, k: number, screen = false): Input =>
-      this.pass(gl, prog.combine, a, this.freeTarget(a, b), (u) => {
+    const combine = (a: Input, b: Input, k: number, screen = false, gain = 1, keep: Input = a): Input =>
+      this.pass(gl, prog.combine, a, this.freeTarget(a, b, keep), (u) => {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, b.tex);
         gl.uniform1i(u('other'), 2);
         gl.uniform1f(u('k'), k);
         gl.uniform1f(u('screen'), screen ? 1 : 0);
+        gl.uniform1f(u('gain'), gain);
+      });
+    /** One direction of a blur into a free framebuffer, leaving `a` and `keep` untouched. */
+    const line = (a: Input, taps: Tap[], dir: [number, number], ...keep: Input[]): Input =>
+      this.pass(gl, prog.blur, a, this.freeTarget(a, ...keep), (u) => {
+        gl.uniform2f(u('dir'), dir[0], dir[1]);
+        gl.uniform1i(u('count'), taps.length);
+        gl.uniform2fv(u('taps'), taps.flat());
       });
     /** Blurs `a` into free framebuffers, leaving `a` and `keep` untouched. */
-    const blur = (a: Input, taps: Tap[], keep: Input = a): Input => {
-      let out = a;
-      for (const dir of [
-        [1 / w, 0],
-        [0, 1 / h],
-      ]) {
-        out = this.pass(gl, prog.blur, out, this.freeTarget(a, out, keep), (u) => {
-          gl.uniform2f(u('dir'), dir[0], dir[1]);
-          gl.uniform1i(u('count'), taps.length);
-          gl.uniform2fv(u('taps'), taps.flat());
-        });
-      }
-      return out;
-    };
+    const blur = (a: Input, taps: Tap[], keep: Input = a): Input => line(line(a, taps, [1 / w, 0], keep), taps, [0, 1 / h], a, keep);
+    const bright = (a: Input, threshold: number, mode: 0 | 1 | 2, tint: [number, number, number] = [1, 1, 1]): Input =>
+      this.pass(gl, prog.bright, a, this.freeTarget(a), (u) => {
+        gl.uniform1f(u('threshold'), threshold);
+        gl.uniform1i(u('mode'), mode);
+        gl.uniform3f(u('tint'), ...tint);
+      });
     cur = lutPass(cur, this.targets[0], false, false);
     if (plan.noise > 0) {
       const median = this.pass(gl, prog.median, cur, this.freeTarget(cur), (u) => gl.uniform2f(u('px'), 1 / w, 1 / h));
@@ -344,10 +368,17 @@ class Grader {
     if (plan.definition) cur = combine(cur, blur(cur, gaussianTaps(plan.definition.sigma)), plan.definition.k);
     if (plan.sharpness) cur = combine(cur, blur(cur, binomialTaps(plan.sharpness.steps)), plan.sharpness.k);
     if (plan.blur) cur = blur(cur, gaussianTaps(plan.blur.sigma));
-    if (plan.glow) {
-      const glow = plan.glow;
-      const bright = this.pass(gl, prog.bright, cur, this.freeTarget(cur), (u) => gl.uniform1f(u('threshold'), glow.threshold));
-      cur = combine(cur, blur(bright, gaussianTaps(glow.sigma), cur), glow.amount, true);
+    if (plan.glow) cur = combine(cur, blur(bright(cur, plan.glow.threshold, 0), gaussianTaps(plan.glow.sigma), cur), plan.glow.amount, true);
+    if (plan.halation) {
+      const { sigma, threshold, gain, amount } = plan.halation;
+      cur = combine(cur, blur(bright(cur, threshold, 1, HALATION_TINT), gblurTaps(sigma), cur), amount, true, gain);
+    }
+    if (plan.star) {
+      const { sigma, threshold, gain, amount } = plan.star;
+      const taps = gblurTaps(sigma);
+      const lit = bright(cur, threshold, 2);
+      cur = combine(cur, line(lit, taps, [1 / w, 0], cur), amount, true, gain, lit);
+      cur = combine(cur, line(lit, taps, [0, 1 / h], cur), amount, true, gain);
     }
     lutPass(cur, null, false, true);
     return this.canvas;

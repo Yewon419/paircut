@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { detailPlan, glowBright, gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
+const { detailPlan, gblurKernel, glowBright, gradePixel, HALATION_TINT, starBright, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
@@ -311,11 +311,11 @@ export function vignetteWant(color, x, y, box) {
   return vignettePixel(gradePixel(src, color), color, (x - box.x) / box.w, (y - box.y) / box.h).map((v) => Math.round(v * 255));
 }
 
-/** Green values down column x of the frame at t, the whole height. */
-export function column(file, t, x) {
+/** Values of channel ch (green by default) down column x of the frame at t, the whole height. */
+export function column(file, t, x, ch = 1) {
   const buf = execFileSync('ffmpeg', ['-v', 'error', '-ss', String(t), '-i', file, '-frames:v', '1',
     '-vf', `crop=2:ih:${x}:0`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1']);
-  return Array.from({ length: buf.length / 6 }, (_, i) => buf[i * 6 + 1]);
+  return Array.from({ length: buf.length / 6 }, (_, i) => buf[i * 6 + ch]);
 }
 
 /** Standard deviation of a block's green values, a noise measure. */
@@ -329,9 +329,10 @@ export function blockSpread(file, t, x, y, size = 64) {
 
 /**
  * The steps fixture's column after the detail passes, from the shared plan: the picture is uniform across, so the
- * separable kernels reduce to one dimension (edges clamped, as in ffmpeg unsharp).
+ * separable kernels reduce to one dimension (edges clamped, as in ffmpeg unsharp), and the star's rays across leave
+ * the bright pass as it is. Channel ch, green by default; the cases keep the picture gray, so the luma is the value.
  */
-export function detailColumn(color, h) {
+export function detailColumn(color, h, ch = 1) {
   const plan = detailPlan(color, 1080, h);
   let col = Array.from({ length: h }, (_, y) => STEP[y < h / 2 ? 0 : 1] / 255);
   const convolve = (src, kernel) => {
@@ -348,7 +349,7 @@ export function detailColumn(color, h) {
     const blur = convolve(col, kernel);
     col = col.map((a, y) => Math.min(1, Math.max(0, a + k * (a - blur[y]))));
   };
-  col = col.map((v) => gradePixel([v, v, v], color)[1]);
+  col = col.map((v) => gradePixel([v, v, v], color)[ch]);
   if (plan.definition) against(gauss(plan.definition.sigma), plan.definition.k);
   if (plan.sharpness) {
     let row = [1];
@@ -360,6 +361,19 @@ export function detailColumn(color, h) {
     const { sigma, threshold, amount } = plan.glow;
     const b = convolve(col.map((v) => glowBright(v, threshold)), gauss(sigma));
     col = col.map((a, y) => Math.min(1, a + amount * b[y] * (1 - a)));
+  }
+  const screen = (b, amount, gain = 1) => {
+    col = col.map((a, y) => Math.min(1, a + amount * Math.min(1, gain * b[y]) * (1 - a)));
+  };
+  if (plan.halation) {
+    const { sigma, threshold, gain, amount } = plan.halation;
+    screen(convolve(col.map((v) => HALATION_TINT[ch] * glowBright(v, threshold)), gblurKernel(sigma, Math.ceil(6 * sigma))), amount, gain);
+  }
+  if (plan.star) {
+    const { sigma, threshold, gain, amount } = plan.star;
+    const lit = col.map((v) => starBright([v, v, v], threshold)[0]);
+    screen(lit, amount, gain);
+    screen(convolve(lit, gblurKernel(sigma, Math.ceil(6 * sigma))), amount, gain);
   }
   return col.map((v) => Math.round(v * 255));
 }
@@ -381,6 +395,9 @@ async function checkDetail(base, dir, f) {
     { asset: steps, color: pickColor({ blur: 0.5 }) },
     { asset: steps, color: pickColor({ glow: 1, glowSize: 0.3 }) },
     { asset: steps, color: pickColor({ glow: 0.6, glowThreshold: -0.6, glowSize: -0.5, exposure: 0.2 }) },
+    { asset: steps, color: pickColor({ halation: 1 }) },
+    { asset: steps, color: pickColor({ star: 1, exposure: 0.6 }) },
+    { asset: steps, color: pickColor({ halation: 0.6, star: 0.7, starLength: 0.6, exposure: 0.6 }) },
   ];
   const project = {
     ...base,
@@ -392,14 +409,20 @@ async function checkDetail(base, dir, f) {
   const result = await runExport(project, 1920, out, [], () => {}).done;
   check('detail export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
   if (result.type !== 'done') return;
-  const names = ['sharpness +', 'sharpness -', 'definition +', 'definition - with sharpness', null, null, null, 'blur', 'glow', 'glow from midtones'];
-  for (const [i, name] of names.entries()) {
+  const names = ['sharpness +', 'sharpness -', 'definition +', 'definition - with sharpness', null, null, null, 'blur', 'glow', 'glow from midtones',
+    'halation', 'star', 'halation and longer star'];
+  const compared = [...names.map((name, i) => [i, name, 1]), [10, 'halation in red', 0], [12, 'halation and longer star in red', 0]];
+  for (const [i, name, ch] of compared) {
     if (!name) continue;
-    const want = detailColumn(cases[i].color, 1920);
-    const got = column(out, i + 0.5, 540);
+    const want = detailColumn(cases[i].color, 1920, ch);
+    const got = column(out, i + 0.5, 540, ch);
     const rows = Array.from({ length: 141 }, (_, k) => 890 + k);
-    const off = Math.max(...rows.map((y) => Math.abs(got[y] - want[y])));
-    const worst = rows.reduce((a, y) => (Math.abs(got[y] - want[y]) > Math.abs(got[a] - want[a]) ? y : a), rows[0]);
+    // The halation's and the star's gains steepen the edge, where h264 moves values by a row (red more, its chroma
+    // is subsampled), so those are matched against the reference a row either way.
+    const shift = i >= 10 ? 1 : 0;
+    const diff = (y) => Math.min(...Array.from({ length: 2 * shift + 1 }, (_, j) => Math.abs(got[y] - want[y + j - shift])));
+    const off = Math.max(...rows.map(diff));
+    const worst = rows.reduce((a, y) => (diff(y) > diff(a) ? y : a), rows[0]);
     check(`${name} matches the reference across the edge`, off <= 6, `max off ${off} at y ${worst}: got ${got[worst]} want ${want[worst]}`);
   }
   const edge = (c) => detailColumn(pickColor(c), 1920);
@@ -414,6 +437,13 @@ async function checkDetail(base, dir, f) {
   const glow = edge({ glow: 1 });
   check('glow lights the dark side of the edge and the bright side', glow[945] > STEP[0] + 10 && glow[1100] > STEP[1] + 10, `${glow[945]} ${glow[1100]}`);
   check('glow leaves tones under the threshold alone far from light', edge({ glow: 1, glowThreshold: 0.8 })[100] === STEP[0]);
+  const warm = [0, 1].map((ch) => detailColumn(pickColor({ halation: 1 }), 1920, ch)[945] - STEP[0]);
+  check('halation fringes the dark side in warm red', warm[1] > 0 && warm[0] > 2 * warm[1], `red +${warm[0]} green +${warm[1]}`);
+  const star = (c) => edge({ star: 1, exposure: 0.6, ...c });
+  check('star rays light the dark side and stop short of the far end', star({})[930] > star({})[100] + 10 && star({})[100] === edge({ exposure: 0.6 })[100],
+    `${star({})[930]} ${star({})[100]}`);
+  check('longer star rays reach farther', star({ starLength: 1 })[880] > star({ starLength: -1 })[880] + 10, `${star({ starLength: 1 })[880]} ${star({ starLength: -1 })[880]}`);
+  check('star leaves a picture without bright points alone', edge({ star: 1 }).every((v, y) => v === STEP[y < 960 ? 0 : 1]));
 }
 
 /** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */
