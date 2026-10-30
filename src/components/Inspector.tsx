@@ -166,6 +166,15 @@ const COLOR_GROUPS: { title: string; keys: { key: keyof ClipColor; label: string
     ],
   },
   {
+    title: '렌즈 효과',
+    keys: [
+      { key: 'blur', label: '블러', min: 0 },
+      { key: 'glow', label: '소프트 글로우', min: 0 },
+      { key: 'glowSize', label: '글로우 번짐' },
+      { key: 'glowThreshold', label: '글로우 기준 밝기' },
+    ],
+  },
+  {
     title: '비네트',
     keys: [
       { key: 'vignette', label: '강도' },

@@ -29,7 +29,7 @@ import {
   visualSpan,
 } from './project';
 import type { BackdropEffect, BlendMode, Clip, Project, Track, TransformKey } from './project';
-import { colorKey, cubeFile, detailPlan, isLutNeutral, vignetteMask } from './color';
+import { colorKey, cubeFile, detailPlan, GLOW_GAIN, isLutNeutral, vignetteMask } from './color';
 
 /** A text clip rasterized by the renderer at export resolution, placed at its settled position. */
 export interface TextLayer {
@@ -153,7 +153,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   };
   /**
    * The clip's color on the w x h (cropped) picture, in the preview's order: noise reduction, LUT, definition,
-   * sharpness, vignette. Detail sizes follow the dw x dh picture before the crop, like the preview's.
+   * sharpness, blur, glow, vignette. Detail sizes follow the dw x dh picture before the crop, like the preview's.
    * `a + k * (a - b)` is mix with weights 1 + k and -k; the vignette mask is multiplied in (darker) or screened in (lighter).
    */
   const grade = (clip: Clip, w: number, h: number, dw: number, dh: number): string => {
@@ -170,6 +170,18 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
       const m = 2 * detail.sharpness.steps + 1;
       const k = num(detail.sharpness.k);
       out += `format=gbrap,unsharp=lx=${m}:ly=${m}:la=${k}:cx=${m}:cy=${m}:ca=${k},`;
+    }
+    if (detail.blur) out += `format=gbrap,gblur=sigma=${num(detail.blur.sigma)}:steps=${DEFINITION_STEPS}:planes=7,`;
+    if (detail.glow) {
+      const g = detail.glow;
+      // glowBright as a lutrgb expression: ld(0) is the eased position above the threshold.
+      const t = num(g.threshold);
+      const bright = `'st(0,clip((val/255-${t})/(1-${t}),0,1));min(255,${GLOW_GAIN}*val*ld(0)*ld(0)*(3-2*ld(0)))'`;
+      const o = num(g.amount);
+      out +=
+        `format=gbrap,split[gl${n}a][gl${n}b];[gl${n}b]format=rgba,lutrgb=r=${bright}:g=${bright}:b=${bright},format=gbrap,` +
+        `gblur=sigma=${num(g.sigma)}:steps=${DEFINITION_STEPS}:planes=7[gl${n}f];` +
+        `[gl${n}a][gl${n}f]blend=c0_mode=screen:c0_opacity=${o}:c1_mode=screen:c1_opacity=${o}:c2_mode=screen:c2_opacity=${o}:c3_mode=normal:c3_opacity=1,`;
     }
     if (c.vignette === 0) return out;
     const key = `vig ${w}x${h} ${c.vignette.toFixed(3)} ${c.vignetteRadius.toFixed(3)} ${c.vignetteSoftness.toFixed(3)}`;

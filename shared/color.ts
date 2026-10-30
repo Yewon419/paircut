@@ -30,6 +30,14 @@ export interface ClipColor {
   definition: number;
   /** 0..1: a 3x3 median blended in. */
   noiseReduction: number;
+  /** 0..1: an even Gaussian blur over the whole picture. */
+  blur: number;
+  /** 0..1: soft glow, the bright parts blurred wide and screened back over the picture (a mist filter look). */
+  glow: number;
+  /** How far the glow spreads. */
+  glowSize: number;
+  /** Which tones glow: positive keeps it to the brightest, negative lets midtones glow too. */
+  glowThreshold: number;
   /** Positive darkens the edges, negative lightens them. Applied after the LUT, on the cropped picture. */
   vignette: number;
   /** Where the vignette is half strength: larger pushes it out to the corners. */
@@ -56,7 +64,10 @@ export const LUT_KEYS: (keyof ClipColor)[] = [
 /** Filters that look at neighboring pixels, so they run as their own passes around the LUT. */
 export const DETAIL_KEYS: (keyof ClipColor)[] = ['sharpness', 'definition', 'noiseReduction'];
 
-export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, ...DETAIL_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
+/** Camera-lens looks drawn after the detail passes; size and threshold only matter while glow is on. */
+export const LENS_KEYS: (keyof ClipColor)[] = ['blur', 'glow', 'glowSize', 'glowThreshold'];
+
+export const COLOR_KEYS: (keyof ClipColor)[] = [...LUT_KEYS, ...DETAIL_KEYS, ...LENS_KEYS, 'vignette', 'vignetteRadius', 'vignetteSoftness'];
 
 export const NEUTRAL_COLOR: ClipColor = {
   exposure: 0,
@@ -73,6 +84,10 @@ export const NEUTRAL_COLOR: ClipColor = {
   sharpness: 0,
   definition: 0,
   noiseReduction: 0,
+  blur: 0,
+  glow: 0,
+  glowSize: 0,
+  glowThreshold: 0,
   vignette: 0,
   vignetteRadius: 0,
   vignetteSoftness: 0,
@@ -86,7 +101,15 @@ export function isLutNeutral(c: ClipColor): boolean {
 }
 
 export function isNeutral(c: ClipColor): boolean {
-  return isLutNeutral(c) && DETAIL_KEYS.every((k) => c[k] === 0) && c.vignette === 0;
+  return isLutNeutral(c) && DETAIL_KEYS.every((k) => c[k] === 0) && c.blur === 0 && c.glow === 0 && c.vignette === 0;
+}
+
+export const GLOW_GAIN = 1.5;
+
+/** The glow's bright pass on one channel: tones above the threshold, eased in, boosted by the gain. */
+export function glowBright(v: number, threshold: number): number {
+  const t = Math.min(1, Math.max(0, (v - threshold) / (1 - threshold)));
+  return Math.min(1, GLOW_GAIN * v * t * t * (3 - 2 * t));
 }
 
 /**
@@ -100,6 +123,10 @@ export interface DetailPlan {
   definition: { sigma: number; k: number } | null;
   /** Half size of ffmpeg unsharp's binomial kernel (msize = 2 * steps + 1). */
   sharpness: { steps: number; k: number } | null;
+  /** Then the whole picture blurred. */
+  blur: { sigma: number } | null;
+  /** Then glowBright of each channel, blurred, screened over: a + amount * b * (1 - a). */
+  glow: { sigma: number; threshold: number; amount: number } | null;
 }
 
 export function detailPlan(c: ClipColor, w: number, h: number): DetailPlan {
@@ -111,6 +138,11 @@ export function detailPlan(c: ClipColor, w: number, h: number): DetailPlan {
       c.sharpness === 0
         ? null
         : { steps: Math.min(6, Math.max(1, Math.round(2 * scale))), k: c.sharpness > 0 ? 1.5 * c.sharpness : c.sharpness },
+    blur: c.blur > 0 ? { sigma: Math.max(0.5, 28 * scale * c.blur) } : null,
+    glow:
+      c.glow > 0
+        ? { sigma: Math.max(1, 16 * scale * Math.pow(2, 0.7 * c.glowSize)), threshold: 0.55 + 0.25 * c.glowThreshold, amount: Math.min(1, c.glow) }
+        : null,
   };
 }
 

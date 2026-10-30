@@ -1,5 +1,5 @@
 import type { ClipColor } from '../../shared/color';
-import { colorKey, detailPlan, isLutNeutral, LUT_SIZE, lutEntries, vignetteShape } from '../../shared/color';
+import { colorKey, detailPlan, GLOW_GAIN, isLutNeutral, LUT_SIZE, lutEntries, vignetteShape } from '../../shared/color';
 import type { ClipCrop } from '../../shared/project';
 
 /**
@@ -80,14 +80,28 @@ void main() {
   color = vec4(sum, texture(src, uv).a);
 }`;
 
-/** a + k * (a - b): sharpening and definition against a blur, noise reduction against the median. */
+/**
+ * screen 0: a + k * (a - b), sharpening and definition against a blur, noise reduction against the median.
+ * screen 1: a + k * b * (1 - a), the glow screened over (ffmpeg blend screen at opacity k).
+ */
 const COMBINE_FRAG = `${HEAD}
 uniform sampler2D other;
 uniform float k;
+uniform float screen;
 void main() {
   vec4 a = texture(src, uv);
   vec3 b = texture(other, uv).rgb;
-  color = vec4(clamp(a.rgb + k * (a.rgb - b), 0.0, 1.0), a.a);
+  vec3 c = screen > 0.5 ? a.rgb + k * b * (1.0 - a.rgb) : a.rgb + k * (a.rgb - b);
+  color = vec4(clamp(c, 0.0, 1.0), a.a);
+}`;
+
+/** glowBright in shared/color.ts on each channel. */
+const BRIGHT_FRAG = `${HEAD}
+uniform float threshold;
+void main() {
+  vec4 a = texture(src, uv);
+  vec3 t = clamp((a.rgb - threshold) / (1.0 - threshold), 0.0, 1.0);
+  color = vec4(min(vec3(1.0), ${GLOW_GAIN.toFixed(4)} * a.rgb * t * t * (3.0 - 2.0 * t)), a.a);
 }`;
 
 type Tap = [number, number];
@@ -141,10 +155,12 @@ interface Programs {
   median: WebGLProgram;
   blur: WebGLProgram;
   combine: WebGLProgram;
+  bright: WebGLProgram;
 }
 
 /**
- * Applies a clip's color on the GPU in the export's order: noise reduction, LUT, definition, sharpness, vignette.
+ * Applies a clip's color on the GPU in the export's order: noise reduction, LUT, definition, sharpness, blur, glow,
+ * vignette.
  * The LUT comes from the same function the export writes to a .cube file, sampled trilinearly like ffmpeg lut3d
  * interp=trilinear; the detail passes use the export's kernels at the same picture size.
  */
@@ -171,7 +187,13 @@ class Grader {
       if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`program: ${gl.getProgramInfoLog(program)}`);
       return program;
     };
-    this.programs = { lut: link(LUT_FRAG), median: link(MEDIAN_FRAG), blur: link(BLUR_FRAG), combine: link(COMBINE_FRAG) };
+    this.programs = {
+      lut: link(LUT_FRAG),
+      median: link(MEDIAN_FRAG),
+      blur: link(BLUR_FRAG),
+      combine: link(COMBINE_FRAG),
+      bright: link(BRIGHT_FRAG),
+    };
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
@@ -220,7 +242,7 @@ class Grader {
       gl.deleteFramebuffer(t.fb);
       gl.deleteTexture(t.tex);
     }
-    this.targets = [0, 1, 2].map(() => {
+    this.targets = [0, 1, 2, 3].map(() => {
       const tex = this.texture(gl);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       const fb = gl.createFramebuffer();
@@ -285,25 +307,27 @@ class Grader {
         gl.uniform4f(u('crop'), crop.l, crop.t, crop.r, crop.b);
       });
     let cur: Input = { tex: this.srcTex as WebGLTexture, flip: true };
-    if (plan.noise === 0 && !plan.definition && !plan.sharpness) {
+    if (plan.noise === 0 && !plan.definition && !plan.sharpness && !plan.blur && !plan.glow) {
       lutPass(cur, null, useLut, true);
       return this.canvas;
     }
     this.ensureTargets(gl, w, h);
-    const combine = (a: Input, b: Input, k: number): Input =>
+    const combine = (a: Input, b: Input, k: number, screen = false): Input =>
       this.pass(gl, prog.combine, a, this.freeTarget(a, b), (u) => {
         gl.activeTexture(gl.TEXTURE2);
         gl.bindTexture(gl.TEXTURE_2D, b.tex);
         gl.uniform1i(u('other'), 2);
         gl.uniform1f(u('k'), k);
+        gl.uniform1f(u('screen'), screen ? 1 : 0);
       });
-    const blur = (a: Input, taps: Tap[]): Input => {
+    /** Blurs `a` into free framebuffers, leaving `a` and `keep` untouched. */
+    const blur = (a: Input, taps: Tap[], keep: Input = a): Input => {
       let out = a;
       for (const dir of [
         [1 / w, 0],
         [0, 1 / h],
       ]) {
-        out = this.pass(gl, prog.blur, out, this.freeTarget(a, out), (u) => {
+        out = this.pass(gl, prog.blur, out, this.freeTarget(a, out, keep), (u) => {
           gl.uniform2f(u('dir'), dir[0], dir[1]);
           gl.uniform1i(u('count'), taps.length);
           gl.uniform2fv(u('taps'), taps.flat());
@@ -319,6 +343,12 @@ class Grader {
     if (useLut) cur = lutPass(cur, this.freeTarget(cur), true, false);
     if (plan.definition) cur = combine(cur, blur(cur, gaussianTaps(plan.definition.sigma)), plan.definition.k);
     if (plan.sharpness) cur = combine(cur, blur(cur, binomialTaps(plan.sharpness.steps)), plan.sharpness.k);
+    if (plan.blur) cur = blur(cur, gaussianTaps(plan.blur.sigma));
+    if (plan.glow) {
+      const glow = plan.glow;
+      const bright = this.pass(gl, prog.bright, cur, this.freeTarget(cur), (u) => gl.uniform1f(u('threshold'), glow.threshold));
+      cur = combine(cur, blur(bright, gaussianTaps(glow.sigma), cur), glow.amount, true);
+    }
     lutPass(cur, null, false, true);
     return this.canvas;
   }

@@ -8,7 +8,7 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { detailPlan, gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
+const { detailPlan, glowBright, gradePixel, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
@@ -334,21 +334,32 @@ export function blockSpread(file, t, x, y, size = 64) {
 export function detailColumn(color, h) {
   const plan = detailPlan(color, 1080, h);
   let col = Array.from({ length: h }, (_, y) => STEP[y < h / 2 ? 0 : 1] / 255);
-  const against = (kernel, k) => {
+  const convolve = (src, kernel) => {
     const r = (kernel.length - 1) / 2;
-    const blur = col.map((_, y) => kernel.reduce((sum, w, j) => sum + w * col[Math.min(h - 1, Math.max(0, y + j - r))], 0));
+    return src.map((_, y) => kernel.reduce((sum, w, j) => sum + w * src[Math.min(h - 1, Math.max(0, y + j - r))], 0));
+  };
+  const gauss = (sigma) => {
+    const r = Math.ceil(3 * sigma);
+    const g = Array.from({ length: 2 * r + 1 }, (_, j) => Math.exp(-((j - r) ** 2) / (2 * sigma ** 2)));
+    const total = g.reduce((a, b) => a + b, 0);
+    return g.map((v) => v / total);
+  };
+  const against = (kernel, k) => {
+    const blur = convolve(col, kernel);
     col = col.map((a, y) => Math.min(1, Math.max(0, a + k * (a - blur[y]))));
   };
-  if (plan.definition) {
-    const r = Math.ceil(3 * plan.definition.sigma);
-    const g = Array.from({ length: 2 * r + 1 }, (_, j) => Math.exp(-((j - r) ** 2) / (2 * plan.definition.sigma ** 2)));
-    const total = g.reduce((a, b) => a + b, 0);
-    against(g.map((v) => v / total), plan.definition.k);
-  }
+  col = col.map((v) => gradePixel([v, v, v], color)[1]);
+  if (plan.definition) against(gauss(plan.definition.sigma), plan.definition.k);
   if (plan.sharpness) {
     let row = [1];
     for (let i = 0; i < 2 * plan.sharpness.steps; i++) row = [...row, 0].map((v, j) => v + (j > 0 ? row[j - 1] : 0));
     against(row.map((v) => v / 4 ** plan.sharpness.steps), plan.sharpness.k);
+  }
+  if (plan.blur) col = convolve(col, gauss(plan.blur.sigma));
+  if (plan.glow) {
+    const { sigma, threshold, amount } = plan.glow;
+    const b = convolve(col.map((v) => glowBright(v, threshold)), gauss(sigma));
+    col = col.map((a, y) => Math.min(1, a + amount * b[y] * (1 - a)));
   }
   return col.map((v) => Math.round(v * 255));
 }
@@ -367,6 +378,9 @@ async function checkDetail(base, dir, f) {
     { asset: noise, color: pickColor({}) },
     { asset: noise, color: pickColor({ noiseReduction: 1 }) },
     { asset: noise, color: pickColor({ noiseReduction: 0.5, sharpness: 0.3, vignette: 0.5 }) },
+    { asset: steps, color: pickColor({ blur: 0.5 }) },
+    { asset: steps, color: pickColor({ glow: 1, glowSize: 0.3 }) },
+    { asset: steps, color: pickColor({ glow: 0.6, glowThreshold: -0.6, glowSize: -0.5, exposure: 0.2 }) },
   ];
   const project = {
     ...base,
@@ -378,8 +392,9 @@ async function checkDetail(base, dir, f) {
   const result = await runExport(project, 1920, out, [], () => {}).done;
   check('detail export finished', result.type === 'done', result.type === 'error' ? result.message : result.type);
   if (result.type !== 'done') return;
-  const names = ['sharpness +', 'sharpness -', 'definition +', 'definition - with sharpness'];
+  const names = ['sharpness +', 'sharpness -', 'definition +', 'definition - with sharpness', null, null, null, 'blur', 'glow', 'glow from midtones'];
   for (const [i, name] of names.entries()) {
+    if (!name) continue;
     const want = detailColumn(cases[i].color, 1920);
     const got = column(out, i + 0.5, 540);
     const rows = Array.from({ length: 141 }, (_, k) => 890 + k);
@@ -395,6 +410,10 @@ async function checkDetail(base, dir, f) {
   const reduced = blockSpread(out, 5.5, 500, 900);
   check('noise reduction lowers the noise', reduced < plain * 0.75, `${reduced.toFixed(1)} vs ${plain.toFixed(1)}`);
   check('noise reduction with sharpness and vignette exports', blockSpread(out, 6.5, 500, 900) < plain);
+  check('blur softens the edge both ways', edge({ blur: 0.5 })[950] > STEP[0] + 10 && edge({ blur: 0.5 })[970] < STEP[1] - 10);
+  const glow = edge({ glow: 1 });
+  check('glow lights the dark side of the edge and the bright side', glow[945] > STEP[0] + 10 && glow[1100] > STEP[1] + 10, `${glow[945]} ${glow[1100]}`);
+  check('glow leaves tones under the threshold alone far from light', edge({ glow: 1, glowThreshold: 0.8 })[100] === STEP[0]);
 }
 
 /** Leftmost and rightmost red pixel on row y at t, or null when the row has no red. */

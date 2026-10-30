@@ -321,7 +321,7 @@ try {
   // Every Photos-style slider is in the inspector, and moving one changes only its own field.
   const sliderKeys = await win.evaluate(() => [...document.querySelectorAll('[data-color]')].map((el) => el.dataset.color).join());
   check('the inspector has the color and vignette sliders in Photos order', sliderKeys ===
-    'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint,sharpness,definition,noiseReduction,vignette,vignetteRadius,vignetteSoftness', sliderKeys);
+    'exposure,brilliance,highlights,shadows,contrast,brightness,blackPoint,saturation,vibrance,temperature,tint,sharpness,definition,noiseReduction,blur,glow,glowSize,glowThreshold,vignette,vignetteRadius,vignetteSoftness', sliderKeys);
   await win.evaluate(() => {
     const el = document.querySelector('[data-color="blackPoint"]');
     el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
@@ -382,7 +382,7 @@ try {
   });
   // The canvas shows the picture at half size, so a canvas row may be any mix of the two full-size rows under it.
   const outside = (v, col, y) => Math.max(0, Math.min(col[2 * y], col[2 * y + 1]) - v, v - Math.max(col[2 * y], col[2 * y + 1]));
-  for (const [name, color] of [['sharpness', pickColor({ sharpness: 1 })], ['definition', pickColor({ definition: -1, sharpness: 0.5 })]]) {
+  for (const [name, color] of [['sharpness', pickColor({ sharpness: 1 })], ['definition', pickColor({ definition: -1, sharpness: 0.5 })], ['blur', pickColor({ blur: 0.5 })], ['glow', pickColor({ glow: 1, glowSize: 0.3 })]]) {
     await showDetail(steps, color);
     const shown = await canvasColumn();
     const file = join(dir, `detail-${name}.mp4`);
