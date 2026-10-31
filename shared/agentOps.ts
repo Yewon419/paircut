@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FILTERS } from './color';
 import { ASPECT_IDS } from './project';
 
 /**
@@ -50,6 +51,14 @@ const color = z
     vibrance: amount.describe('saturation that favors muted colors'),
     temperature: amount.describe('+ warmer'),
     tint: amount.describe('+ magenta, - green'),
+    filter: z
+      .enum(['none', ...FILTERS.map((f) => f.name)] as [string, ...string[]])
+      .describe('Photos-style filter laid over the adjustments (the sliders still apply under it); none removes it'),
+    filterAmount: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe('filter strength; picking a filter with no strength starts at 1, or keeps the strength when switching filters'),
     sharpness: amount.describe('+ sharpens fine edges, - softens them'),
     definition: amount.describe('+ local contrast, - flattens midsize detail'),
     noiseReduction: z.number().min(0).max(1),

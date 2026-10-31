@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AgentToolResult, ToolName } from '../shared/agentOps';
 import { EditOp } from '../shared/agentOps';
 import type { ClipColor } from '../shared/color';
-import { isNeutral, NEUTRAL_COLOR } from '../shared/color';
+import { FILTERS, isNeutral, NEUTRAL_COLOR } from '../shared/color';
 import type { AnyClip, Clip, Project, TextClip } from '../shared/project';
 import type { TextSpan } from '../shared/project';
 import {
@@ -81,8 +81,20 @@ const q = (s: string): string => JSON.stringify(s.length > 40 ? `${s.slice(0, 40
 function colorText(c: ClipColor): string {
   return (Object.keys(c) as (keyof ClipColor)[])
     .filter((k) => c[k] !== 0)
-    .map((k) => `${k}=${n(c[k])}`)
+    .map((k) => (k === 'filter' ? `filter=${FILTERS[c.filter - 1]?.name ?? c.filter}` : `${k}=${n(c[k])}`))
     .join(',');
+}
+
+type ColorValues = NonNullable<Extract<EditOp, { op: 'color' }>['values']>;
+
+/** `values` over `base`, the filter name turned into its index; a new filter starts at full strength like the inspector. */
+function withValues(base: ClipColor, values: ColorValues): ClipColor {
+  const { filter, ...rest } = values;
+  const next = { ...base, ...rest };
+  if (filter === undefined) return next;
+  const index = filter === 'none' ? 0 : FILTERS.findIndex((f) => f.name === filter) + 1;
+  if (index === 0) return { ...next, filter: 0, filterAmount: 0 };
+  return { ...next, filter: index, filterAmount: rest.filterAmount ?? (base.filter === 0 ? 1 : base.filterAmount) };
 }
 
 function spanText(sp: TextSpan, found: boolean): string {
@@ -382,12 +394,12 @@ async function applyOp(d: Draft, op: EditOp): Promise<void> {
     case 'color': {
       const base = op.preset !== undefined ? presetColor(op.preset) : null;
       if (op.clip === 'all') {
-        d.p = withColorAll(p, { ...(base ?? NEUTRAL_COLOR), ...op.values });
+        d.p = withColorAll(p, withValues(base ?? NEUTRAL_COLOR, op.values ?? {}));
         return;
       }
       const clip = needMedia(p, op.clip);
       if (assetById(p, clip.assetId).kind === 'audio') throw new OpError(`color ${op.clip}: audio clips have no picture`);
-      d.p = updateMediaClip(p, op.clip, (c) => ({ ...c, color: { ...(base ?? c.color), ...op.values } }));
+      d.p = updateMediaClip(p, op.clip, (c) => ({ ...c, color: withValues(base ?? c.color, op.values ?? {}) }));
       return;
     }
     case 'save_color_preset': {

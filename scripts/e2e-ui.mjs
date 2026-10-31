@@ -534,6 +534,24 @@ try {
   const agentUndone = await snap();
   check('one undo reverts the whole batch', byId(agentUndone, 'c1').speed === 1 && byId(agentUndone, 'c2').start === 3 &&
     byId(agentUndone, 'c2').color.saturation === 0 && !agentUndone.clips.some((c) => c.text === 'Claude 자막'));
+  // Filters by name: a new pick starts at full strength, switching keeps it, none clears both.
+  const filterNow = async () => {
+    const { filter, filterAmount, saturation } = byId(await snap(), 'c2').color;
+    return `${filter}:${filterAmount}:${saturation}`;
+  };
+  const noir = await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filter: 'noir', saturation: 0.2 } }] });
+  check('color tool picks a filter by name at full strength', !noir.isError && (await filterNow()) === `${filterIndex('noir')}:1:0.2`, await filterNow());
+  await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filterAmount: 0.4 } }] });
+  await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filter: 'mono' } }] });
+  check('switching filters keeps the strength', (await filterNow()) === `${filterIndex('mono')}:0.4:0.2`, await filterNow());
+  await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filter: 'vividWarm', filterAmount: 0.7 } }] });
+  check('filter and strength together', (await filterNow()) === `${filterIndex('vividWarm')}:0.7:0.2`, await filterNow());
+  const filterState = await tool('get_state');
+  check('get_state names the filter', filterState.text.includes('filter=vividWarm,filterAmount=0.7'), filterState.text.split('\n').find((l) => l.includes('c2')));
+  const badFilter = await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filter: 'sepia' } }] });
+  check('an unknown filter name is rejected by the schema', badFilter.isError && badFilter.text.includes('filter'), badFilter.text.replaceAll('\n', ' | '));
+  await tool('edit', { ops: [{ op: 'color', clip: 'c2', values: { filter: 'none', saturation: 0 } }] });
+  check('filter none clears it', (await filterNow()) === '0:0:0', await filterNow());
 
   const lookEdit = await tool('edit', { ops: [{ op: 'track', track: 'v-main', opacity: 0.5, blend: 'multiply' }] });
   const lookTrack = await win.evaluate(() => window.__paircut.state().project.tracks.find((t) => t.id === 'v-main'));
