@@ -18,6 +18,7 @@ const api: PaircutApi = {
   listSfx: () => ipcRenderer.invoke('sfx:list'),
   makeSolid: (color, width, height) => ipcRenderer.invoke('media:solid', color, width, height),
   makeStill: (asset, seconds) => ipcRenderer.invoke('media:still', asset, seconds),
+  sampleFrames: (asset, from, to) => ipcRenderer.invoke('media:samples', asset, from, to),
   makeSubject: (asset, from, to, fps) => ipcRenderer.invoke('media:subject', asset, from, to, fps),
   bakeLayers: (project, name) => ipcRenderer.invoke('media:bake', project, name),
   onMatteProgress: (listener) => {

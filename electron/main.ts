@@ -14,7 +14,7 @@ import { startBridge } from './bridge';
 import type { RunningExport } from './exporter';
 import { runBake, runExport } from './exporter';
 import { makeSubjectFile } from './matte';
-import { importMedia, importMediaTracked, makeSolidImage, makeStillImage } from './media';
+import { importMedia, importMediaTracked, makeSolidImage, makeStillImage, sampleFrames } from './media';
 
 const isTest = process.env.PAIRCUT_TEST === '1';
 
@@ -137,6 +137,9 @@ async function makeSolid(color: string, width: number, height: number): Promise<
   const hex = color.toUpperCase();
   return { ...asset, name: `단색 ${hex}`, solid: hex };
 }
+
+/** Frames of a video clip the auto color looks at, spread over the part on the timeline. */
+const AUTO_FRAMES = 5;
 
 /** A held frame of a clip's source, kept under userData beside the solids. */
 async function makeStill(asset: MediaAsset, seconds: number): Promise<MediaAsset> {
@@ -286,6 +289,10 @@ function registerIpc(): void {
   ipcMain.handle('sfx:list', (): SfxEntry[] => listSfx());
   ipcMain.handle('media:solid', (_e, color: string, width: number, height: number): Promise<MediaAsset> => makeSolid(color, width, height));
   ipcMain.handle('media:still', (_e, asset: MediaAsset, seconds: number): Promise<MediaAsset> => makeStill(asset, seconds));
+  ipcMain.handle('media:samples', (_e, asset: MediaAsset, from: number, to: number): Promise<Uint8Array> => {
+    const times = asset.kind === 'image' ? [0] : Array.from({ length: AUTO_FRAMES }, (_, i) => from + ((i + 0.5) * (to - from)) / AUTO_FRAMES);
+    return sampleFrames(asset.path, times, asset.alpha);
+  });
   ipcMain.handle('media:subject', async (_e, asset: MediaAsset, from: number, to: number, fps: number): Promise<MediaAsset> => {
     const matteRoot = join(app.getPath('userData'), 'mattes');
     const outRoot = join(app.getPath('userData'), 'subjects');

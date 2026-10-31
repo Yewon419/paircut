@@ -9,10 +9,10 @@ import { _electron } from 'playwright';
 import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, column, detailColumn, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
-const { gradePixel, pickColor } = require('../dist-electron/shared/color.js');
+const { autoLight, gradePixel, pickColor } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the preview LUT is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
-const { importMedia } = require('../dist-electron/electron/media.js');
+const { importMedia, sampleFrames } = require('../dist-electron/electron/media.js');
 
 const root = resolve(import.meta.dirname, '..');
 let failures = 0;
@@ -336,6 +336,18 @@ try {
   check('the light group counts the moved sliders', count === '5개 조정', count);
   await win.locator('[data-color="blackPoint"]').dblclick();
   check('double-clicking a slider sets it back to 0', (await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color.blackPoint)) === 0);
+  // Auto: the button sets the five fields autoLight gives for the clip's frames, keeps the rest, and undoes in one step.
+  const preAuto = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color);
+  await win.locator('[data-testid="color-auto"]').click();
+  await win.waitForFunction((b) => JSON.stringify(window.__paircut.state().project.tracks[0].clips[0].color) !== b, JSON.stringify(preAuto));
+  const autoSet = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color);
+  const autoWant = autoLight(await sampleFrames(fx.swatch.path, [0]), pickColor(preAuto));
+  const autoKeys = Object.keys(autoSet).filter((k) => autoSet[k] !== preAuto[k]);
+  check('auto sets the values autoLight gives for the frames and nothing else',
+    Object.entries(autoWant).every(([k, v]) => autoSet[k] === v) && autoKeys.every((k) => k in autoWant), `${JSON.stringify(autoWant)} moved ${autoKeys}`);
+  await win.keyboard.press('Control+z');
+  const autoUndone = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].color);
+  check('Ctrl+Z takes auto back in one step', JSON.stringify(autoUndone) === JSON.stringify(preAuto));
   // Vignette: the preview shader against the shared function and the export's mask blend, dark and light, on a crop.
   const vignettes = [
     ['dark vignette', VIGNETTE, { l: 0.2, t: 0.1, r: 0, b: 0.3 }],

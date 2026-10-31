@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight, Diamond, MousePointerClick } from 'lucide-react';
 import type { ClipColor } from '../../shared/color';
-import { NEUTRAL_COLOR } from '../../shared/color';
+import { autoLight, NEUTRAL_COLOR } from '../../shared/color';
 import type { AspectId, Clip, ClipCrop, ClipTransform, FontId, KeyEase, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
   ASPECTS,
@@ -945,7 +945,7 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
         </div>
       )}
       {visual && <CropControls clip={clip} />}
-      {visual && <ColorControls clip={clip} />}
+      {visual && <ColorControls project={project} clip={clip} />}
     </aside>
   );
 }
@@ -1051,12 +1051,27 @@ function CropControls({ clip }: { clip: Clip }) {
   );
 }
 
-function ColorControls({ clip }: { clip: Clip }) {
+function ColorControls({ project, clip }: { project: Project; clip: Clip }) {
   usePresets((s) => s.user);
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const id = clip.id;
   const setColor = (color: ClipColor) => commit((p) => updateMediaClip(p, id, (c) => ({ ...c, color })));
+  /** Looks at a few frames of the clip and sets exposure, highlights, shadows, black point and vibrance (one undo step). */
+  const auto = async () => {
+    setError(null);
+    setAnalyzing(true);
+    try {
+      const pixels = await window.api.sampleFrames(assetById(project, clip.assetId), clip.in, clip.out);
+      const light = autoLight(pixels, clip.color);
+      commit((p) => updateMediaClip(p, id, (c) => ({ ...c, color: { ...c.color, ...light } })));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
   const save = () => {
     setError(null);
     try {
@@ -1080,6 +1095,9 @@ function ColorControls({ clip }: { clip: Clip }) {
             </button>
           </span>
         ))}
+        <button onClick={() => void auto()} disabled={analyzing} data-testid="color-auto" title="영상을 보고 노출·하이라이트·그림자·블랙 포인트·생동감을 맞춰요">
+          {analyzing ? '분석 중' : '자동'}
+        </button>
         <button onClick={() => setColor(NEUTRAL_COLOR)}>원래대로</button>
       </div>
       {COLOR_GROUPS.map((group) => {

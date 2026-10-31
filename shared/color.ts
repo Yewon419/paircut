@@ -287,6 +287,72 @@ export function gradePixel(rgb: [number, number, number], c: ClipColor): [number
   return [tone(r), tone(g), tone(b)];
 }
 
+/** The fields the auto button sets; white balance and the rest of the color stay as they are. */
+export type AutoLight = Pick<ClipColor, 'exposure' | 'highlights' | 'shadows' | 'blackPoint' | 'vibrance'>;
+
+/** How far auto moves any one slider. */
+export const AUTO_LIMIT = 0.6;
+
+/** Most pixels autoLight grades per try; more are thinned evenly. */
+const AUTO_PIXELS = 4096;
+
+/**
+ * Slider values for the auto button from sample pixels (rgb24) of the clip, tried through gradePixel with the rest of
+ * `base`: exposure brings a median luma outside 0.38..0.65 to the nearer end (darkening at most 0.3, a bright
+ * picture is often meant bright), highlights pull down (at most 0.3) as more
+ * of the picture is bright but not clipped (clipped white would only turn gray), shadows lift the 10th percentile to
+ * 0.08 when it is darker, black point sets the 1st percentile to 0.02 when it is lighter, and vibrance grows as the
+ * picture is more muted.
+ */
+export function autoLight(rgb: Uint8Array, base: ClipColor): AutoLight {
+  const total = Math.floor(rgb.length / 3);
+  if (total === 0) throw new Error('autoLight got no pixels');
+  const step = Math.max(1, Math.floor(total / AUTO_PIXELS));
+  const px: [number, number, number][] = [];
+  for (let i = 0; i < total; i += step) px.push([rgb[3 * i] / 255, rgb[3 * i + 1] / 255, rgb[3 * i + 2] / 255]);
+  const out: AutoLight = { exposure: 0, highlights: 0, shadows: 0, blackPoint: 0, vibrance: 0 };
+  const lumas = (c: ClipColor) => px.map((p) => luma(...gradePixel(p, c))).sort((a, b) => a - b);
+  const lumaAt = (c: ClipColor, q: number) => {
+    const sorted = lumas(c);
+    return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  };
+  /** Where the q-quantile, rising with the slider, meets target within [lo, hi]; an end when it never does. */
+  const solve = (key: keyof AutoLight, lo: number, hi: number, q: number, target: number) => {
+    const f = (v: number) => lumaAt({ ...base, ...out, [key]: v }, q);
+    if (f(lo) >= target) return lo;
+    if (f(hi) <= target) return hi;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      if (f(mid) < target) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+  for (let round = 0; round < 2; round++) {
+    out.exposure = 0;
+    const mid = lumaAt({ ...base, ...out }, 0.5);
+    if (mid < 0.38 || mid > 0.65) out.exposure = solve('exposure', -0.3, AUTO_LIMIT, 0.5, mid < 0.38 ? 0.38 : 0.65);
+    out.highlights = 0;
+    const bright = lumas({ ...base, ...out }).filter((l) => l >= 0.8 && l < 0.98).length / px.length;
+    out.highlights = -Math.min(0.3, Math.max(0, 1.5 * (bright - 0.1)));
+    out.shadows = 0;
+    if (lumaAt({ ...base, ...out }, 0.1) < 0.08) out.shadows = solve('shadows', 0, AUTO_LIMIT, 0.1, 0.08);
+    out.blackPoint = 0;
+    const black = lumaAt({ ...base, ...out }, 0.01);
+    out.blackPoint = Math.min(AUTO_LIMIT, Math.max(0, (black - 0.02) / 0.98 / 0.15));
+  }
+  const muted = px.reduce((sum, [r, g, b]) => sum + Math.max(r, g, b) - Math.min(r, g, b), 0) / px.length;
+  out.vibrance = Math.min(AUTO_LIMIT, Math.max(0, 0.1 + 1.5 * (0.3 - muted)));
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  return {
+    exposure: round2(out.exposure),
+    highlights: round2(out.highlights),
+    shadows: round2(out.shadows),
+    blackPoint: round2(out.blackPoint),
+    vibrance: round2(out.vibrance),
+  };
+}
+
 /** LUT entries, red index fastest (the .cube order). */
 export function lutEntries(c: ClipColor): [number, number, number][] {
   const n = LUT_SIZE;

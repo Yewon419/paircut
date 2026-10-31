@@ -215,6 +215,30 @@ export async function makeStillImage(path: string, seconds: number, alpha: 'vp8'
   return out;
 }
 
+/** Side of the square each sampled frame is shrunk to for color statistics. */
+const SAMPLE_SIDE = 64;
+
+/** rgb24 pixels of the frames at `times` (seconds), each shrunk to SAMPLE_SIDE x SAMPLE_SIDE, one after another. */
+export async function sampleFrames(path: string, times: number[], alpha: 'vp8' | 'vp9' | undefined): Promise<Uint8Array> {
+  const decoder = alpha ? ['-c:v', alpha === 'vp9' ? 'libvpx-vp9' : 'libvpx'] : [];
+  const frames = await Promise.all(
+    times.map(async (t) => {
+      const args = ['-v', 'error', '-ss', t.toFixed(3), ...decoder, '-i', path, '-frames:v', '1',
+        '-vf', `scale=${SAMPLE_SIDE}:${SAMPLE_SIDE}`, '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'];
+      try {
+        const { stdout } = await run(FFMPEG, args, { encoding: 'buffer', maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+        return stdout;
+      } catch (err) {
+        const e = err as { stderr?: Buffer; message: string };
+        throw new Error(`${FFMPEG} failed (${args.join(' ')}): ${e.stderr?.toString() ?? e.message}`, { cause: err });
+      }
+    }),
+  );
+  const out = Buffer.concat(frames);
+  if (out.length === 0) throw new Error(`ffmpeg sampled no frames of ${path} at ${times.join(', ')}s`);
+  return new Uint8Array(out);
+}
+
 export async function importMedia(path: string, cacheDir: string): Promise<MediaAsset> {
   return importMediaTracked(path, cacheDir, () => undefined);
 }

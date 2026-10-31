@@ -6,9 +6,9 @@ import { join, resolve } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
-const { importMedia } = require('../dist-electron/electron/media.js');
+const { importMedia, sampleFrames } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { detailPlan, gblurKernel, glowBright, gradePixel, HALATION_TINT, starBright, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
+const { AUTO_LIMIT, autoLight, detailPlan, gblurKernel, glowBright, gradePixel, HALATION_TINT, starBright, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
@@ -463,6 +463,43 @@ function redSpan(file, t, y) {
 }
 
 /** Position and size keyframes: a cropped red square slides right and grows, eased, then holds. */
+/** Auto color on made-up pixels (ramps of gray), and the frames it reads from real files. */
+async function checkAuto(f, assets) {
+  const ramp = (lo, hi, n = 1000) => new Uint8Array(Array.from({ length: n }, (_, i) => Math.round(lo + ((hi - lo) * i) / (n - 1))).flatMap((v) => [v, v, v]));
+  const median = (rgb, c) => {
+    const l = [];
+    for (let i = 0; i < rgb.length; i += 3) l.push(gradePixel([rgb[i] / 255, rgb[i + 1] / 255, rgb[i + 2] / 255], c)[1]);
+    return l.sort((a, b) => a - b)[l.length >> 1];
+  };
+  const none = pickColor({});
+  const dark = autoLight(ramp(0, 100), none);
+  const bright = autoLight(ramp(150, 255), none);
+  const hazy = autoLight(ramp(80, 170), none);
+  const full = autoLight(ramp(0, 255), none);
+  check('auto brightens a dark picture toward the middle', dark.exposure > 0.2 && median(ramp(0, 100), pickColor(dark)) > median(ramp(0, 100), none) + 0.05,
+    JSON.stringify(dark));
+  check('auto darkens a bright picture', bright.exposure < -0.1, JSON.stringify(bright));
+  check('auto deepens the blacks of a hazy picture and leaves its exposure', hazy.blackPoint > 0.2 && hazy.exposure === 0, JSON.stringify(hazy));
+  check('auto barely moves a full-range picture', full.exposure === 0 && full.blackPoint === 0 && full.shadows === 0 && Math.abs(full.highlights) <= 0.15,
+    JSON.stringify(full));
+  const all = [dark, bright, hazy, full];
+  check('auto stays within its limits and sets only its five fields',
+    all.every((a) => Object.keys(a).sort().join() === 'blackPoint,exposure,highlights,shadows,vibrance' &&
+      Object.values(a).every((v) => Math.abs(v) <= AUTO_LIMIT) && a.highlights >= -0.3 && a.exposure >= -0.3));
+  check('auto leaves a bright picture of white bright', autoLight(ramp(200, 250), none).exposure >= -0.3);
+  const vivid = new Uint8Array(Array.from({ length: 1000 }, (_, i) => [[220, 40, 40], [40, 200, 60], [50, 60, 220]][i % 3]).flat());
+  check('auto adds more vibrance to a muted picture', autoLight(ramp(40, 220), none).vibrance > autoLight(vivid, none).vibrance + 0.2,
+    `${autoLight(ramp(40, 220), none).vibrance} vs ${autoLight(vivid, none).vibrance}`);
+  const dim = autoLight(ramp(20, 140), none);
+  const withContrast = autoLight(ramp(20, 140), pickColor({ contrast: 0.5 }));
+  check('auto works through the other settings of the clip', withContrast.exposure !== dim.exposure,
+    `${withContrast.exposure} vs ${dim.exposure}`);
+  const video = await sampleFrames(assets.land.path, [0.4, 1.2, 2, 2.8, 3.6]);
+  check('frame samples: five small frames of a video', video.length === 5 * 64 * 64 * 3, String(video.length));
+  const pic = await sampleFrames(f('pic.png'), [0]);
+  check('frame samples: one red frame of a picture', pic.length === 64 * 64 * 3 && pic[0] > 200 && pic[1] < 40, `${pic.length} ${pic.slice(0, 3)}`);
+}
+
 async function checkKeyframes(base, pic, dir) {
   const keys = [
     { t: 0, scale: 0.2, x: -0.2, y: 0, ease: 'smooth' },
@@ -564,6 +601,7 @@ async function main() {
   await checkColor(project, assets.swatch, dir);
   await checkVignette(project, assets.swatch, dir);
   await checkDetail(project, dir, f);
+  await checkAuto(f, assets);
   await checkDissolve(f, project, dir);
   await checkKeyframes(project, assets.pic, dir);
 
