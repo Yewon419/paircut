@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight, Diamond, MousePointerClick } from 'lucide-react';
 import type { ClipColor } from '../../shared/color';
-import { autoLight, NEUTRAL_COLOR } from '../../shared/color';
+import { autoLight, FILTERS, NEUTRAL_COLOR } from '../../shared/color';
 import type { AspectId, Clip, ClipCrop, ClipTransform, FontId, KeyEase, Project, TextAnim, TextClip, TextEffect, TextSpan, TextStyle } from '../../shared/project';
 import {
   ASPECTS,
@@ -1072,6 +1072,14 @@ function ColorControls({ project, clip }: { project: Project; clip: Clip }) {
       setAnalyzing(false);
     }
   };
+  /** Picks filter `filter` (0 = none); a new pick starts at full strength, switching keeps the strength. */
+  const pickFilter = (filter: number) =>
+    commit((p) =>
+      updateMediaClip(p, id, (c) => ({
+        ...c,
+        color: { ...c.color, filter, filterAmount: filter === 0 ? 0 : c.color.filter === 0 ? 1 : c.color.filterAmount },
+      })),
+    );
   const save = () => {
     setError(null);
     try {
@@ -1100,6 +1108,41 @@ function ColorControls({ project, clip }: { project: Project; clip: Clip }) {
         </button>
         <button onClick={() => setColor(NEUTRAL_COLOR)}>원래대로</button>
       </div>
+      <details className="color-group" open>
+        <summary>필터</summary>
+        <div className="button-row wrap">
+          <button className={clip.color.filter === 0 ? 'on' : ''} onClick={() => pickFilter(0)} data-filter="none">
+            없음
+          </button>
+          {FILTERS.map((f, i) => (
+            <button key={f.name} className={clip.color.filter === i + 1 ? 'on' : ''} onClick={() => pickFilter(i + 1)} data-filter={f.name}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {clip.color.filter !== 0 && (
+          <label>
+            <span>강도 {Math.round(clip.color.filterAmount * 100)}</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(clip.color.filterAmount * 100)}
+              onPointerDown={beginGesture}
+              onPointerUp={endGesture}
+              onDoubleClick={() => commit((p) => updateMediaClip(p, id, (c) => ({ ...c, color: { ...c.color, filterAmount: 1 } })))}
+              title="두 번 누르면 100으로"
+              onChange={(e) =>
+                updateGesture((base) =>
+                  updateMediaClip(base, id, (c) => ({ ...c, color: { ...c.color, filterAmount: Number(e.target.value) / 100 } })),
+                )
+              }
+              data-testid="filter-amount"
+            />
+          </label>
+        )}
+      </details>
       {COLOR_GROUPS.map((group) => {
         const changed = group.keys.filter(({ key }) => clip.color[key] !== 0).length;
         return (

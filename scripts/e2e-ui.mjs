@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { _electron } from 'playwright';
-import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, freshDir, LIGHT, makeFixtures, column, detailColumn, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
+import { buildFixtureProject, DISSOLVE_SAMPLES, dissolveProject, filterIndex, freshDir, LIGHT, makeFixtures, column, detailColumn, samplePixel, SWATCHES, VIGNETTE, vignetteWant } from './e2e-export.mjs';
 
 const require = createRequire(import.meta.url);
 const { autoLight, gradePixel, pickColor } = require('../dist-electron/shared/color.js');
@@ -297,7 +297,8 @@ try {
       .map((c) => `${c.start}:${c.in}-${c.out}:${c.fadeIn}/${c.fadeOut}`).join(' '));
   check('split at 2x cuts the source at 2.5s and drops inner fades', halves === '0:0.5-2.5:1/0 1:2.5-3.5:0/1', halves);
   // Color correction: preview (WebGL LUT) against the shared pixel function and the ffmpeg lut3d export.
-  for (const [name, grade] of [['graded', GRADE], ['light', LIGHT]]) {
+  const filtered = pickColor({ ...GRADE, filter: filterIndex('vividCool'), filterAmount: 0.8 });
+  for (const [name, grade] of [['graded', GRADE], ['filtered', filtered], ['light', LIGHT]]) {
     await win.evaluate(({ p, swatchId, grade }) => {
       const main = p.tracks.find((t) => t.id === 'v-main');
       const clip = { ...main.clips[1], id: 'g1', assetId: swatchId, start: 0, in: 0, out: 1, color: grade };
@@ -453,10 +454,28 @@ try {
   await win.evaluate((p) => window.__paircut.load(p), project);
   await win.locator('[data-clip="c1"]').click();
   await setRange('[data-color="saturation"]', -40);
+  // Filters: a pick starts at full strength, switching keeps the strength, none clears both, each is one undo step.
+  const filterOf = () => win.evaluate(() => {
+    const { filter, filterAmount, saturation } = window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === 'c1').color;
+    return `${filter}:${filterAmount}:${saturation}`;
+  });
+  check('no filter at first and no strength slider', (await filterOf()) === '0:0:-0.4' && (await win.locator('[data-testid="filter-amount"]').count()) === 0);
+  await win.locator('[data-filter="noir"]').click();
+  check('picking noir sets it at 100%', (await filterOf()) === `${filterIndex('noir')}:1:-0.4`, await filterOf());
+  await setRange('[data-testid="filter-amount"]', 40);
+  await win.locator('[data-filter="mono"]').click();
+  check('switching filters keeps the strength', (await filterOf()) === `${filterIndex('mono')}:0.4:-0.4`, await filterOf());
+  check('the picked filter is marked', (await win.locator('[data-filter="mono"]').getAttribute('class')) === 'on');
+  await win.locator('[data-filter="none"]').click();
+  check('none clears the filter', (await filterOf()) === '0:0:-0.4', await filterOf());
+  await win.keyboard.press('Control+z');
+  check('Ctrl+Z brings the filter back', (await filterOf()) === `${filterIndex('mono')}:0.4:-0.4`, await filterOf());
   await win.locator('[data-testid="preset-name"]').fill('e2e 톤');
   await win.locator('[data-testid="preset-save"]').click();
   const stored = await win.evaluate(() => JSON.parse(localStorage.getItem('paircut.colorPresets')).map((p) => `${p.name}:${p.color.saturation}`).join());
   check('preset saved with current values', stored.includes('e2e 톤:-0.4'), stored);
+  const storedFilter = await win.evaluate(() => JSON.parse(localStorage.getItem('paircut.colorPresets')).find((p) => p.name === 'e2e 톤').color);
+  check('preset carries the filter', storedFilter.filter === filterIndex('mono') && storedFilter.filterAmount === 0.4, JSON.stringify(storedFilter));
   await win.locator('[data-clip="c2"]').click();
   await win.locator('[data-color-preset="e2e 톤"]').click();
   check('preset applies to another clip', (await sats()) === 'c-top:0 c1:-0.4 c2:-0.4 c3:0', await sats());

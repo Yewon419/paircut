@@ -8,13 +8,16 @@ const require = createRequire(import.meta.url);
 const { runExport } = require('../dist-electron/electron/exporter.js');
 const { importMedia, sampleFrames } = require('../dist-electron/electron/media.js');
 const { MEDIA_CLIP_DEFAULTS, normalizeProject, transformAt } = require('../dist-electron/shared/project.js');
-const { AUTO_LIMIT, autoLight, detailPlan, gblurKernel, glowBright, gradePixel, HALATION_TINT, starBright, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
+const { AUTO_LIMIT, autoLight, detailPlan, FILTERS, gblurKernel, glowBright, gradePixel, HALATION_TINT, starBright, isLutNeutral, isNeutral, pickColor, vignettePixel } = require('../dist-electron/shared/color.js');
 /** A grade that moves the first four controls, so the lut3d path is checked end to end. */
 const GRADE = pickColor({ brightness: 0.15, contrast: -0.1, saturation: -0.2, temperature: 0.3 });
 /** The Photos-style light and color controls added later, all moved at once. */
 export const LIGHT = pickColor({ exposure: 0.3, brilliance: 0.4, highlights: -0.5, shadows: 0.4, blackPoint: 0.3, vibrance: 0.5, tint: -0.4 });
 /** A strong dark vignette with a tight radius, so both the center and the corners are clearly checked. */
 export const VIGNETTE = pickColor({ vignette: 0.8, vignetteRadius: -0.3 });
+/** Filter index of a FILTERS name (0 = none). */
+export const filterIndex = (name) => FILTERS.findIndex((f) => f.name === name) + 1;
+const FILTERED = pickColor({ filter: filterIndex('dramaticWarm'), filterAmount: 0.7, exposure: 0.2, saturation: 0.3 });
 
 /** Gray levels of the steps fixture, above and below y = 960. */
 export const STEP = [60, 190];
@@ -218,6 +221,7 @@ async function checkColor(base, swatch, dir) {
       { ...clip, color: GRADE },
       { ...clip, id: 'g2', start: 1, color: pickColor({ saturation: -1 }) },
       { ...clip, id: 'g3', start: 2, color: LIGHT },
+      { ...clip, id: 'g4', start: 3, color: FILTERED },
     ] }],
   };
   const out = join(dir, 'color.mp4');
@@ -265,6 +269,50 @@ async function checkColor(base, swatch, dir) {
   const gain = (src) => spread(light('vibrance', 1, src)) / spread(src);
   check('vibrance boosts muted colors more than vivid ones', gain(muted) > gain(vivid) + 0.3, `${gain(muted)} vs ${gain(vivid)}`);
   check('tint + is magenta (less green)', light('tint', 1, mid)[1] < 0.5 && light('tint', 1, mid)[0] === 0.5);
+  SWATCHES.forEach((src, i) => {
+    const want = gradePixel(src.map((v) => v / 255), FILTERED).map((v) => Math.round(v * 255));
+    const got = samplePixel(out, 3.5, 536, i * 480 + 236);
+    const off = Math.max(...got.map((v, k) => Math.abs(v - want[k])));
+    check(`filter on ${src.join(',')}`, off <= 6, `got ${got.join(',')} want ${want.join(',')}`);
+  });
+  checkFilters();
+}
+
+/** What each filter does to a few colors, and how the filter fields sit with the sliders. */
+function checkFilters() {
+  check('nine filters', FILTERS.length === 9, FILTERS.map((f) => f.name).join());
+  const look = (name, src, amount = 1, extra = {}) => gradePixel(src, pickColor({ ...extra, filter: filterIndex(name), filterAmount: amount }));
+  const spread = (c) => Math.max(...c) - Math.min(...c);
+  const sky = [0.35, 0.55, 0.8];
+  const skin = [0.8, 0.6, 0.5];
+  check('no filter or 0% strength leaves the LUT neutral',
+    isLutNeutral(pickColor({ filter: 0, filterAmount: 1 })) && isLutNeutral(pickColor({ filter: 3, filterAmount: 0 })) && !isLutNeutral(pickColor({ filter: 3, filterAmount: 0.1 })));
+  for (const name of ['mono', 'silvertone', 'noir']) {
+    check(`${name} is gray`, [sky, skin].every((src) => spread(look(name, src)) < 1e-9), look(name, sky).join(','));
+  }
+  check('vivid is more colorful than the picture', spread(look('vivid', sky)) > spread(sky) * 1.2, String(spread(look('vivid', sky))));
+  check('dramatic is less colorful and more contrasty',
+    spread(look('dramatic', sky)) < spread(sky) && look('dramatic', [0.2, 0.2, 0.2])[0] < 0.17 && look('dramatic', [0.8, 0.8, 0.8])[0] > 0.8);
+  const warmth = (c) => c[0] - c[2];
+  for (const kind of ['vivid', 'dramatic']) {
+    const base = warmth(look(kind, [0.5, 0.5, 0.5]));
+    check(`${kind} warm is warmer, cool is cooler`,
+      warmth(look(`${kind}Warm`, [0.5, 0.5, 0.5])) > base + 0.05 && warmth(look(`${kind}Cool`, [0.5, 0.5, 0.5])) < base - 0.05);
+  }
+  check('noir is darker in the shadows than mono', look('noir', [0.25, 0.25, 0.25])[0] < look('mono', [0.25, 0.25, 0.25])[0] - 0.05);
+  check('silvertone lifts black', look('silvertone', [0, 0, 0])[0] > 0.04);
+  const none = gradePixel(skin, pickColor({}));
+  const half = look('noir', skin, 0.5);
+  const full = look('noir', skin);
+  check('strength mixes the filter in', half.every((v, k) => Math.abs(v - (none[k] + full[k]) / 2) < 1e-9), half.join(','));
+  check('sliders still work under a filter', look('noir', skin, 1, { exposure: 0.5 })[0] > full[0] + 0.05);
+  let threw = '';
+  try {
+    gradePixel(skin, pickColor({ filter: 42, filterAmount: 1 }));
+  } catch (err) {
+    threw = err.message;
+  }
+  check('an unknown filter is an error', threw.includes('unknown filter 42'), threw);
 }
 
 /** Vignettes through the mask blend: dark and light, after a LUT, fitted to a crop, and on a keyframed clip. */

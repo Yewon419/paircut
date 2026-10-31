@@ -24,6 +24,10 @@ export interface ClipColor {
   temperature: number;
   /** Positive is magenta, negative green. */
   tint: number;
+  /** Which of FILTERS is laid over the adjustments: 0 = none, 1 = FILTERS[0] and so on. */
+  filter: number;
+  /** 0..1: how much of the filter shows over the adjusted picture. */
+  filterAmount: number;
   /** Positive sharpens fine edges (ffmpeg unsharp's kernel), negative softens them. */
   sharpness: number;
   /** Local contrast: positive adds punch to midsize detail, negative flattens it. */
@@ -65,6 +69,8 @@ export const LUT_KEYS: (keyof ClipColor)[] = [
   'vibrance',
   'temperature',
   'tint',
+  'filter',
+  'filterAmount',
 ];
 
 /** Filters that look at neighboring pixels, so they run as their own passes around the LUT. */
@@ -87,6 +93,8 @@ export const NEUTRAL_COLOR: ClipColor = {
   vibrance: 0,
   temperature: 0,
   tint: 0,
+  filter: 0,
+  filterAmount: 0,
   sharpness: 0,
   definition: 0,
   noiseReduction: 0,
@@ -104,9 +112,16 @@ export const NEUTRAL_COLOR: ClipColor = {
 
 export const LUT_SIZE = 33;
 
+const FILTER_KEYS: (keyof ClipColor)[] = ['filter', 'filterAmount'];
+
+/** Whether a filter is picked and shows at all. */
+export function filterOn(c: ClipColor): boolean {
+  return c.filter !== 0 && c.filterAmount !== 0;
+}
+
 /** Whether the LUT leaves every pixel as it is. */
 export function isLutNeutral(c: ClipColor): boolean {
-  return LUT_KEYS.every((k) => c[k] === 0);
+  return LUT_KEYS.every((k) => c[k] === 0 || (FILTER_KEYS.includes(k) && !filterOn(c)));
 }
 
 export function isNeutral(c: ClipColor): boolean {
@@ -245,9 +260,49 @@ function toneRegions(rgb: [number, number, number], highlights: number, shadows:
 }
 
 /**
+ * A filter's look, applied in this order: channel gains (warm or cool), saturation around luma (0 = gray), then one
+ * tone curve per channel: an S-curve by `contrast` (negative flattens), the midtone `gamma`, and black and white
+ * levels.
+ */
+interface FilterLook {
+  gains: [number, number, number];
+  saturation: number;
+  contrast: number;
+  gamma: number;
+  black: number;
+  white: number;
+}
+
+/** The Photos app's filters, by eye: close in spirit, not the same pixels. */
+export const FILTERS: { name: string; label: string; look: FilterLook }[] = [
+  { name: 'vivid', label: '비비드', look: { gains: [1, 1, 1], saturation: 1.35, contrast: 0.25, gamma: 1, black: 0, white: 1 } },
+  { name: 'vividWarm', label: '비비드 웜', look: { gains: [1.08, 1, 0.86], saturation: 1.3, contrast: 0.25, gamma: 1, black: 0, white: 1 } },
+  { name: 'vividCool', label: '비비드 쿨', look: { gains: [0.88, 0.99, 1.1], saturation: 1.3, contrast: 0.25, gamma: 1, black: 0, white: 1 } },
+  { name: 'dramatic', label: '드라마틱', look: { gains: [1, 1, 1], saturation: 0.7, contrast: 0.6, gamma: 1.12, black: 0, white: 0.96 } },
+  { name: 'dramaticWarm', label: '드라마틱 웜', look: { gains: [1.1, 1, 0.82], saturation: 0.75, contrast: 0.6, gamma: 1.12, black: 0, white: 0.96 } },
+  { name: 'dramaticCool', label: '드라마틱 쿨', look: { gains: [0.86, 1, 1.12], saturation: 0.75, contrast: 0.6, gamma: 1.12, black: 0, white: 0.96 } },
+  { name: 'mono', label: '모노', look: { gains: [1, 1, 1], saturation: 0, contrast: 0.15, gamma: 1, black: 0, white: 1 } },
+  { name: 'silvertone', label: '실버톤', look: { gains: [1, 1, 1], saturation: 0, contrast: -0.25, gamma: 0.85, black: 0.06, white: 1 } },
+  { name: 'noir', label: '누아르', look: { gains: [1, 1, 1], saturation: 0, contrast: 0.9, gamma: 1.2, black: 0, white: 1 } },
+];
+
+function filterPixel(rgb: [number, number, number], look: FilterLook): [number, number, number] {
+  let [r, g, b] = [rgb[0] * look.gains[0], rgb[1] * look.gains[1], rgb[2] * look.gains[2]];
+  const l = luma(r, g, b);
+  [r, g, b] = [l + (r - l) * look.saturation, l + (g - l) * look.saturation, l + (b - l) * look.saturation];
+  const tone = (x: number) => {
+    const v = clamp01(x);
+    const s = clamp01(v + look.contrast * (v * v * (3 - 2 * v) - v));
+    return look.black + (look.white - look.black) * Math.pow(s, look.gamma);
+  };
+  return [tone(r), tone(g), tone(b)];
+}
+
+/**
  * Maps one RGB pixel (0..1). Light first (exposure, brilliance, highlights, shadows, black point), then the
  * original four in their original order (temperature with tint, saturation with vibrance, contrast, brightness),
- * so clips made before the light controls existed look the same.
+ * so clips made before the light controls existed look the same. A filter goes over the result, mixed in by its
+ * amount, so the sliders still steer the picture under it.
  */
 export function gradePixel(rgb: [number, number, number], c: ClipColor): [number, number, number] {
   let [r, g, b] = rgb;
@@ -284,7 +339,12 @@ export function gradePixel(rgb: [number, number, number], c: ClipColor): [number
     if (c.brightness !== 0) y = Math.pow(y, Math.pow(2, -c.brightness));
     return y;
   };
-  return [tone(r), tone(g), tone(b)];
+  const adjusted: [number, number, number] = [tone(r), tone(g), tone(b)];
+  if (!filterOn(c)) return adjusted;
+  const entry = FILTERS[c.filter - 1];
+  if (!entry) throw new Error(`unknown filter ${c.filter}; expected 1..${FILTERS.length}`);
+  const looked = filterPixel(adjusted, entry.look);
+  return adjusted.map((v, i) => v + (looked[i] - v) * c.filterAmount) as [number, number, number];
 }
 
 /** The fields the auto button sets; white balance and the rest of the color stay as they are. */
