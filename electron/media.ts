@@ -168,9 +168,16 @@ export async function makeFilmstrip(
   return out;
 }
 
-export async function makeWaveform(path: string, cacheDir: string): Promise<string> {
-  const out = join(cacheDir, `${cacheKey(path, 'wave')}.png`);
+/** Waveform pixels per second of source, near the timeline's default zoom so short and long files look alike. */
+const WAVE_PX_PER_SEC = 100;
+/** Widest waveform PNG; Chromium was checked to draw a 112k-wide strip as a clip background. */
+const WAVE_WIDTH_MAX = 120_000;
+
+export async function makeWaveform(path: string, duration: number, cacheDir: string): Promise<string> {
+  const width = Math.min(WAVE_WIDTH_MAX, Math.max(1, Math.ceil(duration * WAVE_PX_PER_SEC)));
+  const out = join(cacheDir, `${cacheKey(path, `wave${width}`)}.png`);
   if (existsSync(out)) return out;
+  // Peak, not the default average: averaging a column's samples flattens the drawn amplitude.
   await runTool(FFMPEG, [
     '-y',
     '-v',
@@ -178,7 +185,7 @@ export async function makeWaveform(path: string, cacheDir: string): Promise<stri
     '-i',
     path,
     '-filter_complex',
-    'aformat=channel_layouts=mono,showwavespic=s=2400x96:colors=0x9fd0f0',
+    `aformat=channel_layouts=mono,showwavespic=s=${width}x96:colors=0x9fd0f0:filter=peak`,
     '-frames:v',
     '1',
     out,
@@ -260,7 +267,7 @@ export async function importMediaTracked(
   if (base.kind === 'image') thumbPath = path;
   if (base.kind === 'audio') {
     onStep('wave', 0);
-    wavePath = await makeWaveform(path, cacheDir);
+    wavePath = await makeWaveform(path, base.duration, cacheDir);
   }
   return { ...base, thumbPath, wavePath };
 }
