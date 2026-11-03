@@ -54,9 +54,10 @@ import {
   moveTrack,
   moveTrackTo,
   overlaps,
-  placeAsset,
+  placeAssets,
   redo,
   renameTrack,
+  selectClips,
   selectTrack,
   splitAtPlayhead,
   tidyTracks,
@@ -101,9 +102,9 @@ function rowKey(row: Row): string {
   return row.type === 'track' ? row.track.id : row.type;
 }
 
-function snapCandidates(project: Project, ignoreId: string): number[] {
+function snapCandidates(project: Project, ignoreIds: string[]): number[] {
   const out = [0, useEditor.getState().playhead];
-  for (const t of project.tracks) for (const c of t.clips) if (c.id !== ignoreId) out.push(c.start, clipEnd(c));
+  for (const t of project.tracks) for (const c of t.clips) if (!ignoreIds.includes(c.id)) out.push(c.start, clipEnd(c));
   return out;
 }
 
@@ -213,6 +214,7 @@ export function Timeline() {
   const contentWidth = Math.max(viewWidth, (duration + 20) * zoom);
   const rows = rowsOf(project);
   const [layerDrag, setLayerDrag] = useState<{ id: string; slot: number } | null>(null);
+  const [marquee, setMarquee] = useState<{ l: number; t: number; r: number; b: number } | null>(null);
 
   /** Gap between layer cards under the pointer: 0 = above the top card, tracks.length = below the bottom one. */
   const layerSlot = (clientY: number): number => {
@@ -258,11 +260,57 @@ export function Timeline() {
     return frameSnap(t, p.fps);
   };
 
-  /** Ruler, playhead handle or empty timeline: drops the selection and moves the playhead with the pointer. */
+  /**
+   * Empty layer area: a drag draws a box and selects every clip it touches (Ctrl/Shift adds to the selection); a press
+   * without a drag drops the selection and moves the playhead there.
+   */
+  const startMarquee = (e: React.PointerEvent, el: HTMLElement) => {
+    const content = el.querySelector<HTMLElement>('.tl-content');
+    if (!content) return;
+    el.setPointerCapture(e.pointerId);
+    const adding = e.ctrlKey || e.metaKey || e.shiftKey;
+    const kept = adding ? useEditor.getState().selectedIds : [];
+    const origin = content.getBoundingClientRect();
+    const x0 = e.clientX - origin.left;
+    const y0 = e.clientY - origin.top;
+    let dragged = false;
+    const move = (ev: PointerEvent) => {
+      const at = content.getBoundingClientRect();
+      const x = ev.clientX - at.left;
+      const y = ev.clientY - at.top;
+      if (!dragged && Math.hypot(x - x0, y - y0) < 3) return;
+      dragged = true;
+      const box = { l: Math.min(x0, x), t: Math.min(y0, y), r: Math.max(x0, x), b: Math.max(y0, y) };
+      setMarquee(box);
+      const hit = [...content.querySelectorAll<HTMLElement>('[data-clip]')]
+        .filter((c) => {
+          const r = c.getBoundingClientRect();
+          return r.right - at.left > box.l && r.left - at.left < box.r && r.bottom - at.top > box.t && r.top - at.top < box.b;
+        })
+        .map((c) => c.dataset.clip ?? '');
+      selectClips([...kept.filter((id) => !hit.includes(id)), ...hit]);
+    };
+    const up = (ev: PointerEvent) => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      setMarquee(null);
+      if (dragged || adding) return;
+      useEditor.setState({ selectedClipId: null });
+      seek(scrubTime(ev.clientX));
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
+
+  /** Ruler or playhead handle: drops the selection and moves the playhead with the pointer. */
   const onScrubDown = (e: React.PointerEvent) => {
     const el = e.currentTarget as HTMLElement;
     // The horizontal scrollbar is part of this element; pressing it scrolls, it does not seek.
     if (e.button !== 0 || e.clientY > el.getBoundingClientRect().top + el.clientHeight) return;
+    if (!(e.target as HTMLElement).closest('.tl-ruler, .tl-playhead-grip')) {
+      startMarquee(e, el);
+      return;
+    }
     useEditor.setState({ selectedClipId: null });
     el.setPointerCapture(e.pointerId);
     seek(scrubTime(e.clientX));
@@ -313,10 +361,18 @@ export function Timeline() {
       toggleSelect(clip.id);
       return;
     }
-    useEditor.setState({ selectedClipId: clip.id, selectedIds: [clip.id] });
-    // Selecting a block the playhead is not over brings the playhead to its first frame.
-    const { playhead } = useEditor.getState();
-    if (playhead < clip.start || playhead >= clipEnd(clip)) seek(clip.start);
+    const pickOnly = () => {
+      useEditor.setState({ selectedClipId: clip.id, selectedIds: [clip.id] });
+      // Selecting a block the playhead is not over brings the playhead to its first frame.
+      const { playhead } = useEditor.getState();
+      if (playhead < clip.start || playhead >= clipEnd(clip)) seek(clip.start);
+    };
+    const { selectedIds: group } = useEditor.getState();
+    if (mode === 'move' && group.length > 1 && group.includes(clip.id)) {
+      startGroupDrag(e, group, pickOnly);
+      return;
+    }
+    pickOnly();
     if (findClip(useEditor.getState().project, clip.id)?.track.locked) return;
     const el = e.currentTarget as HTMLElement;
     el.setPointerCapture(e.pointerId);
@@ -326,7 +382,7 @@ export function Timeline() {
     if (!found) return;
     const asset = isTextClip(clip) ? null : assetById(base, clip.assetId);
     const stretchy = !asset || asset.kind === 'image';
-    const candidates = snapCandidates(base, clip.id);
+    const candidates = snapCandidates(base, [clip.id]);
     const fps = base.fps;
     const minLen = 1 / fps;
     const rate = isMediaClip(clip) ? clip.speed : 1;
@@ -396,6 +452,54 @@ export function Timeline() {
     el.addEventListener('pointerup', up);
   };
 
+  /**
+   * Dragging one of several selected clips moves them all by the same time, each on its own layer; clips on locked
+   * layers stay put. A press without a drag selects just the pressed clip.
+   */
+  const startGroupDrag = (e: React.PointerEvent, ids: string[], pickOnly: () => void) => {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    const x0 = e.clientX;
+    const base = useEditor.getState().project;
+    const moving = ids.flatMap((id) => {
+      const f = findClip(base, id);
+      return f && !f.track.locked ? [f] : [];
+    });
+    if (moving.length === 0) return;
+    const movingIds = moving.map((f) => f.clip.id);
+    const candidates = snapCandidates(base, movingIds);
+    const edges = moving.flatMap((f) => [f.clip.start, clipEnd(f.clip)]);
+    const earliest = Math.min(...moving.map((f) => f.clip.start));
+    const fps = base.fps;
+    let moved = false;
+    beginGesture();
+
+    const move = (ev: PointerEvent) => {
+      const { zoom: z, snap: snapOn } = useEditor.getState();
+      if (!moved && Math.abs(ev.clientX - x0) < 3) return;
+      moved = true;
+      let dt = (ev.clientX - x0) / z;
+      if (snapOn) dt += snapDelta(edges.map((t) => t + dt), candidates, z);
+      dt = Math.max(0, frameSnap(earliest + dt, fps)) - earliest;
+      updateGesture((b) => {
+        const blocked = moving.some((f) => {
+          const others = { ...f.track, clips: f.track.clips.filter((c) => !movingIds.includes(c.id)) };
+          return overlaps(others, f.clip.start + dt, clipEnd(f.clip) + dt, null);
+        });
+        if (blocked) return null;
+        return moving.reduce((p, f) => updateClip(p, f.clip.id, (c) => ({ ...c, start: f.clip.start + dt })), b);
+      });
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      endGesture();
+      if (!moved) pickOnly();
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+  };
+
   const onDragOverRow = (e: React.DragEvent, key: string) => {
     if (!e.dataTransfer.types.includes(ASSET_MIME)) return;
     if (project.tracks.some((t) => t.id === key && t.locked)) return;
@@ -407,12 +511,12 @@ export function Timeline() {
   const onDropRow = (e: React.DragEvent, row: Row) => {
     e.preventDefault();
     setDropRow(null);
-    const assetId = e.dataTransfer.getData(ASSET_MIME);
-    if (!assetId) return;
-    const asset = assetById(project, assetId);
+    const ids = e.dataTransfer.getData(ASSET_MIME);
+    if (!ids) return;
+    const assets = ids.split('\n').map((id) => assetById(project, id));
     const start = timeAt(e.clientX);
-    if (row.type === 'track') placeAsset(asset, row.track.id, start, project.tracks.indexOf(row.track));
-    else placeAsset(asset, null, start, row.type === 'new-video' ? 0 : project.tracks.length);
+    if (row.type === 'track') placeAssets(assets, row.track.id, start, project.tracks.indexOf(row.track));
+    else placeAssets(assets, null, start, row.type === 'new-video' ? 0 : project.tracks.length);
   };
 
   const setZoom = (z: number) => useEditor.setState({ zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z)) });
@@ -578,6 +682,12 @@ export function Timeline() {
                 </div>
               );
             })}
+            {marquee && (
+              <div
+                className="tl-marquee"
+                style={{ left: marquee.l, top: marquee.t, width: marquee.r - marquee.l, height: marquee.b - marquee.t }}
+              />
+            )}
             <Playhead zoom={zoom} />
           </div>
         </div>

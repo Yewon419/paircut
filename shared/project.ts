@@ -18,6 +18,24 @@ export interface MediaAsset {
   solid?: string;
   /** Webm codec when the video carries transparency (motion graphics); export must decode it with libvpx. */
   alpha?: 'vp8' | 'vp9';
+  /** Media bin folder id; absent at the top of its tab. */
+  folder?: string;
+}
+
+/** Media bin tab: pictures (video and stills) and sound are kept apart. */
+export type BinTab = 'visual' | 'audio';
+
+export function binTabOf(kind: MediaKind): BinTab {
+  return kind === 'audio' ? 'audio' : 'visual';
+}
+
+/** A media bin folder, for sorting assets only; files on disk stay where they are. */
+export interface AssetFolder {
+  id: string;
+  name: string;
+  tab: BinTab;
+  /** Enclosing folder id, or null at the top of the tab. */
+  parent: string | null;
 }
 
 /**
@@ -366,6 +384,7 @@ export interface Project {
   assets: MediaAsset[];
   tracks: Track[];
   markers: Marker[];
+  folders?: AssetFolder[];
 }
 
 export function isTextClip(clip: AnyClip): clip is TextClip {

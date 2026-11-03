@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type { ClipColor } from '../shared/color';
-import type { AnyClip, Clip, ClipTransform, KeyEase, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
+import type { AnyClip, AssetFolder, BinTab, Clip, ClipTransform, KeyEase, MediaAsset, Project, TextClip, Track, TrackKind } from '../shared/project';
 import {
+  binTabOf,
   clipDuration,
   clipEnd,
   emptyProject,
@@ -243,6 +244,82 @@ export function renameAsset(assetId: string, name: string): void {
   commit((p) => ({ ...p, assets: p.assets.map((a) => (a.id === assetId ? { ...a, name: trimmed } : a)) }));
 }
 
+/** The folder and every folder inside it, at any depth. */
+export function folderAndInside(p: Project, folderId: string): Set<string> {
+  const ids = new Set([folderId]);
+  const folders = p.folders ?? [];
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const f of folders) {
+      if (f.parent !== null && ids.has(f.parent) && !ids.has(f.id)) {
+        ids.add(f.id);
+        grew = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/** A new folder named like "새 폴더", "새 폴더 2", unique among its siblings. Returns its id. */
+export function addFolder(tab: BinTab, parent: string | null): string {
+  const siblings = new Set((get().project.folders ?? []).filter((f) => f.tab === tab && f.parent === parent).map((f) => f.name));
+  let name = '새 폴더';
+  for (let n = 2; siblings.has(name); n++) name = `새 폴더 ${n}`;
+  const folder: AssetFolder = { id: uid('f'), name, tab, parent };
+  commit((p) => ({ ...p, folders: [...(p.folders ?? []), folder] }));
+  return folder.id;
+}
+
+/** Empty or unchanged names are ignored. */
+export function renameFolder(folderId: string, name: string): void {
+  const trimmed = name.trim();
+  const folder = get().project.folders?.find((f) => f.id === folderId);
+  if (!folder || !trimmed || trimmed === folder.name) return;
+  commit((p) => ({ ...p, folders: (p.folders ?? []).map((f) => (f.id === folderId ? { ...f, name: trimmed } : f)) }));
+}
+
+/** Takes the folder away; what was in it moves up to where the folder was. No asset is deleted. */
+export function deleteFolder(folderId: string): void {
+  const folder = get().project.folders?.find((f) => f.id === folderId);
+  if (!folder) return;
+  commit((p) => ({
+    ...p,
+    folders: (p.folders ?? []).filter((f) => f.id !== folderId).map((f) => (f.parent === folderId ? { ...f, parent: folder.parent } : f)),
+    assets: p.assets.map((a) => (a.folder === folderId ? withFolder(a, folder.parent) : a)),
+  }));
+}
+
+/** An undefined folder is left out when the project is saved. */
+function withFolder(a: MediaAsset, folderId: string | null): MediaAsset {
+  return { ...a, folder: folderId ?? undefined };
+}
+
+/** Puts the asset in the folder (null: the top of its tab). A folder of the other tab is refused. */
+export function moveAssets(assetIds: string[], folderId: string | null): void {
+  const { project } = get();
+  const folder = folderId === null ? null : project.folders?.find((f) => f.id === folderId);
+  if (folder === undefined) return;
+  const moving = new Set(
+    project.assets
+      .filter((a) => assetIds.includes(a.id) && (a.folder ?? null) !== folderId && (!folder || folder.tab === binTabOf(a.kind)))
+      .map((a) => a.id),
+  );
+  if (moving.size === 0) return;
+  commit((p) => ({ ...p, assets: p.assets.map((a) => (moving.has(a.id) ? withFolder(a, folderId) : a)) }));
+}
+
+/** Puts the folder inside another (null: the top of its tab). A folder cannot go inside itself or the other tab. */
+export function moveFolder(folderId: string, parent: string | null): void {
+  const { project } = get();
+  const folder = project.folders?.find((f) => f.id === folderId);
+  if (!folder || folder.parent === parent) return;
+  if (parent !== null) {
+    const target = project.folders?.find((f) => f.id === parent);
+    if (!target || target.tab !== folder.tab || folderAndInside(project, folderId).has(parent)) return;
+  }
+  commit((p) => ({ ...p, folders: (p.folders ?? []).map((f) => (f.id === folderId ? { ...f, parent } : f)) }));
+}
+
 /** How many timeline clips use the asset, and how many of those sit on locked layers. */
 export function assetUsage(p: Project, assetId: string): { clips: number; locked: number } {
   let clips = 0;
@@ -255,34 +332,40 @@ export function assetUsage(p: Project, assetId: string): { clips: number; locked
   return { clips, locked };
 }
 
-/** Removes the asset and every clip that uses it as one undo step; refused while a locked layer holds one of them. */
-export function deleteAsset(assetId: string): void {
+/** Removes the assets and every clip that uses them as one undo step; refused while a locked layer holds one of them. */
+export function deleteAssets(assetIds: string[]): void {
   const { project } = get();
-  if (!project.assets.some((a) => a.id === assetId)) return;
-  if (assetUsage(project, assetId).locked > 0) return;
+  const gone = new Set(assetIds.filter((id) => project.assets.some((a) => a.id === id)));
+  if (gone.size === 0 || [...gone].some((id) => assetUsage(project, id).locked > 0)) return;
   commit((p) =>
     tidyTracks(p, {
       ...p,
-      assets: p.assets.filter((a) => a.id !== assetId),
-      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !(isMediaClip(c) && c.assetId === assetId)) })),
+      assets: p.assets.filter((a) => !gone.has(a.id)),
+      tracks: p.tracks.map((t) => ({ ...t, clips: t.clips.filter((c) => !(isMediaClip(c) && gone.has(c.assetId))) })),
     }),
   );
   pruneSelection();
 }
 
-export function appendToMain(asset: MediaAsset): void {
-  commit((p) => {
-    const trackId = mainTrackId(p, trackKindFor(asset));
-    return withTrack(p, trackId, (t) => {
-      const end = t.clips.reduce((m, c) => Math.max(m, clipEnd(c)), 0);
-      return { ...t, clips: sortClips([...t.clips, makeClip(asset, end)]) };
-    });
+/**
+ * Places a clip on a track, or on a new track inserted at `newTrackIndex` when trackId is null. Several assets go one
+ * after another on the track the first one landed on, as one undo step.
+ */
+export function placeAssets(assets: MediaAsset[], trackId: string | null, start: number, newTrackIndex: number): void {
+  commit((base) => {
+    let p = base;
+    let track = trackId;
+    let at = start;
+    for (const asset of assets) {
+      const had = new Set(p.tracks.flatMap((t) => t.clips.map((c) => c.id)));
+      p = withAsset(p, asset, track, at, newTrackIndex);
+      const added = p.tracks.flatMap((t) => t.clips.map((c) => ({ t, c }))).find((x) => !had.has(x.c.id));
+      if (!added) continue;
+      track = added.t.id;
+      at = clipEnd(added.c);
+    }
+    return p;
   });
-}
-
-/** Places a clip on a track, or on a new track inserted at `newTrackIndex` when trackId is null. */
-export function placeAsset(asset: MediaAsset, trackId: string | null, start: number, newTrackIndex: number): void {
-  commit((p) => withAsset(p, asset, trackId, start, newTrackIndex));
 }
 
 export function withAsset(p: Project, asset: MediaAsset, trackId: string | null, start: number, newTrackIndex: number): Project {
@@ -360,17 +443,35 @@ export function withClipOnLayer(p: Project, clip: AnyClip, kind: TrackKind, laye
   return { ...p, tracks };
 }
 
-/** The media bin's add button: at the playhead on the selected layer, else at the end of the main track. */
-export function addAssetToTimeline(asset: MediaAsset): void {
+/**
+ * The media bin's add button: at the playhead on the selected layer, else at the end of the main track. Several
+ * assets go one after another on the layer the first one landed on, as one undo step.
+ */
+export function addAssetsToTimeline(assets: MediaAsset[]): void {
   const { project, playhead, selectedTrackId } = get();
-  const clip = makeClip(asset, frameSnap(playhead, project.fps));
-  const placed = withClipOnLayer(project, clip, trackKindFor(asset), selectedTrackId);
-  if (!placed) {
-    appendToMain(asset);
-    return;
+  let p = project;
+  let at = frameSnap(playhead, project.fps);
+  let layerId = selectedTrackId;
+  let picked: string | null = null;
+  for (const asset of assets) {
+    const kind = trackKindFor(asset);
+    let clip = makeClip(asset, at);
+    let placed = withClipOnLayer(p, clip, kind, layerId);
+    if (placed) {
+      picked = clip.id;
+    } else {
+      const mainId = mainTrackId(p, kind);
+      const end = (p.tracks.find((t) => t.id === mainId)?.clips ?? []).reduce((m, c) => Math.max(m, clipEnd(c)), 0);
+      clip = makeClip(asset, end);
+      placed = withTrack(p, mainId, (t) => ({ ...t, clips: sortClips([...t.clips, clip]) }));
+    }
+    p = placed;
+    at = clipEnd(clip);
+    layerId = findClip(p, clip.id)?.track.id ?? null;
   }
-  commit(() => placed);
-  set({ selectedClipId: clip.id });
+  if (p === project) return;
+  commit(() => p);
+  if (picked) set({ selectedClipId: picked });
 }
 
 export function moveClip(base: Project, clipId: string, toTrackId: string, start: number): Project | null {

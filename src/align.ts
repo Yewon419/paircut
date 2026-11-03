@@ -100,6 +100,16 @@ function nearest(lo: number, hi: number, lines: number[], tol: number): { shift:
   return best;
 }
 
+/** The closest line within tol of a single edge at v, as the shift that puts the edge on it. */
+export function snapLine(v: number, lines: number[], tol: number): { shift: number; line: number } | null {
+  let best: { shift: number; line: number } | null = null;
+  for (const line of lines) {
+    const shift = line - v;
+    if (Math.abs(shift) <= tol && (best === null || Math.abs(shift) < Math.abs(best.shift))) best = { shift, line };
+  }
+  return best;
+}
+
 /** Moves the box by (dx, dy), then nudges each axis onto the closest line within tol if one of its edges or its center is that close. */
 export function snapMove(box: Box, dx: number, dy: number, targets: SnapTargets, tolX: number, tolY: number): Snapped {
   const x = nearest(box.l + dx, box.r + dx, targets.xs, tolX);

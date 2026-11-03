@@ -1349,6 +1349,88 @@ try {
   const undoneY = await win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0].y);
   check('undo takes an align back', Math.abs(undoneY - 0.7) < 1e-9, String(undoneY));
 
+  // Handles: corners resize around the opposite corner, sides crop, the wheel zooms around the pointer. Alt keeps snapping out.
+  await win.evaluate((p) => window.__paircut.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid],
+    tracks: [
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'hb', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: { scale: 0.5, x: 0, y: 0 } }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.locator('[data-clip="hb"]').click();
+  await win.evaluate(() => window.__paircut.seek(1));
+  const hbClip = () => win.evaluate(() => window.__paircut.state().project.tracks[0].clips[0]);
+  const hbox = () => win.locator('.transform-box').boundingBox();
+  check('a selected picture shows eight handles', (await win.locator('.transform-box .handle').count()) === 8);
+  const altDrag = async (sel, dx, dy) => {
+    const b = await win.locator(sel).boundingBox();
+    const from = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+    await win.keyboard.down('Alt');
+    await win.mouse.move(from.x, from.y);
+    await win.mouse.down();
+    await win.mouse.move(from.x + dx, from.y + dy, { steps: 6 });
+    await win.mouse.up();
+    await win.keyboard.up('Alt');
+  };
+  const hb0 = await hbox();
+  await altDrag('[data-handle="se"]', 40, 40);
+  const grown = await hbox();
+  const grownClip = await hbClip();
+  check('a corner handle grows the picture at its shape', grownClip.transform.scale > 0.55 &&
+    Math.abs(grown.width / grown.height - hb0.width / hb0.height) < 0.02, JSON.stringify(grownClip.transform));
+  check('a corner handle keeps the opposite corner in place', Math.abs(grown.x - hb0.x) < 1.5 && Math.abs(grown.y - hb0.y) < 1.5,
+    `${hb0.x},${hb0.y} -> ${grown.x},${grown.y}`);
+  await win.keyboard.press('Control+KeyZ');
+  check('one undo takes a corner resize back', Math.abs((await hbClip()).transform.scale - 0.5) < 1e-9);
+  await altDrag('[data-handle="e"]', -30, 0);
+  const hbCut = await hbox();
+  const croppedClip = await hbClip();
+  check('a side handle crops that side and leaves the picture put', croppedClip.crop.r > 0.1 && croppedClip.crop.l === 0 &&
+    croppedClip.transform.scale === 0.5 && Math.abs(hbCut.x - hb0.x) < 1.5 && hbCut.width < hb0.width - 20,
+    JSON.stringify({ crop: croppedClip.crop, w: hbCut.width }));
+  await altDrag('[data-handle="e"]', 400, 0);
+  check('a side cannot crop past the picture edge', (await hbClip()).crop.r === 0, JSON.stringify((await hbClip()).crop));
+  await win.evaluate((p) => window.__paircut.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid],
+    tracks: [
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'hb', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: { scale: 0.5, x: 0, y: 0 } }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.locator('[data-clip="hb"]').click();
+  await win.evaluate(() => window.__paircut.seek(1));
+  const w0 = await hbox();
+  const aim = { x: w0.x + w0.width * 0.25, y: w0.y + w0.height * 0.25 };
+  await win.mouse.move(aim.x, aim.y);
+  await win.mouse.wheel(0, -200);
+  await win.waitForTimeout(400);
+  const w1 = await hbox();
+  const fracX = (aim.x - w1.x) / w1.width;
+  const fracY = (aim.y - w1.y) / w1.height;
+  check('the wheel zooms around the pointer', w1.width > w0.width * 1.2 && Math.abs(fracX - 0.25) < 0.01 && Math.abs(fracY - 0.25) < 0.01,
+    JSON.stringify({ w0: w0.width, w1: w1.width, fracX, fracY }));
+  await win.evaluate((p) => window.__paircut.load(p), {
+    ...base,
+    assets: [...base.assets, blueSolid],
+    tracks: [
+      { id: 'v-top', kind: 'video', muted: false, hidden: false, clips: [{ ...MC, id: 'hb', assetId: blueSolid.id, start: 0, in: 0, out: 2, transform: { scale: 6, x: 0, y: 0 } }] },
+      ...base.tracks.filter((t) => t.kind === 'audio'),
+    ],
+  });
+  await win.locator('[data-clip="hb"]').click();
+  await win.evaluate(() => window.__paircut.seek(1));
+  const wrapBox = await win.locator('.stage-wrap').boundingBox();
+  const corner = await win.locator('[data-handle="se"]').boundingBox();
+  check('a picture past the panel marks its cut sides', (await win.locator('.transform-box [data-cut]').count()) === 4);
+  check('its corner handles stay in view', corner.x >= wrapBox.x && corner.y >= wrapBox.y &&
+    corner.x + corner.width <= wrapBox.x + wrapBox.width && corner.y + corner.height <= wrapBox.y + wrapBox.height,
+    JSON.stringify({ corner, wrapBox }));
+  await altDrag('[data-handle="se"]', -60, -60);
+  check('a corner pulled in from the visible edge still shrinks the picture', (await hbClip()).transform.scale < 6,
+    JSON.stringify((await hbClip()).transform));
+
   // Layer opacity and blend modes: a #4080C0 layer over #804020, the same in preview and export.
   const [lowSolid, highSolid] = await win.evaluate(async () =>
     [await window.api.makeSolid('#804020', 1080, 1920), await window.api.makeSolid('#4080C0', 1080, 1920)]);
@@ -1744,6 +1826,48 @@ try {
   check('a paste into another project brings the media along', other.assets.some((a) => a.id === c2asset) &&
     other.tracks.find((t) => t.id === 'v-main').clips[0]?.assetId === c2asset, JSON.stringify(other.tracks.map((t) => t.clips.length)));
 
+  // Box selection on the layers: a drag over empty layer space picks every clip it touches; the selected clips move together.
+  await win.evaluate((p) => window.__paircut.load(p), clipboardProject);
+  await win.evaluate(() => (document.querySelector('.tl-scroll').scrollLeft = 0));
+  const tlZoom = await win.evaluate(() => window.__paircut.state().zoom);
+  const t0x = (await win.locator('[data-clip="la"]').boundingBox()).x;
+  const rowY = async (id) => {
+    await win.locator(`[data-row="${id}"]`).scrollIntoViewIfNeeded();
+    const b = await win.locator(`[data-row="${id}"]`).boundingBox();
+    return b.y + b.height / 2;
+  };
+  const selNow = () => win.evaluate(() => window.__paircut.state().selectedIds.join());
+  const boxDrag = async (from, to) => {
+    await win.mouse.move(t0x + from[0] * tlZoom, await rowY(from[1]));
+    await win.mouse.down();
+    await win.mouse.move(t0x + to[0] * tlZoom, await rowY(to[1]), { steps: 6 });
+    const shown = await win.locator('.tl-marquee').count();
+    await win.mouse.up();
+    return shown;
+  };
+  const boxShown = await boxDrag([1, 't-b'], [4, 't-a']);
+  check('a drag over empty layers draws a box and selects the clips it touches', boxShown === 1 && (await selNow()) === 'la,lb' &&
+    (await win.locator('.tl-marquee').count()) === 0, await selNow());
+  await win.keyboard.down('Control');
+  await boxDrag([0.5, 'a-1'], [2.5, 'a-1']);
+  await win.keyboard.up('Control');
+  check('Ctrl+drag adds the boxed clips to the selection', (await selNow()) === 'la,lb,c4', await selNow());
+  await win.mouse.click(t0x + 6 * tlZoom, await rowY('a-1'));
+  check('a press on an empty layer drops the selection and moves the playhead there', (await selNow()) === '' &&
+    Math.abs((await playheadNow()) - 6) < 0.05, String(await playheadNow()));
+  await boxDrag([1, 't-b'], [4, 't-a']);
+  const laBox = await win.locator('[data-clip="la"]').boundingBox();
+  await win.mouse.move(laBox.x + 10, laBox.y + laBox.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(laBox.x + 10 + tlZoom, laBox.y + laBox.height / 2, { steps: 6 });
+  await win.mouse.up();
+  const starts = async () => [(await clipsOf('t-a'))[0].start, (await clipsOf('t-b'))[0].start].join();
+  check('dragging one of the selected clips moves them all', (await starts()) === '1,4' && (await selNow()) === 'la,lb', await starts());
+  await win.locator('[data-clip="lb"]').click({ position: { x: 10, y: 10 } });
+  check('a press without a drag on a selected clip selects just that clip', (await selNow()) === 'lb', await selNow());
+  await win.keyboard.press('Control+KeyZ');
+  check('one undo takes the group move back', (await starts()) === '0,3', await starts());
+
   // Picking in the preview: the top layer under the pointer, tapping again goes down the stack, the timeline follows.
   const halfSize = { scale: 0.5, x: 0, y: 0 };
   await win.evaluate((p) => window.__paircut.load(p), {
@@ -2015,6 +2139,116 @@ try {
       return { name: p.assets.find((a) => a.path.endsWith('import-long.mp4'))?.name, clips: p.tracks.flatMap((t) => t.clips).length };
     });
     check('one undo brings the asset and its clip back', back.name === '긴 영상' && back.clips === 1, JSON.stringify(back));
+
+    // Bin tabs and folders: sound sits on its own tab, folders nest, deleting one keeps what was inside.
+    const assetRows = () => win.locator('[data-testid="asset"]').evaluateAll((els) => els.map((e) => e.querySelector('.asset-name').textContent));
+    const binState = () => win.evaluate(() => {
+      const p = window.__paircut.state().project;
+      return { folders: p.folders ?? [], long: p.assets.find((a) => a.path.endsWith('import-long.mp4'))?.folder ?? null };
+    });
+    check('a sound imported on the picture tab is counted on the sound tab', (await win.locator('[data-testid="bin-tab-audio"] .bin-tab-badge').textContent()) === '1');
+    check('the picture tab leaves sound out', !(await assetRows()).includes('tone.m4a') && (await assetRows()).includes('긴 영상'));
+    await win.click('[data-testid="bin-tab-audio"]');
+    check('the sound tab shows sound only, with the effects button', (await assetRows()).join() === 'tone.m4a' &&
+      (await win.locator('[data-testid="sfx-toggle"]').count()) === 1 && (await win.locator('[data-testid="solid-add"]').count()) === 0 &&
+      (await win.locator('[data-testid="bin-tab-audio"] .bin-tab-badge').count()) === 0);
+    await win.click('[data-testid="bin-tab-visual"]');
+    await win.click('[data-testid="folder-new"]');
+    await win.fill('[data-testid="folder-rename"]', '인물');
+    await win.keyboard.press('Enter');
+    let bin = await binState();
+    const outer = bin.folders[0];
+    check('a new folder is named on the spot', bin.folders.length === 1 && outer.name === '인물' && outer.tab === 'visual' && outer.parent === null,
+      JSON.stringify(bin.folders));
+    await win.locator('[data-testid="asset"]', { hasText: '긴 영상' }).dragTo(win.locator(`[data-folder="${outer.id}"]`));
+    bin = await binState();
+    check('dragging an asset onto a folder puts it inside', bin.long === outer.id && (await win.locator(`[data-folder="${outer.id}"] .bin-folder-count`).textContent()) === '1',
+      JSON.stringify(bin));
+    await win.locator(`[data-folder="${outer.id}"]`).click({ button: 'right' });
+    await win.locator('[data-testid="folder-menu"] button', { hasText: '안에 새 폴더' }).click();
+    await win.fill('[data-testid="folder-rename"]', '얼굴');
+    await win.keyboard.press('Enter');
+    bin = await binState();
+    const inner = bin.folders.find((x) => x.name === '얼굴');
+    check('a folder can go inside a folder', inner?.parent === outer.id, JSON.stringify(bin.folders));
+    await win.locator('[data-testid="asset"]', { hasText: '긴 영상' }).click({ button: 'right' });
+    await win.locator('[data-testid="asset-folder"]').selectOption({ label: '인물 / 얼굴' });
+    check('the asset menu moves it to a nested folder', (await binState()).long === inner.id);
+    await win.locator(`[data-folder="${outer.id}"]`).dragTo(win.locator(`[data-folder="${inner.id}"]`));
+    check('a folder cannot go inside its own folder', (await binState()).folders.find((x) => x.id === outer.id).parent === null);
+    await win.locator(`[data-folder="${outer.id}"] .bin-folder-name`).click();
+    check('a folded folder hides what is inside', !(await assetRows()).includes('긴 영상') && (await win.locator(`[data-folder="${inner.id}"]`).count()) === 0);
+    await win.locator(`[data-folder="${outer.id}"] .bin-folder-name`).click();
+    check('unfolding shows it again', (await assetRows()).includes('긴 영상'));
+    await win.locator(`[data-folder="${outer.id}"]`).click({ button: 'right' });
+    await win.locator('[data-testid="folder-menu"] button', { hasText: '폴더 삭제' }).click();
+    bin = await binState();
+    const assetsLeft = await win.evaluate(() => window.__paircut.state().project.assets.length);
+    check('deleting a folder moves what was inside up and deletes no asset', bin.folders.length === 1 && bin.folders[0].parent === null &&
+      bin.long === inner.id && assetsLeft === names.length, JSON.stringify({ bin, assetsLeft }));
+    await win.keyboard.press('Control+z');
+    check('undo brings the deleted folder back', (await binState()).folders.length === 2);
+
+    // Box selection in the bin: a drag from empty list space picks the items it touches; they move, add and delete together.
+    await win.evaluate((p) => window.__paircut.load(p), base);
+    await win.evaluate(() => {
+      const list = document.querySelector('.asset-list');
+      list.scrollTop = list.scrollHeight;
+    });
+    const rowsBox = await win.locator('[data-testid="asset"]').evaluateAll((els) => els.map((e) => {
+      const r = e.getBoundingClientRect();
+      return { id: e.dataset.asset, x: r.left, y: r.top, w: r.width, h: r.height };
+    }));
+    const listBox = await win.locator('.asset-list').boundingBox();
+    const pickedIds = () => win.locator('.asset.picked').evaluateAll((els) => els.map((e) => e.dataset.asset));
+    const second = rowsBox[1];
+    await win.mouse.move(second.x + second.w / 2, listBox.y + listBox.height - 8);
+    await win.mouse.down();
+    await win.mouse.move(second.x + second.w / 3, second.y + second.h / 2, { steps: 6 });
+    const binBoxShown = await win.locator('.bin-marquee').count();
+    await win.mouse.up();
+    const group = rowsBox.slice(1).map((r) => r.id);
+    check('a drag from empty bin space selects the items it touches', binBoxShown === 1 && (await pickedIds()).join() === group.join(),
+      JSON.stringify(await pickedIds()));
+    const clipCount = () => win.evaluate((ids) => window.__paircut.state().project.tracks.flatMap((t) => t.clips)
+      .filter((c) => ids.includes(c.assetId)).length, group);
+    const clipsBefore = await clipCount();
+    const pastBefore = await win.evaluate(() => window.__paircut.state().past.length);
+    await win.locator(`[data-asset="${group[0]}"] button`).click();
+    const added = await win.evaluate(({ ids, n }) => {
+      const s = window.__paircut.state();
+      return { past: s.past.length - n, clips: s.project.tracks.flatMap((t) => t.clips).filter((c) => ids.includes(c.assetId)) };
+    }, { ids: group, n: pastBefore });
+    check('the add button puts every selected item on the timeline in one step', added.past === 1 &&
+      added.clips.length === clipsBefore + group.length, JSON.stringify(added.past));
+    await win.keyboard.press('Control+KeyZ');
+    check('one undo takes them all off', (await clipCount()) === clipsBefore);
+    await win.click('[data-testid="folder-new"]');
+    await win.keyboard.press('Enter');
+    const box = (await binState()).folders[0].id;
+    check('making a folder keeps the selection', (await pickedIds()).join() === group.join());
+    await win.locator(`[data-asset="${group[1]}"]`).dragTo(win.locator(`[data-folder="${box}"]`));
+    const inBox = () => win.evaluate((id) => window.__paircut.state().project.assets.filter((a) => a.folder === id).map((a) => a.id), box);
+    check('dragging a selected item takes the others into the folder too', (await inBox()).sort().join() === [...group].sort().join(),
+      JSON.stringify(await inBox()));
+    await win.keyboard.press('Control+KeyZ');
+    check('one undo brings them all back out', (await inBox()).length === 0);
+    await win.locator(`[data-asset="${group[0]}"]`).click({ button: 'right' });
+    check('the menu of a selected item speaks for the whole selection',
+      (await win.locator('[data-testid="asset-menu"]').textContent()).includes(`${group.length}개 선택됨`) &&
+      (await win.locator('[data-testid="asset-menu"] button', { hasText: '이름 바꾸기' }).count()) === 0);
+    await win.locator('[data-testid="asset-menu"] button', { hasText: '삭제' }).click();
+    const left = await win.evaluate(() => window.__paircut.state().project.assets.map((a) => a.id));
+    check('deleting from that menu removes every selected item', group.every((id) => !left.includes(id)) && left.length === base.assets.length - group.length,
+      JSON.stringify(left));
+    await win.keyboard.press('Control+KeyZ');
+    await win.evaluate(() => {
+      const list = document.querySelector('.asset-list');
+      list.scrollTop = list.scrollHeight;
+    });
+    await win.mouse.click(listBox.x + listBox.width / 2, listBox.y + listBox.height - 8);
+    check('a press on empty bin space drops the selection', (await pickedIds()).length === 0 &&
+      (await win.evaluate(() => window.__paircut.state().project.assets.length)) === base.assets.length);
   }
 
   await win.evaluate((p) => window.__paircut.load(p), project);
