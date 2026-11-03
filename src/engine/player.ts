@@ -46,6 +46,8 @@ interface Entry {
   /** Routes element audio so volume can exceed 1 and fades can ramp. */
   gain: GainNode | null;
   level: number;
+  /** Whether gain feeds the destination; idle clips stay off it so hundreds of sources don't starve the audio thread. */
+  routed: boolean;
 }
 
 const PRELOAD_AHEAD = 1.0;
@@ -54,8 +56,32 @@ const GRADE_MAX_PX = 2048;
 /** Layer thumbnails redraw at most this often while playing. */
 const THUMB_EVERY_MS = 200;
 
+const SEAM_EPS = 1e-3;
+
+/** A track's media clips grouped for playback: audio pieces that continue the same source back to back form one run. */
+function mediaRuns(project: Project, track: Track): Clip[][] {
+  const runs: Clip[][] = [];
+  const clips = track.clips.filter(isMediaClip).sort((a, b) => a.start - b.start);
+  for (const clip of clips) {
+    const run = runs[runs.length - 1];
+    const prev = run?.[run.length - 1];
+    const seamless =
+      prev !== undefined &&
+      assetById(project, clip.assetId).kind === 'audio' &&
+      clip.assetId === prev.assetId &&
+      clip.speed === prev.speed &&
+      Math.abs(clip.start - clipEnd(prev)) < SEAM_EPS &&
+      Math.abs(clip.in - prev.out) < SEAM_EPS;
+    if (seamless) run.push(clip);
+    else runs.push([clip]);
+  }
+  return runs;
+}
+
 class Compositor {
   private entries = new Map<string, Entry>();
+  /** Clip id -> entries key: a run of seamless audio pieces shares its first clip's element. */
+  private keyOf = new Map<string, string>();
   private canvas: HTMLCanvasElement | null = null;
   private redrawQueued = false;
   private audio: AudioContext | null = null;
@@ -82,10 +108,10 @@ class Compositor {
     this.requestDraw();
   }
 
-  private entryFor(clip: Clip, asset: MediaAsset): Entry {
-    const existing = this.entries.get(clip.id);
+  private entryFor(key: string, asset: MediaAsset): Entry {
+    const existing = this.entries.get(key);
     if (existing && existing.assetId === asset.id) return existing;
-    if (existing) this.release(clip.id);
+    if (existing) this.release(key);
     const url = window.api.mediaUrl(asset.path);
     let el: MediaEl;
     let gain: GainNode | null = null;
@@ -105,11 +131,11 @@ class Compositor {
       media.addEventListener('loadeddata', () => this.requestDraw());
       const ctx = this.audioContext();
       gain = ctx.createGain();
-      ctx.createMediaElementSource(media).connect(gain).connect(ctx.destination);
+      ctx.createMediaElementSource(media).connect(gain);
       el = media;
     }
-    const entry = { el, assetId: asset.id, gain, level: 1 };
-    this.entries.set(clip.id, entry);
+    const entry = { el, assetId: asset.id, gain, level: 1, routed: false };
+    this.entries.set(key, entry);
     return entry;
   }
 
@@ -127,13 +153,16 @@ class Compositor {
 
   sync(project: Project, t: number, playing: boolean): void {
     const live = new Set<string>();
+    this.keyOf.clear();
     for (const track of project.tracks) {
-      for (const clip of track.clips) {
-        if (!isMediaClip(clip)) continue;
-        live.add(clip.id);
-        const asset = assetById(project, clip.assetId);
-        const entry = this.entryFor(clip, asset);
+      for (const run of mediaRuns(project, track)) {
+        const key = run[0].id;
+        live.add(key);
+        for (const c of run) this.keyOf.set(c.id, key);
+        const entry = this.entryFor(key, assetById(project, run[0].assetId));
         if (entry.el instanceof HTMLImageElement) continue;
+        // The piece under t (or the next one) drives the shared element; it never seeks at a seam.
+        const clip = run.find((c) => t < clipEnd(c)) ?? run[run.length - 1];
         this.syncMedia(entry, entry.el, track, clip, t, playing);
       }
     }
@@ -149,9 +178,10 @@ class Compositor {
     if (el.playbackRate !== clip.speed) el.playbackRate = clip.speed;
     this.setLevel(entry, track.muted || !audible ? 0 : audioGain(clip, t));
     const length = Number.isFinite(el.duration) ? el.duration : Infinity;
+    const upcoming = t < span.from && span.from - t < PRELOAD_AHEAD;
+    this.route(entry, active || upcoming);
     if (!active) {
       if (!el.paused) el.pause();
-      const upcoming = t < span.from && span.from - t < PRELOAD_AHEAD;
       const first = frameTime(clip, length, span.from);
       if (upcoming && Math.abs(el.currentTime - first) > 0.05) el.currentTime = first;
       return;
@@ -167,6 +197,13 @@ class Compositor {
     }
   }
 
+  private route(entry: Entry, on: boolean): void {
+    if (!entry.gain || !this.audio || entry.routed === on) return;
+    if (on) entry.gain.connect(this.audio.destination);
+    else entry.gain.disconnect();
+    entry.routed = on;
+  }
+
   private setLevel(entry: Entry, level: number): void {
     entry.level = level;
     if (!entry.gain || !this.audio) return;
@@ -175,7 +212,7 @@ class Compositor {
 
   /** Current playback rate and gain target of a clip's element, for the UI e2e. */
   audioState(clipId: string): { rate: number; level: number } | null {
-    const entry = this.entries.get(clipId);
+    const entry = this.entries.get(this.keyOf.get(clipId) ?? clipId);
     if (!entry || entry.el instanceof HTMLImageElement) return null;
     return { rate: entry.el.playbackRate, level: entry.level };
   }
@@ -189,7 +226,7 @@ class Compositor {
           if (!isMediaClip(c)) return false;
           const span = visualSpan(track, c);
           if (t < span.from || t >= span.to) return false;
-          const el = this.entries.get(c.id)?.el;
+          const el = this.entries.get(this.keyOf.get(c.id) ?? c.id)?.el;
           if (!el) return true;
           if (el instanceof HTMLImageElement) return !el.complete;
           return el.seeking || el.readyState < 2;
