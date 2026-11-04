@@ -580,7 +580,12 @@ export function Timeline() {
         </label>
         <ToolButton icon={ZoomIn} label="확대" onClick={() => setZoom(zoom * 1.25)} testId="tl-zoom-in" />
       </div>
-      <div className="tl-body" ref={bodyRef}>
+      <div
+        className="tl-body"
+        ref={bodyRef}
+        // The ruler sits inside the horizontal scroller, so sticky can't pin it to this one; it follows this offset instead.
+        onScroll={(e) => e.currentTarget.style.setProperty('--tl-scroll-y', `${e.currentTarget.scrollTop}px`)}
+      >
         <div className="tl-heads">
           <div className="tl-heads-ruler" style={{ height: RULER_H }} />
           {rows.map((row) =>

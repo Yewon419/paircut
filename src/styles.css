@@ -1309,7 +1309,12 @@ button.icon.recent-forget:hover:not(:disabled) {
   cursor: pointer;
 }
 
+/* The rulers and the playhead grip stay at the top while the tracks scroll under them (--tl-scroll-y, set by .tl-body). */
 .tl-heads-ruler {
+  position: relative;
+  z-index: 2;
+  transform: translateY(var(--tl-scroll-y, 0));
+  background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
 
@@ -1634,6 +1639,9 @@ button.icon.recent-forget:hover:not(:disabled) {
 
 .tl-ruler {
   position: relative;
+  z-index: 2;
+  transform: translateY(var(--tl-scroll-y, 0));
+  background: var(--panel);
   border-bottom: 1px solid var(--line);
   cursor: pointer;
 }
@@ -1770,6 +1778,7 @@ button.icon.recent-forget:hover:not(:disabled) {
 .tl-playhead-grip {
   position: absolute;
   top: 0;
+  transform: translateY(var(--tl-scroll-y, 0));
   left: -7px;
   width: 16px;
   pointer-events: auto;
