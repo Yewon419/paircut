@@ -48,10 +48,18 @@ interface Entry {
   level: number;
   /** Whether gain feeds the destination; idle clips stay off it so hundreds of sources don't starve the audio thread. */
   routed: boolean;
+  /** The last frame before a seek, shown while the element has none (a 4K seek can take longer than a frame). */
+  held: HTMLCanvasElement | null;
+  /** How long the last seek took, in seconds; playback seeks aim this far ahead so they land in step. */
+  seekLag: number;
+  seekFrom: number;
 }
 
 const PRELOAD_AHEAD = 1.0;
 const PLAY_DRIFT = 0.2;
+const MAX_SEEK_LAG = 1.0;
+/** A seek still running after this long is taken as hung. */
+const STUCK_SEEK_MS = 1000;
 const GRADE_MAX_PX = 2048;
 /** Layer thumbnails redraw at most this often while playing. */
 const THUMB_EVERY_MS = 200;
@@ -127,16 +135,41 @@ class Compositor {
       media.preload = 'auto';
       media.src = url;
       if (media instanceof HTMLVideoElement) media.playsInline = true;
-      media.addEventListener('seeked', () => this.requestDraw());
+      media.addEventListener('seeking', () => {
+        entry.seekFrom = performance.now();
+      });
+      media.addEventListener('seeked', () => {
+        entry.seekLag = Math.min(MAX_SEEK_LAG, (performance.now() - entry.seekFrom) / 1000);
+        this.requestDraw();
+      });
       media.addEventListener('loadeddata', () => this.requestDraw());
       const ctx = this.audioContext();
       gain = ctx.createGain();
       ctx.createMediaElementSource(media).connect(gain);
       el = media;
     }
-    const entry = { el, assetId: asset.id, gain, level: 1, routed: false };
+    const entry: Entry = { el, assetId: asset.id, gain, level: 1, routed: false, held: null, seekLag: 0, seekFrom: 0 };
     this.entries.set(key, entry);
     return entry;
+  }
+
+  private wedged(entry: Entry): boolean {
+    return !(entry.el instanceof HTMLImageElement) && entry.el.seeking && performance.now() - entry.seekFrom > STUCK_SEEK_MS;
+  }
+
+  /** Keeps the element's current frame so the clip doesn't go black while the seek decodes. */
+  private hold(entry: Entry, el: HTMLMediaElement): void {
+    if (!(el instanceof HTMLVideoElement) || el.readyState < 2 || el.videoWidth === 0) return;
+    const fit = Math.min(1, GRADE_MAX_PX / Math.max(el.videoWidth, el.videoHeight));
+    const w = Math.round(el.videoWidth * fit);
+    const h = Math.round(el.videoHeight * fit);
+    const c = entry.held ?? document.createElement('canvas');
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    c.getContext('2d')?.drawImage(el, 0, 0, w, h);
+    entry.held = c;
   }
 
   private release(clipId: string): void {
@@ -159,7 +192,15 @@ class Compositor {
         const key = run[0].id;
         live.add(key);
         for (const c of run) this.keyOf.set(c.id, key);
-        const entry = this.entryFor(key, assetById(project, run[0].assetId));
+        const asset = assetById(project, run[0].assetId);
+        let entry = this.entryFor(key, asset);
+        if (this.wedged(entry)) {
+          // A seek into damaged data can hang the element for good; a fresh one seeks again, the held frame bridging it.
+          const held = entry.held;
+          this.release(key);
+          entry = this.entryFor(key, asset);
+          entry.held = held;
+        }
         if (entry.el instanceof HTMLImageElement) continue;
         // The piece under t (or the next one) drives the shared element; it never seeks at a seam.
         const clip = run.find((c) => t < clipEnd(c)) ?? run[run.length - 1];
@@ -183,17 +224,27 @@ class Compositor {
     if (!active) {
       if (!el.paused) el.pause();
       const first = frameTime(clip, length, span.from);
-      if (upcoming && Math.abs(el.currentTime - first) > 0.05) el.currentTime = first;
+      if (upcoming && Math.abs(el.currentTime - first) > 0.05) {
+        entry.held = null;
+        el.currentTime = first;
+      }
       return;
     }
     const want = frameTime(clip, length, t);
     if (playing) {
       if (this.audio?.state === 'suspended') void this.audio.resume();
-      if (Math.abs(el.currentTime - want) > PLAY_DRIFT * clip.speed) el.currentTime = want;
+      // A new seek before the last one lands would cancel it; with a slow decoder that repeats and the clip stays black.
+      if (!el.seeking && Math.abs(el.currentTime - want) > PLAY_DRIFT * clip.speed) {
+        this.hold(entry, el);
+        el.currentTime = frameTime(clip, length, t + entry.seekLag);
+      }
       if (el.paused) void el.play().catch(() => undefined);
     } else {
       if (!el.paused) el.pause();
-      if (Math.abs(el.currentTime - want) > 0.5 / 60) el.currentTime = want;
+      if (Math.abs(el.currentTime - want) > 0.5 / 60) {
+        this.hold(entry, el);
+        el.currentTime = want;
+      }
     }
   }
 
@@ -406,28 +457,43 @@ class Compositor {
     const entry = this.entries.get(clip.id);
     if (!entry) return;
     const el = entry.el;
-    const ready =
-      el instanceof HTMLImageElement ? el.complete && el.naturalWidth > 0 : el instanceof HTMLVideoElement && el.readyState >= 2;
-    if (!ready) return;
+    let pic: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
+    if (el instanceof HTMLImageElement) {
+      if (!el.complete || el.naturalWidth === 0) return;
+      pic = el;
+    } else if (!(el instanceof HTMLVideoElement)) return;
+    else if (el.readyState >= 2) pic = el;
+    else if (entry.held) pic = entry.held;
+    else return;
     const r = this.rectFor(project, clip, t);
     if (!r) return;
-    let src: CanvasImageSource = el as CanvasImageSource;
-    let srcW = el instanceof HTMLImageElement ? el.naturalWidth : (el as HTMLVideoElement).videoWidth;
-    let srcH = el instanceof HTMLImageElement ? el.naturalHeight : (el as HTMLVideoElement).videoHeight;
+    let src: CanvasImageSource = pic;
+    let srcW = pic instanceof HTMLImageElement ? pic.naturalWidth : pic instanceof HTMLVideoElement ? pic.videoWidth : pic.width;
+    let srcH = pic instanceof HTMLImageElement ? pic.naturalHeight : pic instanceof HTMLVideoElement ? pic.videoHeight : pic.height;
     if (!isNeutral(clip.color)) {
       const fit = Math.min(1, GRADE_MAX_PX / Math.max(r.w, r.h));
       srcW = Math.round(r.w * fit);
       srcH = Math.round(r.h * fit);
-      src = grader.apply(el as TexImageSource, srcW, srcH, clip.color, clip.crop);
+      // The grade works on the unmirrored picture, where the crop's left and right edges trade places.
+      const crop = clip.flipX ? { ...clip.crop, l: clip.crop.r, r: clip.crop.l } : clip.crop;
+      src = grader.apply(pic, srcW, srcH, clip.color, crop);
+    }
+    if (clip.flipX) {
+      ctx.save();
+      ctx.translate(2 * r.x + r.w, 0);
+      ctx.scale(-1, 1);
     }
     if (!hasCrop(clip.crop)) {
       ctx.drawImage(src, r.x, r.y, r.w, r.h);
-      return;
+    } else {
+      const b = cropBox(r, clip.crop);
+      // Mirrored, the box seen at b.x comes from the far side of the source.
+      const bx = clip.flipX ? r.w - b.x - b.w : b.x;
+      const sx = srcW / r.w;
+      const sy = srcH / r.h;
+      ctx.drawImage(src, bx * sx, b.y * sy, b.w * sx, b.h * sy, r.x + bx, r.y + b.y, b.w, b.h);
     }
-    const b = cropBox(r, clip.crop);
-    const sx = srcW / r.w;
-    const sy = srcH / r.h;
-    ctx.drawImage(src, b.x * sx, b.y * sy, b.w * sx, b.h * sy, r.x + b.x, r.y + b.y, b.w, b.h);
+    if (clip.flipX) ctx.restore();
   }
 }
 

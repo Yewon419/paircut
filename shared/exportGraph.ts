@@ -421,7 +421,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const sIn = keyExpr(keys, 'scale', `(t-${num(pre)})`);
         const size = (px: number) => `max(2,${even(`${num(px)}*${sIn}`)})`;
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}${crop}${grade(clip, even2(asset.width * keepW), even2(asset.height * keepH), asset.width, asset.height)}` +
+          `[${idx}:v]${retime}fps=${fps},${hold}${clip.flipX ? 'hflip,' : ''}${crop}${grade(clip, even2(asset.width * keepW), even2(asset.height * keepH), asset.width, asset.height)}` +
             `scale=w='${size(asset.width * cover * keepW)}':h='${size(asset.height * cover * keepH)}':eval=frame:flags=bicubic,` +
             `setsar=1,format=yuva420p,${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
@@ -438,7 +438,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
         const b = hasCrop(clip.crop) ? cropBox(r, clip.crop) : { x: 0, y: 0, w: r.w, h: r.h };
         const crop = hasCrop(clip.crop) ? `crop=${b.w}:${b.h}:${b.x}:${b.y},` : '';
         filters.push(
-          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${crop}${grade(clip, b.w, b.h, r.w, r.h)}format=yuva420p,` +
+          `[${idx}:v]${retime}fps=${fps},${hold}scale=${r.w}:${r.h}:flags=bicubic,setsar=1,${clip.flipX ? 'hflip,' : ''}${crop}${grade(clip, b.w, b.h, r.w, r.h)}format=yuva420p,` +
             `${fade}setpts=PTS-STARTPTS+${num(span.from)}/TB[${label}]`,
         );
         overlay(label, String(r.x + b.x), String(r.y + b.y), span.from, span.to);

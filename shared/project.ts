@@ -71,6 +71,8 @@ export interface Clip {
   in: number;
   out: number;
   transform: ClipTransform;
+  /** Mirrors the picture left to right; the crop then applies to the mirrored picture, edges as seen on screen. */
+  flipX: boolean;
   crop: ClipCrop;
   /** Linear gain, 1 = unchanged. */
   volume: number;
@@ -135,7 +137,7 @@ export const NO_CROP: ClipCrop = { l: 0, t: 0, r: 0, b: 0 };
 /** Opposite edges together may cut at most this much, so something is always left. */
 export const CROP_MAX = 0.95;
 
-export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0, crop: NO_CROP };
+export const MEDIA_CLIP_DEFAULTS = { volume: 1, fadeIn: 0, fadeOut: 0, speed: 1, color: NEUTRAL_COLOR, dissolve: 0, crop: NO_CROP, flipX: false };
 
 export type FontId =
   | 'black'

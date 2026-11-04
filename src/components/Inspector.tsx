@@ -940,6 +940,18 @@ function MediaPanel({ project, clip, visual }: { project: Project; clip: Clip; v
             </label>
           </div>
           <AlignButtons project={project} clip={clip} />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={clip.flipX}
+              data-testid="flip-x"
+              onChange={(e) => {
+                const on = e.target.checked;
+                commit((p) => updateMediaClip(p, clip.id, (c) => ({ ...c, flipX: on })));
+              }}
+            />
+            <span>좌우 반전</span>
+          </label>
           <button onClick={() => setTransform({ ...IDENTITY_TRANSFORM })}>꽉 채우기로 되돌리기</button>
           <p className="hint">미리보기에서 끌면 위치, 휠을 굴리면 확대가 바뀌어요. 끌 때 화면·다른 레이어 선에 붙고, Alt를 누르면 안 붙어요.</p>
         </div>

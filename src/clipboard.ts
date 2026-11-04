@@ -121,10 +121,10 @@ export function pasteClipboard(): void {
   setPlayhead(pasted.end);
 }
 
-/** The look of `src` on `c` when both are the same kind: picture transform, keyframes, crop, color and volume, or text style and placement. */
+/** The look of `src` on `c` when both are the same kind: picture transform, keyframes, mirroring, crop, color and volume, or text style and placement. */
 export function withAttributes(c: AnyClip, src: AnyClip): AnyClip {
   if (isMediaClip(c) && isMediaClip(src)) {
-    const next = { ...c, transform: { ...src.transform }, crop: { ...src.crop }, color: { ...src.color }, volume: src.volume };
+    const next = { ...c, transform: { ...src.transform }, flipX: src.flipX, crop: { ...src.crop }, color: { ...src.color }, volume: src.volume };
     if (src.keys) next.keys = structuredClone(src.keys);
     else delete next.keys;
     return next;

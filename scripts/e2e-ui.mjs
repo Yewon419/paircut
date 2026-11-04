@@ -654,6 +654,43 @@ try {
   const cropBad = await tool('edit', { ops: [{ op: 'set_clip', clip: 'k2', crop: { l: 0.9 } }] });
   check('Claude crop past 95% across is rejected', cropBad.isError === true && (await cropOf('k2')).l === 0.3, cropBad.text);
 
+  // Mirroring: the picture flips left to right in the preview; on a graded, cropped clip the export matches it.
+  const fproj = (flipX) => ({ ...base, tracks: [{ id: 'v-main', kind: 'video', muted: false, hidden: false, clips: [
+    { ...base.tracks[1].clips[1], id: 'f1', assetId: fx.land.id, start: 0, in: 0, out: 1, flipX },
+    { ...base.tracks[1].clips[2], id: 'f2', assetId: fx.rot.id, start: 1, in: 0, out: 2, flipX,
+      crop: { l: 0.3, t: 0.1, r: 0, b: 0.4 }, color: pickColor({ exposure: 0.2, vignette: 0.8 }) },
+  ] }] });
+  const mirrorPts = [[60, 300], [200, 900], [700, 1500]];
+  await win.evaluate((p) => window.__paircut.load(p), fproj(false));
+  await tool('screenshot', { t: 0.5 });
+  const unflipped = [];
+  for (const [x, y] of mirrorPts) unflipped.push(await readCanvas({ x, y, s: 16 }));
+  await win.evaluate((p) => window.__paircut.load(p), fproj(true));
+  await tool('screenshot', { t: 0.5 });
+  for (const [i, [x, y]] of mirrorPts.entries()) {
+    const shown = await readCanvas({ x: 1080 - x - 16, y, s: 16 });
+    const off = Math.max(...shown.map((v, k) => Math.abs(v - unflipped[i][k])));
+    check(`flipped preview mirrors the picture at ${x},${y}`, off <= 8, `flipped ${shown} / unflipped ${unflipped[i]}`);
+  }
+  const flipped = join(dir, 'flip.mp4');
+  await exportTo(flipped);
+  const flipProbes = [[0.5, 60, 300], [0.5, 900, 1200], [2, 100, 700], [2, 400, 300], [2, 1000, 1100], [2, 700, 700], [2, 600, 1500]];
+  for (const [t, x, y] of flipProbes) {
+    await tool('screenshot', { t });
+    const shown = await readCanvas({ x, y, s: 16 });
+    const made = samplePixel(flipped, t, x, y, 16);
+    const off = Math.max(...shown.map((v, k) => Math.abs(v - made[k])));
+    check(`flipped preview matches export at ${t}s ${x},${y}`, off <= 24, `preview ${shown} / export ${made}`);
+  }
+  await win.locator('[data-tab="media"]').click();
+  await win.locator('[data-clip="f1"]').click();
+  await win.locator('[data-testid="flip-x"]').uncheck();
+  const flipOf = (id) => win.evaluate((i) => window.__paircut.state().project.tracks.flatMap((t) => t.clips).find((c) => c.id === i)?.flipX, id);
+  check('inspector turns mirroring off', (await flipOf('f1')) === false);
+  await win.evaluate(() => document.activeElement.blur());
+  await win.keyboard.press('Control+z');
+  check('undo turns mirroring back on', (await flipOf('f1')) === true);
+
   // Installed (PC) fonts: Malgun Gothic ships with Windows; the made-up name must fall back to the bundled font.
   await win.evaluate((p) => window.__paircut.load(p), project);
   const subWidth = () => win.evaluate(() => window.__paircut.texts(1920).find((l) => l.clipId === 'x-sub').w);
