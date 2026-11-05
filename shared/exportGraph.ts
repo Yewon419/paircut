@@ -85,6 +85,12 @@ const FFMPEG_BLEND: Record<BlendMode, string> = {
   difference: 'difference',
 };
 
+/**
+ * Pixel format conversions for every filter in the graph. ffmpeg's defaults band smooth skies a little more on each
+ * YUV-RGB round trip (one per backdrop text or blended layer) and, in 8.1, black out the last width%16 columns of
+ * yuv420p->gbrp.
+ */
+const SWS_FLAGS = 'sws_flags=bicubic+accurate_rnd+full_chroma_int+full_chroma_inp';
 
 function num(n: number): string {
   return n.toFixed(4).replace(/\.?0+$/, '') || '0';
@@ -501,7 +507,7 @@ function buildPlan(project: Project, height: number, textLayers: TextLayer[], gr
   return {
     inputArgs,
     files: [...files.values()],
-    filterGraph: filters.join(';\n'),
+    filterGraph: [SWS_FLAGS, ...filters].join(';\n'),
     duration,
     width: W,
     height: H,
