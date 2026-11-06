@@ -432,13 +432,24 @@ function registerIpc(): void {
   });
 }
 
-void app.whenReady().then(() => {
-  protocol.handle(MEDIA_SCHEME, serveFile);
-  registerIpc();
-  createWindow();
-  if (!isTest) app.on('will-quit', startBridge(app.getPath('userData'), bridgeTool));
-  else (globalThis as { __paircutBridge?: object }).__paircutBridge = { callTool: bridgeTool };
-});
+// One window per user: a second one would overwrite bridge.json and delete it on quit, leaving the
+// first window's bridge unreachable. Tests launch their own instances, so they skip the lock.
+if (!isTest && !app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
+  void app.whenReady().then(() => {
+    protocol.handle(MEDIA_SCHEME, serveFile);
+    registerIpc();
+    createWindow();
+    if (!isTest) app.on('will-quit', startBridge(app.getPath('userData'), bridgeTool));
+    else (globalThis as { __paircutBridge?: object }).__paircutBridge = { callTool: bridgeTool };
+  });
+}
 
 app.on('window-all-closed', () => {
   currentExport?.cancel();
